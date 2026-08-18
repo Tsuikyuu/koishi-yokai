@@ -33,5 +33,55 @@ export default tseslint.config(
       ],
     },
   },
+  {
+    files: ['**/*.{ts,tsx}'],
+    languageOptions: {
+      parserOptions: {
+        projectService: true,
+        tsconfigRootDir: import.meta.dirname,
+      },
+    },
+    rules: {
+      '@typescript-eslint/no-explicit-any': 'error',
+      '@typescript-eslint/no-non-null-assertion': 'error',
+      '@typescript-eslint/prefer-readonly': 'error',
+      'no-param-reassign': [
+        'error',
+        {
+          props: true,
+        },
+      ],
+      'no-restricted-syntax': [
+        'error',
+        {
+          selector: "TSAsExpression:not([typeAnnotation.typeName.name='const'])",
+          message:
+            'Type assertions are prohibited. Use a constructor, parser, type guard, or explicit data structure.',
+        },
+        {
+          selector: 'TSTypeAssertion',
+          message:
+            'Angle-bracket type assertions are prohibited. Use a constructor, parser, type guard, or explicit data structure.',
+        },
+        {
+          selector: 'ChainExpression',
+          message:
+            'Optional chaining is prohibited. Handle the missing value with an explicit branch, Option, or pattern matching.',
+        },
+        {
+          selector: 'TSUnknownKeyword',
+          message:
+            'Explicit unknown is prohibited. Parse boundary input into a precise type or an explicit error.',
+        },
+        {
+          selector: 'PropertyDefinition[definite=true], VariableDeclarator[definite=true]',
+          message:
+            'Definite assignment assertions are prohibited. Initialize the value or model its absence explicitly.',
+        },
+      ],
+      'no-var': 'error',
+      'prefer-const': 'error',
+    },
+  },
   eslintConfigPrettier,
 )
