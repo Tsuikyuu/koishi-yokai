@@ -1,0 +1,14 @@
+{
+  "extends": "./tsconfig.base",
+  "compilerOptions": {
+    "baseUrl": ".",
+    "paths": {
+      "@yokai/koishi-plugin-*": [
+        "packages/*/src"
+      ],
+      "@yokai/*": [
+        "packages/*/src"
+      ]
+    }
+  }
+}
