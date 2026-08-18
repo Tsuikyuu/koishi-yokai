@@ -3,12 +3,8 @@
   "compilerOptions": {
     "baseUrl": ".",
     "paths": {
-      "@yokai/koishi-plugin-*": [
-        "plugins/*/src"
-      ],
-      "@yokai/*": [
-        "packages/*/src"
-      ]
+      "@yokai/koishi-plugin-*": ["plugins/*/src"],
+      "@yokai/*": ["packages/*/src"]
     }
   },
   "files": []

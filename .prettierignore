@@ -1,0 +1,7 @@
+lib
+dist
+coverage
+external
+node_modules
+tsconfig.base.json
+*.tsbuildinfo

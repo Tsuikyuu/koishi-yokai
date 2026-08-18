@@ -6,6 +6,6 @@ export interface Config {}
 
 export const Config: Schema<Config> = Schema.object({})
 
-export function apply(ctx: Context, config: Config) {
+export function apply(_ctx: Context, _config: Config) {
   // write your plugin here
 }

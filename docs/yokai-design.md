@@ -188,20 +188,20 @@ effectiveThreshold =
 
 以下参数只用于冷启动，运行一段时间后应根据目标群的消息分布校准：
 
-| 参数 | 初始值 |
-| --- | --- |
-| 活跃度半衰期 | 120 秒 |
-| 普通有效消息脉冲 | `1.0` |
-| 五分钟内首次出现的参与者 | 额外 `0.5` |
-| 疑问、引用或媒体 | 每项额外 `0.25`，总脉冲封顶 `1.75` |
-| 重复消息、其他机器人消息 | `0` |
-| 社会触发活跃度 | `7.0` |
-| 社会触发相关度 | `2.0` |
-| 明确 @ / 回复 Yokai | 硬触发，相关度至少 `10` |
-| 消息簇 debounce | 3 秒 |
-| 普通触发冷却 | 45 秒 |
-| 自动携带消息 | 默认 40 条，最少 20、最多 80 |
-| 社会触发目标频率 | 每 100 条群消息约 2～8 个 AI 回合 |
+| 参数                     | 初始值                             |
+| ------------------------ | ---------------------------------- |
+| 活跃度半衰期             | 120 秒                             |
+| 普通有效消息脉冲         | `1.0`                              |
+| 五分钟内首次出现的参与者 | 额外 `0.5`                         |
+| 疑问、引用或媒体         | 每项额外 `0.25`，总脉冲封顶 `1.75` |
+| 重复消息、其他机器人消息 | `0`                                |
+| 社会触发活跃度           | `7.0`                              |
+| 社会触发相关度           | `2.0`                              |
+| 明确 @ / 回复 Yokai      | 硬触发，相关度至少 `10`            |
+| 消息簇 debounce          | 3 秒                               |
+| 普通触发冷却             | 45 秒                              |
+| 自动携带消息             | 默认 40 条，最少 20、最多 80       |
+| 社会触发目标频率         | 每 100 条群消息约 2～8 个 AI 回合  |
 
 最终阈值不应凭感觉固定。开发工具按频道记录活跃度分布、触发原因、合并消息数和实际调用成本，再选择能兼顾自然参与和预算的分位点。
 
@@ -328,11 +328,11 @@ interface Relationship {
 
 只保留四类：
 
-| 类型 | 内容 |
-| --- | --- |
-| 经历 | 群里发生过的具体事件 |
+| 类型 | 内容                         |
+| ---- | ---------------------------- |
+| 经历 | 群里发生过的具体事件         |
 | 事实 | 成员明确说过且后续有用的信息 |
-| 关系 | 称呼、共同话题、交流边界 |
+| 关系 | 称呼、共同话题、交流边界     |
 | 自我 | Yokai 说过的观点、决定和承诺 |
 
 ```ts
@@ -373,12 +373,7 @@ interface Memory {
 Yokai 的行为集合：
 
 ```ts
-type Action =
-  | 'silence'
-  | 'react'
-  | 'reply'
-  | 'follow-up'
-  | 'initiate'
+type Action = 'silence' | 'react' | 'reply' | 'follow-up' | 'initiate'
 ```
 
 每种行为计算社会效用：
@@ -536,12 +531,12 @@ MVP 只发布主体和一个适配器，但协议预留以下第三方插件命�
 
 `core`、`mind`、`memory` 只作为内部普通 npm 包：
 
-| 包 | 职责 |
-| --- | --- |
-| `@yokai/protocol` | adapter、tool、skill、MCP、预设和响应机制协议 |
-| `@yokai/core` | 注册表、唤醒仲裁、缓冲、门控、预算、管线、并发和取消 |
-| `@yokai/mind` | 场景、状态、关系策略、发言决策、意图和表达约束 |
-| `@yokai/memory` | 群聊存档、分页历史、记忆检索、冲突、遗忘和数据库端口 |
+| 包                | 职责                                                 |
+| ----------------- | ---------------------------------------------------- |
+| `@yokai/protocol` | adapter、tool、skill、MCP、预设和响应机制协议        |
+| `@yokai/core`     | 注册表、唤醒仲裁、缓冲、门控、预算、管线、并发和取消 |
+| `@yokai/mind`     | 场景、状态、关系策略、发言决策、意图和表达约束       |
+| `@yokai/memory`   | 群聊存档、分页历史、记忆检索、冲突、遗忘和数据库端口 |
 
 依赖方向：
 
@@ -618,10 +613,10 @@ export function apply(ctx: Context) {
 
 三类扩展职责不同：
 
-| 类型 | 职责 |
-| --- | --- |
-| Tool | AI 回合中可调用的一项明确操作 |
-| Skill | 一组按场景激活的角色指令、知识和 Tool 组合 |
+| 类型       | 职责                                              |
+| ---------- | ------------------------------------------------- |
+| Tool       | AI 回合中可调用的一项明确操作                     |
+| Skill      | 一组按场景激活的角色指令、知识和 Tool 组合        |
 | MCP Server | 动态提供 tools、resources 和 prompts 的外部能力源 |
 
 #### Tool
@@ -633,11 +628,7 @@ interface YokaiTool<Input = unknown, Output = unknown> {
   inputSchema: unknown
   risk: 'read' | 'write' | 'sensitive'
   available(context: CapabilityContext): boolean
-  invoke(
-    context: ToolContext,
-    input: Input,
-    signal: AbortSignal,
-  ): Promise<Output>
+  invoke(context: ToolContext, input: Input, signal: AbortSignal): Promise<Output>
 }
 ```
 
@@ -710,10 +701,7 @@ interface ResponseMechanism {
   ): WakeProposal | WakeProposal[] | undefined
   start?(host: ResponseMechanismHost): Disposable | Promise<Disposable>
   directiveSchema?: unknown
-  applyDirective?(
-    context: MechanismContext,
-    directive: unknown,
-  ): Promise<void> | void
+  applyDirective?(context: MechanismContext, directive: unknown): Promise<void> | void
 }
 ```
 
@@ -865,13 +853,13 @@ interface YokaiPresetSource {
 
 ### 5.7 插件热插拔语义
 
-| 操作 | 新 AI 回合 | 进行中回合 |
-| --- | --- | --- |
-| 安装 Tool/Skill/MCP | 立即可见 | 保持原能力快照 |
-| 卸载 Tool/Skill/MCP | 不再可见 | 已开始调用允许完成或由 AbortSignal 取消 |
-| 更新预设 | 使用新版本 | 使用旧版本完成 |
-| 安装响应机制 | 开始接收后续事件 | 不修改已有回合 |
-| 卸载响应机制 | 注销监听和定时器 | 已入队提案按 mechanism ID 作废 |
+| 操作                | 新 AI 回合       | 进行中回合                              |
+| ------------------- | ---------------- | --------------------------------------- |
+| 安装 Tool/Skill/MCP | 立即可见         | 保持原能力快照                          |
+| 卸载 Tool/Skill/MCP | 不再可见         | 已开始调用允许完成或由 AbortSignal 取消 |
+| 更新预设            | 使用新版本       | 使用旧版本完成                          |
+| 安装响应机制        | 开始接收后续事件 | 不修改已有回合                          |
+| 卸载响应机制        | 注销监听和定时器 | 已入队提案按 mechanism ID 作废          |
 
 所有插件通过 Koishi 生命周期获得 `Disposable` 和 `AbortSignal`，不得遗留全局定时器、监听器或缓存。
 
@@ -887,18 +875,18 @@ Yokai 将这些模式统一成 `ResponseMechanism + WakeProposal + WakeArbiter`�
 
 ## 6. 最小数据模型
 
-| 表 | 内容 |
-| --- | --- |
-| `yokai_identity` | 角色人格和当前版本 |
-| `yokai_channel_state` | 频道活跃度、相关度、缓冲游标、冷却和调用预算 |
-| `yokai_member_state` | 成员称呼、关系和交流偏好 |
-| `yokai_message` | 带稳定游标的全量群聊消息、引用、编辑和撤回状态 |
-| `yokai_memory` | 经历、事实、自我和关系记忆 |
-| `yokai_thread` | 当前短期话题线程 |
-| `yokai_engagement` | 持续讨论租约、参与者、有效期和剩余轮数 |
-| `yokai_schedule` | 一次性或重复的持久化定时唤醒任务 |
-| `yokai_preset_state` | 实例当前预设 ID、版本、hash 和来源 |
-| `yokai_turn` | 触发原因、消息批次、历史页、行为、费用、发送结果和耗时 |
+| 表                    | 内容                                                   |
+| --------------------- | ------------------------------------------------------ |
+| `yokai_identity`      | 角色人格和当前版本                                     |
+| `yokai_channel_state` | 频道活跃度、相关度、缓冲游标、冷却和调用预算           |
+| `yokai_member_state`  | 成员称呼、关系和交流偏好                               |
+| `yokai_message`       | 带稳定游标的全量群聊消息、引用、编辑和撤回状态         |
+| `yokai_memory`        | 经历、事实、自我和关系记忆                             |
+| `yokai_thread`        | 当前短期话题线程                                       |
+| `yokai_engagement`    | 持续讨论租约、参与者、有效期和剩余轮数                 |
+| `yokai_schedule`      | 一次性或重复的持久化定时唤醒任务                       |
+| `yokai_preset_state`  | 实例当前预设 ID、版本、hash 和来源                     |
+| `yokai_turn`          | 触发原因、消息批次、历史页、行为、费用、发送结果和耗时 |
 
 `yokai_message` 按 `(platform, guildId, channelId, timestamp, messageId)` 建立分页索引，并为作者与本地全文搜索建立辅助索引。消息正文用于历史工具，但不会自动进入每次模型上下文。所有历史和记忆先按 Yokai 实例及群聊作用域隔离，再做检索。
 
@@ -977,21 +965,21 @@ interface Config {
 
 ### 8.1 核心指标
 
-| 指标 | 目标 |
-| --- | --- |
-| 匿名记录来源识别率 | 接近随机猜测 |
-| 角色外术语泄漏率 | 0 |
-| 不合时宜发言率 | 持续下降 |
-| 已有答案后的重复回复率 | 持续下降 |
-| 人格和背景矛盾率 | 接近 0 |
-| 虚假记忆率 | 接近 0 |
-| 消息长度与节奏分布差异 | 接近目标群人类分布 |
-| 主动消息被忽略率 | 不高于普通群友基线 |
-| 冷路径远程模型调用数 | 0 |
+| 指标                        | 目标                   |
+| --------------------------- | ---------------------- |
+| 匿名记录来源识别率          | 接近随机猜测           |
+| 角色外术语泄漏率            | 0                      |
+| 不合时宜发言率              | 持续下降               |
+| 已有答案后的重复回复率      | 持续下降               |
+| 人格和背景矛盾率            | 接近 0                 |
+| 虚假记忆率                  | 接近 0                 |
+| 消息长度与节奏分布差异      | 接近目标群人类分布     |
+| 主动消息被忽略率            | 不高于普通群友基线     |
+| 冷路径远程模型调用数        | 0                      |
 | 每 100 条群消息的 AI 回合数 | 在效果不下降时尽可能低 |
-| 每个 AI 回合合并的消息数 | 能覆盖完整消息簇 |
-| 每千条群消息的模型成本 | 不超过实例预算 |
-| 历史工具平均页数和 token | 持续受限且可解释 |
+| 每个 AI 回合合并的消息数    | 能覆盖完整消息簇       |
+| 每千条群消息的模型成本      | 不超过实例预算         |
+| 历史工具平均页数和 token    | 持续受限且可解释       |
 
 盲测使用经过匿名化的离线群聊片段，评价者只看消息和上下文，不看账号标识。线上运行仍保留平台机器人标识。
 
