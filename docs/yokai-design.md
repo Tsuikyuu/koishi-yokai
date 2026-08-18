@@ -562,13 +562,13 @@ adapter-* ──只依赖 protocol 和 Koishi
 ### 4.3 工作区目录
 
 ```text
-packages/@yokai/
+packages/
 ├── protocol/
 ├── core/
 ├── mind/
 └── memory/
 
-plugins/@yokai/
+plugins/
 ├── yokai/
 └── yokai-adapter-chatgpt/
 ```

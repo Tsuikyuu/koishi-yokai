@@ -4,7 +4,7 @@
     "baseUrl": ".",
     "paths": {
       "@yokai/koishi-plugin-*": [
-        "packages/*/src"
+        "plugins/*/src"
       ],
       "@yokai/*": [
         "packages/*/src"

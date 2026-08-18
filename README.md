@@ -4,7 +4,8 @@ Yokai is a bionic group member framework built as a nested Koishi/Yakumo monorep
 
 ## Workspace
 
-- `packages/yokai`: `@yokai/koishi-plugin-yokai`
+- `plugins/yokai`: `@yokai/koishi-plugin-yokai`
+- `packages/*`: internal `@yokai/*` packages
 - `docs/yokai-design.md`: architecture and product design
 
 The repository can be developed independently or placed under a Koishi application's `external` directory. Yakumo discovers its nested workspaces from the root `package.json`.
