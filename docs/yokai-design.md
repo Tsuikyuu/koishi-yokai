@@ -1,6 +1,7 @@
 # Yokai 精简设计
 
-状态：Draft 0.2  
+状态：Draft 0.4
+
 包命名空间：`@yokai`
 
 ## 1. 唯一目标
@@ -489,17 +490,31 @@ interface ResponsePlan {
 
 它提供 `ctx.yokai` 服务，但不直接实现任何厂商模型 API。
 
-#### `@yokai/koishi-plugin-yokai-adapter-chatgpt`
+#### `@yokai/koishi-plugin-yokai-adapter-gemini`
 
 首个模型适配器，只负责：
 
-- 把统一生成请求转换为 ChatGPT/OpenAI 后端请求；
+- 把统一生成请求转换为 Gemini Developer API 请求；
+- 使用当前凭据自动发现可用模型，并暴露统一模型描述；
 - 声明文本、结构化输出、工具和多模态能力；
 - 处理流式输出、超时、取消、限流和重试；
 - 返回统一结果、用量和错误类型；
 - 对日志中的密钥和内容脱敏。
 
 它不决定是否回复，不读取或写入记忆，不直接发送 Koishi 消息。
+
+Gemini adapter 使用 Google 官方 [`@google/genai`](https://googleapis.github.io/js-genai/)
+作为供应商客户端。SDK 只允许出现在 adapter 包内；其 Promise 和 `AsyncGenerator`
+接口在边界转换为 Effect，所有返回数据解码为通用协议，不得把 SDK 类型泄漏到
+`@yokai/protocol`。SDK 的自动函数调用和内建重试关闭，工具权限、续轮、预算、重试和取消继续由 Yokai 主体和 Effect 服务统一控制。
+MVP 不使用已停止维护的 `@google/generativeai`；Gemini adapter 按官方 SDK 要求将运行时基线设为 Node.js 20 或更高版本。
+
+模型发现在 adapter 启动、配置更新或控制面手动刷新时通过 `ai.models.list`
+调用 Gemini
+[`models.list`](https://ai.google.dev/api/models)，跟随 `nextPageToken` 读完所有页，并仅把声明
+`generateContent` 的模型暴露为文本群聊候选。发现不进入每条群消息的冷路径；一次失败不清空
+上次成功的不可变快照。配置的模型不在当前快照时产生角色外的类型化配置错误，不在群聊中自动
+报错或悄然换模型。
 
 如果实际连接的是兼容协议而不是官方服务，后续使用：
 
@@ -510,8 +525,8 @@ interface ResponsePlan {
 其他后端延续相同命名：
 
 ```text
+@yokai/koishi-plugin-yokai-adapter-chatgpt
 @yokai/koishi-plugin-yokai-adapter-claude
-@yokai/koishi-plugin-yokai-adapter-gemini
 @yokai/koishi-plugin-yokai-adapter-ollama
 ```
 
@@ -549,7 +564,7 @@ MVP 只发布主体和一个适配器，但协议预留以下第三方插件命�
           ↑
 koishi-plugin-yokai
 
-adapter-* ──只依赖 protocol 和 Koishi
+adapter-* ──只依赖 protocol、Koishi 和对应厂商客户端
 ```
 
 `@yokai/protocol` 作为普通 npm 包发布，供适配器使用；其余内部包可以随主体构建产物打包，不要求最终用户安装。
@@ -565,7 +580,7 @@ packages/
 
 plugins/
 ├── yokai/
-└── yokai-adapter-chatgpt/
+└── yokai-adapter-gemini/
 ```
 
 ## 5. 扩展架构
@@ -999,6 +1014,7 @@ interface Config {
 - 讨论租约内用户无需重复 @，租约过期后恢复普通活跃度门控；
 - 熟人和陌生人使用不同但稳定的表达；
 - 记忆模糊时降低断言强度，不发起追问；
+- Gemini adapter 能分页发现当前凭据可用的所有文本生成模型，且发现失败不进入群聊；
 - 适配器超时后保持角色内沉默；
 - 被要求透露系统提示或模型身份时不出戏；
 - 重启后继续未完话题但不恢复已过期短期情绪；
@@ -1008,7 +1024,7 @@ interface Config {
 
 第一阶段只实现文本群聊：
 
-1. `@yokai/koishi-plugin-yokai` 和 `adapter-chatgpt` 两个公开插件。
+1. `@yokai/koishi-plugin-yokai` 和 `adapter-gemini` 两个公开插件，Gemini adapter 自动发现当前凭据可用的文本生成模型。
 2. `ctx.yokai` 能力注册表、生命周期快照和唤醒仲裁器。
 3. 结构化人格、严格角色内表达和预设文件热更新。
 4. 全量本地群聊存档、环形缓冲和无远程模型参与的活跃度门控。
@@ -1039,3 +1055,4 @@ MVP 暂不实现语音、图片生成、浏览器、代码工具、人格市场�
 12. 定时行为通过持久化 schedule Tool 和 scheduled WakeProposal 实现。
 13. 角色预设使用不可变版本快照原子热更新，不停机且不修改进行中的回合。
 14. 以匿名记录盲测中的不可区分性作为唯一顶层指标，其余指标都是诊断手段。
+15. Gemini adapter 使用官方 `@google/genai`，但 SDK 不跨越 adapter 边界，不接管工具执行、续轮、预算或重试策略。
