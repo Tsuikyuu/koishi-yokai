@@ -16,6 +16,19 @@ All paths in this document are relative to the repository root.
 Source code belongs in each workspace's `src/` directory. Do not edit generated `lib/`,
 `dist/`, or `*.tsbuildinfo` files directly.
 
+## Effect baseline
+
+- The repository targets exactly `effect@4.0.0-rc.110`. Every workspace that imports
+  Effect must declare this exact version in its own dependencies; do not use a caret, tilde,
+  npm dist-tag, or implicit dependency.
+- The authoritative Effect skill source is
+  <https://github.com/Tsuikyuu/skills/tree/main/skills/effect>. Install and update the local
+  Effect skill only from this source; do not substitute Effect v3, beta, another RC, or
+  guidance written for a different API version.
+- An Effect upgrade is an explicit repository-wide change. Update this baseline and every
+  workspace dependency declaration together, then validate all Effect code before adopting
+  APIs from the new version.
+
 ## Functional architecture
 
 - Effect v4 is the standard effect system for new internal code. Do not introduce another
