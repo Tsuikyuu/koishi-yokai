@@ -155,6 +155,29 @@ Source code belongs in each workspace's `src/` directory. Do not edit generated 
 - Tests belong in the package or application's `test/` directory and must mirror paths under
   `src/`. For example, code under `src/tools/read/` is tested under `test/tools/read/`.
 
+## Git workflow
+
+- Keep `main` releasable and do not develop directly on it. Before starting work, fetch the
+  remote, fast-forward local `main` to `origin/main`, and create a short-lived branch named
+  `<type>/<short-kebab-description>`, such as `feat/gemini-discovery` or
+  `docs/model-selection`.
+- Keep one coherent goal per branch. Do not mix unrelated fixes, formatting sweeps, dependency
+  upgrades, or refactors into the same branch merely because they were discovered together.
+- Make every commit atomic: it must represent one reviewable, testable, and safely revertible
+  change. Supporting tests and documentation belong in the same commit as the behavior they
+  verify or describe.
+- Stage exact files or hunks and inspect `git diff --cached` before committing. Do not commit
+  secrets, local configuration, generated output, or unrelated working-tree changes.
+- Use Conventional Commit headers: `<type>(<optional-scope>): <imperative summary>`. Prefer
+  `feat`, `fix`, `docs`, `refactor`, `test`, `build`, `ci`, and `chore`; keep the summary concise,
+  without a trailing period. Add a body when the motivation or migration impact is not obvious.
+- Before pushing or merging, run the checks relevant to the change, including `yarn lint` and
+  `yarn build` when applicable, and confirm the worktree is clean. Never force-push `main` or
+  rewrite commits already shared with collaborators.
+- Merge an accepted branch into an up-to-date `main` with an explicit merge commit (`--no-ff`),
+  then push `main`. Delete the local and remote task branches only after verifying that their
+  tips are contained in the pushed `main`.
+
 ## Common commands
 
 - `yarn build`: build all workspaces.
