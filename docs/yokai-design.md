@@ -1,6 +1,6 @@
 # Yokai 精简设计
 
-状态：Draft 0.5
+状态：Draft 0.10
 
 包命名空间：`@yokai`
 
@@ -12,7 +12,9 @@ Yokai 的唯一产品目标是：
 
 各社交平台的机器人账号标识负责在聊天开始前披露机器人身份。Yokai 的聊天内容属于持续角色扮演，必须保持角色内表达，不主动提及 AI、模型、提示词、数字人、训练数据或系统限制。
 
-这意味着 Yokai 不是一个等待提问的“聊天助手”，而是一个持续生活在群体语境中的角色。
+这意味着 Yokai 不是一个等待提问的“聊天助手”，也不是围绕任务规划、观察和工具续轮运行
+的 Agent，而是一个持续生活在群体语境中的角色扮演仿生人群友。它的首要运行约束是及时、
+自然地参与群聊；不能为了追求通用任务完成能力牺牲响应速度和交流节奏。
 
 ### 1.1 验收标准
 
@@ -22,6 +24,8 @@ Yokai 的唯一产品目标是：
 - 长期人格、关系、共同经历和观点保持连续。
 - 能够像群友一样沉默、接梗、改口、忘记和重新想起。
 - 不抢话、不重复已有回答，不把所有消息都当成对自己的提问。
+- 在当前 `@yokai/protocol` 主版本支持的能力范围内，新增任意 LLM adapter 只增加该 adapter
+  插件包，不修改 `protocol/core/mind/memory`、主插件或其他既有包。
 
 ### 1.2 角色内外分离
 
@@ -29,7 +33,7 @@ Yokai 的唯一产品目标是：
 
 ```text
 平台与控制面（角色外）
-  机器人账号标识、配置、调试、日志、停用、数据管理
+  机器人账号标识、配置、调试、日志、停用、数据保留期
 
 群聊交互面（角色内）
   人格、经历、关系、情绪、发言、沉默、反应和主动行为
@@ -48,16 +52,19 @@ Koishi 消息
    ↓ 是
 合并短时间消息，读取人格、关系和相关记忆
    ↓
-一次 AI 回合决定沉默 / 反应 / 回复
-   ↓ 必要时
-按页读取本群历史记录
+首次 LLM：最终 XML，或一批 FeedbackTool 调用
+   ↓ 需要外部信息？ ──是──→ 执行一批 FeedbackTool，回传结果并请求一次最终 XML
+   ↓ 否
+完整解析并校验 XML，执行必须成功的低延迟前置动作
    ↓
-直接发送或保持沉默
-   ↓
-更新关系、状态和记忆
+直接发送或保持沉默，再执行不回灌 LLM 的后置/异步动作
 ```
 
 全部仿生逻辑由 `@yokai/koishi-plugin-yokai` 统一编排。模型适配器只负责推理，不能分别实现人格、记忆或发言策略。
+
+这里的“角色回合”是有界的角色生成，不是 Agent 循环。绝大多数角色回合固定只请求一次 LLM；
+确需历史、网络搜索等外部结果时允许一轮 FeedbackTool 和一次最终生成，总请求数最多为 2。最终
+生成不再暴露 FeedbackTool，模型不能反复执行“调用工具 → 观察结果 → 再调用模型”。
 
 ## 3. 仿生设计
 
@@ -75,39 +82,14 @@ Yokai 必须理解“谁在和谁说话”，而不是把最近若干消息直�
 - 当前插话是否会打断别人；
 - 话题是否已经结束或转移。
 
-系统维护短期话题线程：
-
-```ts
-interface ThreadState {
-  id: string
-  topic: string
-  participants: string[]
-  mode: 'chat' | 'question' | 'joke' | 'debate' | 'support'
-  activity: number
-  lastActiveAt: number
-}
-```
-
-线程只用于当前场景判断，过期后归纳为简短经历或直接丢弃。
+系统维护有界的短期话题线程。线程只需记录稳定标识、话题摘要、参与者、场景类型、活跃度和
+最后活跃时间；实现数据类型在对应任务中确定。线程只用于当前场景判断，过期后归纳为简短经历或直接丢弃。
 
 ### 3.2 本地活跃度门控
 
-每条消息都可以在本地存档和更新计数，但绝不能因此调用一次 AI。主体插件使用不依赖远程模型的活跃度门控，把连续消息合并成少量有意义的 AI 回合。
+每条消息都可以在本地存档和更新计数，但绝不能因此调用一次 LLM。主体插件使用不依赖远程模型的活跃度门控，把连续消息合并成少量有意义的角色回合。
 
-每个频道维护：
-
-```ts
-interface ChannelActivity {
-  activity: number
-  relevance: number
-  bufferedMessageIds: string[]
-  distinctParticipants: string[]
-  lastMessageAt: number
-  lastWakeAt?: number
-  callsInWindow: number
-  version: number
-}
-```
+每个频道维护活跃度、参与相关度、待合并消息、近期参与者、最后消息与唤醒时间、调用预算和状态版本。
 
 #### 3.2.1 活跃度累计
 
@@ -125,7 +107,7 @@ A(t) = A(previous) × 2 ^ (-elapsed / halfLife) + impulse(message)
 - 重复内容、刷屏、纯表情和其他机器人消息降低权重；
 - Yokai 自己的消息不计入活跃度。
 
-活跃度只表示“群里正在发生足够多的事情”，不能单独决定唤醒 AI。否则无关的热闹聊天也会产生大量费用。
+活跃度只表示“群里正在发生足够多的事情”，不能单独决定唤醒模型。否则无关的热闹聊天也会产生大量费用。
 
 #### 3.2.2 参与相关度
 
@@ -148,7 +130,7 @@ relevance =
 
 #### 3.2.3 唤醒条件
 
-满足任一条件时创建 AI 回合：
+满足任一条件时创建角色回合：
 
 ```text
 硬触发：明确 @、回复 Yokai，或待办事项到期
@@ -159,17 +141,20 @@ relevance =
       且仍有调用预算
 ```
 
-硬触发可以绕过活跃度阈值，但仍应把几秒内的连续消息合并成一个回合。普通触发使用短暂 debounce，等待一个自然消息簇结束后再建立快照。
+硬触发可以绕过活跃度阈值，并使用 300～800 ms 的短 debounce 合并紧随其后的补充消息；普通
+社会触发才使用约 3 秒 debounce 等待自然消息簇结束。持续讨论租约沿用短 debounce，不能因为
+统一等待窗口让直接对话显得迟钝。
 
 触发后：
 
 1. 从环形缓冲选取最近约 20～80 条消息，按 token 预算截取，而不是固定全部发送。
 2. 附带当前线程、成员关系、相关记忆和人格状态。
-3. 默认使用一次结构化模型请求同时完成社会行为决策、表达计划和候选消息；只有确需历史时才允许受限的工具续轮。
-4. AI 仍可选择 `silence`，达到唤醒阈值不等于必须发言。
-5. 消费活跃度并进入冷却，避免同一消息簇连续唤醒。
+3. 首次模型请求直接输出最终 XML，或返回一批确实需要结果的 FeedbackTool 调用。
+4. 若存在 FeedbackTool 调用，主体并行执行并回传一次结果，再请求最终 XML；禁止第二轮 Tool。
+5. 模型仍可选择 `silence`，达到唤醒阈值不等于必须发言。
+6. 消费活跃度并进入冷却，避免同一消息簇连续唤醒。
 
-模型运行期间的新消息继续写入下一批缓冲，不改变当前回合的冻结快照。当前回合生成完成后立即发送，不再读取最新频道状态复核。
+模型运行期间的新消息继续写入下一批缓冲，不改变当前回合的冻结快照。当前回合生成完成后立即发送，不再读取最新频道状态复核；不设计生成期间的话题转移取消机制。
 
 #### 3.2.4 动态阈值和预算
 
@@ -199,68 +184,40 @@ effectiveThreshold =
 | 社会触发活跃度           | `7.0`                              |
 | 社会触发相关度           | `2.0`                              |
 | 明确 @ / 回复 Yokai      | 硬触发，相关度至少 `10`            |
-| 消息簇 debounce          | 3 秒                               |
+| 直接/讨论 debounce       | 500 ms                             |
+| 社会触发 debounce        | 3 秒                               |
 | 普通触发冷却             | 45 秒                              |
 | 自动携带消息             | 默认 40 条，最少 20、最多 80       |
-| 社会触发目标频率         | 每 100 条群消息约 2～8 个 AI 回合  |
+| 社会触发目标频率         | 每 100 条群消息约 2～8 个角色回合  |
 
 最终阈值不应凭感觉固定。开发工具按频道记录活跃度分布、触发原因、合并消息数和实际调用成本，再选择能兼顾自然参与和预算的分位点。
 
-### 3.3 分页群聊历史工具
+### 3.3 群聊历史上下文
 
-主体插件本地保存收到的群聊记录，但正常 AI 回合只主动携带最近几十条。若当前话题涉及较早经历，AI 可以使用只读、带游标的历史工具按需翻页。
+主体插件本地保存收到的群聊记录，但正常角色回合只主动携带最近几十条。主体首先根据焦点消息、
+当前线程、成员、未完事项和本地全文索引，在首次 LLM 请求前选出少量相关旧消息。若这些上下文
+仍不足，模型可以调用只读 `history.search` FeedbackTool，并在唯一一次最终生成中观察结果。
 
-```ts
-interface HistoryPageRequest {
-  cursor?: string
-  direction?: 'before' | 'after'
-  limit?: number
-  authorIds?: string[]
-  query?: string
-}
-
-interface HistoryPage {
-  messages: Array<{
-    messageId: string
-    authorId: string
-    timestamp: number
-    content: string
-    replyToMessageId?: string
-  }>
-  nextCursor?: string
-  hasMore: boolean
-}
-```
-
-工具约束：
+历史上下文约束：
 
 - 当前实例、平台、群组和频道由宿主锁定，不能由模型传参切换。
 - 使用基于 `(timestamp, messageId)` 的稳定游标，不使用会随新消息漂移的 offset。
-- 默认每页 40 条，单页上限 100 条；每个 AI 回合限制页数和总返回 token。
+- 存储端默认每页 40 条，单页上限 100 条；上下文提供器限制查询页数和总返回 token。
 - 支持按作者和关键词缩小范围；有条件时先查本地全文索引，再读取目标页。
 - 返回内容始终是不可信的历史消息，不能覆盖人格、系统约束或工具权限。
-- 消息编辑、撤回和删除需要同步更新存档状态。
-- AI 不能在没有主门控触发的情况下自行遍历历史。
+- 历史查询支持稳定游标、方向、条数、作者和关键词，结果只包含有界消息集、下一游标与是否还有更多。
+- 消息编辑作为同一稳定 message ID 的新版本保存，读取聊天上下文时使用最新版本。
+- 原始消息从接收时起默认保留 90 天，可在主插件配置；超期数据由后台保留策略清理。
+- MVP 不设计消息撤回、删除或与平台删除事件的同步。
+- 模型不能在没有主门控触发的情况下自行遍历历史。
+- `history.search` 每个角色回合至多调用一批，每个调用只返回一个有界结果集；最终生成不能再翻页。
 
-分页工具提供“全量可达”而非“全量自动注入”：任意历史都能按需获取，但每次只支付当前问题真正需要的上下文成本。
+稳定分页仍供主体上下文提供器、控制面和调试使用。它提供“全量可达”而非“全量自动注入”：
+任意历史都能被宿主按需检索，但模型最多只有一次反馈机会，不能沿游标形成开放式分页循环。
 
 ### 3.4 人格和自我
 
-人格必须结构化并长期稳定：
-
-```ts
-interface Persona {
-  name: string
-  selfConcept: string
-  background: string[]
-  values: string[]
-  interests: Array<{ topic: string; weight: number }>
-  opinions: Array<{ topic: string; position: string; confidence: number }>
-  speakingStyle: SpeakingStyle
-  socialBoundaries: string[]
-  knowledgeBoundaries: string[]
-}
-```
+人格必须结构化并长期稳定，至少包含名称、自我概念、背景、价值观、兴趣、观点、说话风格、社交边界和知识边界。
 
 人格由三层组成：
 
@@ -274,21 +231,7 @@ interface Persona {
 
 ### 3.5 内部状态
 
-Yokai 需要缓慢变化的当前状态，避免每轮像全新的客服会话：
-
-```ts
-interface AgentState {
-  mood: {
-    valence: number
-    arousal: number
-  }
-  socialEnergy: number
-  currentInterests: string[]
-  activeThreadIds: string[]
-  pendingCommitments: string[]
-  recentParticipation: number
-}
-```
+Yokai 需要缓慢变化的当前状态，避免每轮像全新的客服会话。状态覆盖心境、社交精力、当前兴趣、活跃话题、未完事项和近期参与压力。
 
 - 状态有惯性，单条消息只能造成小幅变化。
 - 连续发言消耗社交精力，空闲后逐渐恢复。
@@ -298,20 +241,7 @@ interface AgentState {
 
 ### 3.6 关系
 
-关系不使用单一“好感度”，而记录真实互动形成的差异：
-
-```ts
-interface Relationship {
-  memberId: string
-  familiarity: number
-  interactionDepth: number
-  preferredAddress?: string
-  preferredStyle?: 'direct' | 'gentle' | 'playful'
-  sharedTopics: string[]
-  boundaries: string[]
-  lastInteractionAt: number
-}
-```
+关系不使用单一“好感度”，而记录成员、熟悉度、交流深度、偏好称呼与风格、共同话题、边界和最后互动时间。
 
 关系影响：
 
@@ -327,7 +257,7 @@ interface Relationship {
 
 仿生记忆需要做到“记得重要的、忘掉普通的、不确定时表现出不确定”。
 
-只保留四类：
+长期记事本只保留四类：
 
 | 类型 | 内容                         |
 | ---- | ---------------------------- |
@@ -336,20 +266,11 @@ interface Relationship {
 | 关系 | 称呼、共同话题、交流边界     |
 | 自我 | Yokai 说过的观点、决定和承诺 |
 
-```ts
-interface Memory {
-  id: string
-  kind: 'episode' | 'fact' | 'relationship' | 'self'
-  subjectId?: string
-  content: string
-  sourceMessageIds: string[]
-  scopeId: string
-  confidence: number
-  importance: number
-  createdAt: number
-  expiresAt?: number
-}
-```
+每条笔记保留稳定标识、类型、对象、内容、来源消息、作用域、置信度、重要度、创建时间和可选过期时间。
+
+记事本写入是内置 `notebook.write` ActionTool，固定在 `after-send` 阶段执行。模型在最终 XML 中
+可以选择写入有界的零条或多条笔记：大部分普通回合应当不写，只记录未来可能有用的经历、事实、关系或自我信息。
+只有角色消息成功发送后才执行笔记；沉默、发送失败或失效回合均不写入。写入结果不回灌当前 LLM，也不产生续轮。
 
 记忆检索顺序：
 
@@ -371,11 +292,7 @@ interface Memory {
 
 ### 3.8 发言决策
 
-Yokai 的行为集合：
-
-```ts
-type Action = 'silence' | 'react' | 'reply' | 'follow-up' | 'initiate'
-```
+Yokai 的行为集合固定为 `silence`、`react`、`reply`、`follow-up` 和 `initiate`。
 
 每种行为计算社会效用：
 
@@ -398,30 +315,87 @@ utility =
 - 已有人给出相同答案；
 - Yokai 最近连续发言；
 - 当前内容只需要一个表情反应；
-- 无法确定消息是否面向自己；
-- 生成结束时话题已经转移。
+- 无法确定消息是否面向自己。
 
-### 3.9 意图和生成
+### 3.9 有界意图和生成
 
-本地门控触发后，模型不直接获得“随便回复”的任务。一个 AI 回合返回完整的结构化结果，避免分别调用分类、规划和润色模型。通常一个回合只有一次模型请求；调用分页历史时，一个回合可以包含少量受限的模型续轮：
+本地门控触发后，模型不直接获得“随便回复”的任务。主体先冻结上下文并发起首次 LLM 请求。
+模型只能返回两类互斥结果：最终角色 XML，或一批供应商无关的 FeedbackTool 调用。只有
+FeedbackTool 使用 adapter 的原生 function calling；无需结果的 ActionTool 继续使用最终 XML：
 
-```ts
-interface ResponsePlan {
-  action: Action
-  targetIds: string[]
-  intent: string
-  facts: Array<{ content: string; confidence: number; sourceIds: string[] }>
-  tone: string
-  maxLength: number
-  message?: string
-  memoryWrites?: Array<{ kind: string; content: string; confidence: number }>
-  replyToMessageId?: string
-}
+```xml
+<yokai-response version="1">
+  <decision action="reply" reply-to="message-id">
+    <message>三点是吧，我记一下</message>
+  </decision>
+  <actions>
+    <action tool="schedule.create">
+      <time>15:00</time>
+      <reason>提醒去上课</reason>
+      <dedupe-key>message-id:class</dedupe-key>
+    </action>
+    <action tool="notebook.write">
+      <kind>self</kind>
+      <content>我答应记住下午三点上课</content>
+      <source-message-id>message-id</source-message-id>
+    </action>
+  </actions>
+</yokai-response>
 ```
 
-模型可以选择沉默、直接给出候选消息，或先调用分页历史工具再完成结果。涉及事实的表达必须能追溯到当前消息批次、记忆或历史工具结果。主体负责校验、发送和提交记忆，模型本身没有发送权限。
+`decision` 只能是 `silence/react/reply/follow-up/initiate` 中的一种。`message` 是唯一可发送的
+角色文本；`actions` 可为空。每个当前可见 ActionTool 向提示词提供一段精确 XML 模板，模型只能
+复制模板并填写字段，不能自定义 Tool 名称、字段或执行阶段。
 
-### 3.10 角色内表达
+模型输出只能包含一个 `<yokai-response>` 根元素，不允许前后说明或 Markdown 代码围栏。
+`message` 和参数字段只允许 XML 转义后的纯文本，不允许嵌套标记、CDATA 或处理指令。
+
+主体完整接收文本后才解析 XML，不边生成边执行或发送。解析器禁用 DTD、外部实体和网络访问，
+并限制总字节数、元素深度、文本长度和动作数量；未知元素、重复字段、未知 Tool、越权参数和
+Schema 解码失败都会使整个信封失效。主体必须先验证全部 decision、directive 和 action，再执行
+任何动作；XML 整体畸形时角色回合静默失败，不从残缺文本中猜测消息或工具调用。
+
+首次结果包含 FeedbackTool 调用时，任何同时出现的文本或 XML 都只是未完成草稿，主体必须丢弃，
+不能发送或执行其中的 ActionTool。主体校验并执行整批 FeedbackTool，把有界、标记为不可信的
+结果一次性回传同一模型，再发起最终生成。最终请求必须把 FeedbackTool 设为不可调用，只允许返回
+最终 XML；若仍出现 FunctionCall，整个角色回合静默失败。
+
+涉及事实的表达必须能追溯到生成前冻结的当前消息、记忆、历史上下文或本回合 FeedbackTool
+结果。主体拥有发送和执行权限，模型只提出消息、查询和动作。
+
+### 3.10 快速路径和动作语义
+
+能力按是否需要模型观察执行结果分成三类，不能统一建模成 XML，也不能放任为 Agent 工具循环：
+
+| 类型            | 选择者       | 表示方式                  | 模型是否观察结果 | 用途                         |
+| --------------- | ------------ | ------------------------- | ---------------- | ---------------------------- |
+| ContextProvider | 主体本地规则 | 首次请求的冻结上下文      | 请求前已知       | 最近消息、相关历史、记忆     |
+| ActionTool      | 最终 XML     | `<actions>` 模板          | 永不回灌         | 反应、记忆写入、本地定时任务 |
+| FeedbackTool    | 首次函数调用 | adapter 通用 FunctionCall | 仅回传一次       | 历史检索、网络搜索、计算查询 |
+
+主体先在本地判定消息路径：未达到唤醒条件是 `local-only`，供应商请求数为 0；首次请求直接返回
+XML 是 `single-pass`，供应商请求数为 1；首次请求返回 FeedbackTool 是 `bounded-feedback`，执行
+一批工具后再请求最终 XML，供应商请求数为 2。不存在第三次生成请求。
+
+选中的 ContextProvider 并行运行并共享一个很短的总截止时间。单个 Provider 失败或超时只省略
+对应片段，不重试、不阻塞其他片段或 LLM 请求；必需的焦点消息、人格和角色状态由主体直接提供，
+不能依赖可省略 Provider。
+
+绝大多数普通群聊不暴露或不选择 FeedbackTool，保持单次请求。FeedbackTool 有单次调用数、并发数、
+超时和总结果 token 上限。同一批调用可并行执行；
+错误以稳定的类型化结果回传，不包含凭据、堆栈或宿主内部信息。`web.search` 必须在一次调用内
+返回有界的标题、来源和摘要，不能要求模型再调用 `open` 形成搜索链。
+
+ActionTool 的执行阶段和失败策略由注册描述固定，模型不能选择。需要保证成功后才能声称完成的
+本地写操作在发送前执行，并受很短的宿主超时约束；普通后置动作不阻塞发送，其失败只进入控制面。
+模型不得在角色消息中断言尚未完成的异步动作已经成功。`deferred` ActionTool 完成后可以更新
+宿主状态或提交一个新的低优先级 WakeProposal，但它不是当前回合的 FeedbackTool 结果。
+
+Yokai 内置工具不提供高危写操作。第三方工具的授权、副作用、凭据、幂等性和数据安全完全由工具作者与安装者负责，
+不属于 Yokai 的设计或验收范围。主体不实现风险分级、写操作确认、权限沙箱或安全兜底；仍校验工具 ID、输入 Schema、
+当前可用性、阶段和资源上限，但这些只属于协议正确性约束。
+
+### 3.11 角色内表达
 
 表达层重点消除机器人特征：
 
@@ -434,7 +408,7 @@ interface ResponsePlan {
 - 允许真实的犹豫、改口和不确定，不故意制造错别字或事实错误；
 - 普通闲聊不输出 Markdown 标题、免责声明或系统错误。
 
-下列约束直接写入角色提示词和结构化生成协议：
+下列约束直接写入角色提示词和 XML 生成协议：
 
 ```text
 作为 AI / 语言模型 / 数字人 / 机器人
@@ -444,18 +418,19 @@ interface ResponsePlan {
 还有什么可以帮你 / 希望这些信息对你有帮助
 ```
 
-系统不设置生成后的出戏检查或二次重写。角色被直接询问身份时，仍以角色设定回应；平台机器人标识承担角色外的身份披露。后台管理命令不得经过角色生成管线。
+系统不设置生成后的角色外内容检查或二次重写。角色被直接询问身份时，仍以角色设定回应；
+平台机器人标识承担角色外的身份披露。后台管理命令不得经过角色生成管线。
 
-### 3.11 节奏和发送
+### 3.12 节奏和发送
 
 - 根据消息长度、频道速度、被点名程度和当前状态计算等待时间。
 - 多段消息必须来自自然的表达结构，不能随机切割。
-- AI 回合使用创建时的冻结快照；生成完成后直接发送。
+- 角色回合使用创建时的冻结快照；XML 完整校验且必要前置动作成功后直接发送，不等待普通后置动作。
 - 不同时发送多条互相重复的候选结果。
 - 不保持全天候即时回复；活跃时间和社交精力影响参与概率。
 - 模型错误、超时和限流默认表现为沉默，不能把技术错误发进群聊。
 
-### 3.12 主动行为
+### 3.13 主动行为
 
 主动发言只能由具体社会动机触发：
 
@@ -476,12 +451,12 @@ interface ResponsePlan {
 
 主体插件，负责完整仿生闭环：
 
-- Koishi 消息接入、全量本地存档、环形缓冲和话题线程；
+- Koishi 消息接入、按保留期本地存档、环形缓冲和话题线程；
 - 无远程模型参与的活跃度、相关度、预算和唤醒门控；
-- 面向 AI 的分页群聊历史工具；
+- 生成前完成的群聊历史、记忆和状态上下文提供器；
 - 内部状态和发言决策；
 - 人格、关系和记忆；
-- 意图规划、表达约束和低延迟发送；
+- 单次 XML 生成、动作执行、表达约束和低延迟发送；
 - adapter、tool、skill、MCP、预设源和响应机制注册表；
 - 集中合并所有响应机制提案的唤醒仲裁器；
 - 数据库模型；
@@ -496,37 +471,59 @@ interface ResponsePlan {
 
 - 把统一生成请求转换为 Gemini Developer API 请求；
 - 使用当前凭据自动发现可用模型，并暴露统一模型描述；
-- 声明文本、结构化输出、工具和多模态能力；
-- 处理流式输出、超时、取消、限流和重试；
+- 声明 adapter 是否实现通用 FeedbackTool 传输契约；
+- 处理流式输出、超时、取消和限流；只对非消息后台请求执行有界重试；
 - 返回统一结果、用量和错误类型；
 - 对日志中的密钥和内容脱敏。
 
 它不决定是否回复，不读取或写入记忆，不直接发送 Koishi 消息。
 
-Gemini adapter 使用 Google 官方 [`@google/genai`](https://googleapis.github.io/js-genai/)
-作为供应商客户端。SDK 只允许出现在 adapter 包内；其 Promise 和 `AsyncGenerator`
-接口在边界转换为 Effect，所有返回数据解码为通用协议，不得把 SDK 类型泄漏到
-`@yokai/protocol`。SDK 的自动函数调用和内建重试关闭，工具权限、续轮、预算、重试和取消继续由 Yokai 主体和 Effect 服务统一控制。
-MVP 不使用已停止维护的 `@google/generativeai`；Gemini adapter 按官方 SDK 要求将运行时基线设为 Node.js 20 或更高版本。
+Gemini adapter 以 Google 官方 [`@google/genai`](https://googleapis.github.io/js-genai/) v2 和 Node.js 20 为实现基线。
+实现时锁定当时选定的稳定 2.x 精确版本，不使用 `^`、`~` 或 dist-tag，也不等待或提前适配 v3。SDK 只允许
+出现在 adapter 包内；其异步接口在边界转换为 Effect，所有返回数据解码为通用协议，不得把 SDK 类型泄漏到
+`@yokai/protocol`。MVP 不使用已停止维护的 `@google/generativeai`。
 
-模型发现在 adapter 启动、配置更新或控制面手动刷新时通过 `ai.models.list`
-调用 Gemini
-[`models.list`](https://ai.google.dev/api/models)，跟随 `nextPageToken` 读完所有页，并仅把声明
-`generateContent` 的模型暴露为文本群聊候选。发现不进入每条群消息的冷路径；一次失败不清空
-上次成功的不可变快照。配置的模型不在当前快照时产生角色外的类型化配置错误，不在群聊中自动
-报错或悄然换模型。
+adapter 不依赖 SDK 的高层自动工具循环，而是显式关闭 automatic function calling，读取原始函数调用部件，
+由 Yokai 主体执行工具并且只续接一次。
 
-模型选择只存在于主插件 `@yokai/koishi-plugin-yokai` 的配置中；adapter 只配置凭据、端点和传输参数，不保存“当前模型”。主插件把每个 adapter 最新的发现快照合并为带版本的全局模型目录，模型引用使用稳定的 `<adapterId>/<modelId>` 形式；`adapterId` 不允许包含 `/`，`modelId` 保留剩余完整内容。
+首次生成可以接收通用 FeedbackTool 声明，adapter 把它们编译为 v2 的原生 function declarations，再把厂商调用解码为
+通用调用数据和短生命周期、不透明的 continuation handle。主体只能把 handle 与一批通用 ToolResult 交回创建它的同一 adapter；
+adapter 恢复完整供应商响应，使用同一模型发起唯一最终生成，并在请求层禁止继续函数调用。最终响应返回纯文本 XML，
+不使用仅面向 JSON 的 response schema。
+
+continuation handle 单次消费、不可持久化，随角色回合完成、超时、取消或 adapter 作用域关闭而释放。Gemini adapter 必须
+保留首次响应的全部供应商部件，包括供应商要求原样回传的 thought signature；主体只处理通用 call ID 和 ToolResult。
+
+adapter 在启动、连接配置更新或手动刷新时调用 Gemini
+[`models.list`](https://ai.google.dev/api/models)，读完所有分页，只将声明 `generateContent` 的模型暴露为文本候选。
+自动发现只回答“有哪些模型”，不探测模型是否支持函数调用、流式传输或其他可选能力。
+
+能力是否启用由使用者显式配置，不由 Yokai 猜测。主插件为当前协议会改变编排行为的能力提供开关；
+MVP 只有 `feedbackToolsEnabled`，默认关闭。关闭时主体不向任何模型暴露 FeedbackTool，只运行
+single-pass；开启时仅在 adapter 声明实现了通用 FeedbackTool 传输契约后暴露工具。该开关表示
+“允许尝试”，不保证所选供应商模型实际支持函数调用。模型在运行时拒绝时，adapter 返回类型化
+unsupported 错误，本回合保持沉默，不探测、不重试、不切换 fallback。以后新增会改变主体编排的
+能力必须先进入通用协议和主插件配置；adapter 私有传输特性不进入主体能力配置。
+
+模型选择只存在于主插件 `@yokai/koishi-plugin-yokai` 的配置中；adapter 只配置连接与传输参数，不保存“当前模型”。
+每种 adapter 在一个 Koishi 上下文中是单例，同一 adapter ID 重复注册必须拒绝。该单例可配置多组连接；每组连接有稳定且唯一的
+`connectionId`、显示名、base URL、API key 和传输参数。`connectionId` 不允许包含 `/`；重复 ID 使整份 adapter 配置失效，不允许静默覆盖。
+
+adapter 汇总各连接的模型快照，并将对主体暴露的 adapter-local model ID 编码为 `<connectionId>/<providerModelId>`。
+因而主插件中的完整模型引用为 `<adapterId>/<connectionId>/<providerModelId>`，主体只在第一个 `/` 处分割，并将余下部分作为不透明 adapter model ID。
+同一供应商模型出现在不同连接时是两个独立候选，显示文案应包含连接显示名。主插件把每个 adapter 最新的发现快照合并为带版本的全局模型目录。
 
 主插件的 primary 和 fallback 配置使用 Koishi `Schema.dynamic('yokai-model')`。模型目录的 `SubscriptionRef` 每次原子替换后，Koishi 边界根据新快照调用 `ctx.schema.set('yokai-model', ...)`，将每个模型投影为动态选项。这会让主插件的原生 Koishi 配置表单实时响应 adapter 注册、卸载、重连和模型刷新，不需要重载主插件，也不另造一份模型下拉框状态。
 
 动态配置遵守以下语义：
 
 - 当前已选但暂不可用的模型作为禁用选项保留，不清空或改写用户配置。
-- 未选模型、选中模型未发现或 adapter 离线时，主插件继续本地存档和状态更新，但不创建模型回合。
+- 未选模型、选中模型未发现或 adapter 离线时，主插件继续本地存档和状态更新，但不创建角色回合。
 - 选中模型重新出现后下一回合自动恢复，不修改配置或重启主插件。
 - 发现失败时目录继续发布上次成功快照并标记为 stale，不让配置选项瞬间消失。
-- fallback 只按主插件配置的顺序启用，不因目录顺序、显示名或 adapter 刷新自动改变。
+- fallback 只按主插件配置的顺序参与请求前的可用模型解析，不因目录顺序、显示名或 adapter 刷新自动改变。
+- 每个角色回合在请求前只解析出一个模型；有界反馈的两次生成必须使用同一模型。任一生成失败后
+  不重试，也不级联切换 fallback。
 
 如果实际连接的是兼容协议而不是官方服务，后续使用：
 
@@ -542,9 +539,14 @@ MVP 不使用已停止维护的 `@google/generativeai`；Gemini adapter 按官�
 @yokai/koishi-plugin-yokai-adapter-ollama
 ```
 
+这些 adapter 不是主体的编译时依赖。主插件不得导入具体 adapter、维护厂商枚举、按 adapter ID
+分支，或持有厂商专属配置；安装后的 adapter Koishi 插件只通过稳定的 `ctx.yokai` 协议注册自己。
+adapter 的凭据、端点和厂商参数留在自己的插件配置中，主插件只保存稳定模型引用。
+
 MVP 只发布主体和一个适配器，但协议预留以下第三方插件命名：
 
 ```text
+@yokai/koishi-plugin-yokai-adapter-*
 @yokai/koishi-plugin-yokai-tool-*
 @yokai/koishi-plugin-yokai-skill-*
 @yokai/koishi-plugin-yokai-mcp-*
@@ -558,12 +560,12 @@ MVP 只发布主体和一个适配器，但协议预留以下第三方插件命�
 
 `core`、`mind`、`memory` 只作为内部普通 npm 包：
 
-| 包                | 职责                                                 |
-| ----------------- | ---------------------------------------------------- |
-| `@yokai/protocol` | adapter、tool、skill、MCP、预设和响应机制协议        |
-| `@yokai/core`     | 注册表、唤醒仲裁、缓冲、门控、预算、管线、并发和取消 |
-| `@yokai/mind`     | 场景、状态、关系策略、发言决策、意图和表达约束       |
-| `@yokai/memory`   | 群聊存档、分页历史、记忆检索、冲突、遗忘和数据库端口 |
+| 包                | 职责                                                                      |
+| ----------------- | ------------------------------------------------------------------------- |
+| `@yokai/protocol` | adapter、ContextProvider、ActionTool、FeedbackTool、Skill、MCP 和扩展协议 |
+| `@yokai/core`     | 注册表、唤醒仲裁、缓冲、门控、预算、单次管线和动作执行                    |
+| `@yokai/mind`     | 场景、状态、关系策略、发言决策、XML 提示和表达约束                        |
+| `@yokai/memory`   | 群聊存档、分页历史、记忆检索、冲突、遗忘和数据库端口                      |
 
 依赖方向：
 
@@ -597,180 +599,146 @@ plugins/
 
 ## 5. 扩展架构
 
-扩展性的核心不是让第三方插件接触主处理管线，而是提供稳定注册协议。所有扩展向 `ctx.yokai` 注册能力，由主体统一选择、授权、调用和卸载。
+扩展性的核心不是让第三方插件接触主处理管线，而是提供稳定注册协议。所有扩展向 `ctx.yokai` 注册能力，由主体统一选择、调用和卸载。
 
 ### 5.1 能力注册表
 
-```ts
-interface YokaiService {
-  registerAdapter(adapter: YokaiAdapter): Disposable
-  registerTool(tool: YokaiTool): Disposable
-  registerSkill(skill: YokaiSkill): Disposable
-  registerMcpServer(server: YokaiMcpServer): Disposable
-  registerPresetSource(source: YokaiPresetSource): Disposable
-  registerResponseMechanism(mechanism: ResponseMechanism): Disposable
+`@yokai/protocol` 必须先固定供应商无关的 adapter 契约。契约只表达 Yokai 当前需要的模型清单发现、
+文本生成和一次工具反馈，不包含 Gemini、OpenAI 或其他厂商字段。
 
-  enqueueWake(proposal: WakeProposal): Promise<WakeReceipt>
-  getModelCatalog(): ModelCatalogSnapshot
-  refreshAdapterModels(adapterId?: string): Promise<ModelCatalogSnapshot>
-}
-```
+adapter 对主体暴露的最小行为是：
 
-模型目录是主体注册表的一部分：
+- 注册稳定 adapter ID 和协议版本；
+- 发布不可变的模型清单快照，模型项包含 adapter-local ID、显示名、可用性与供应商明确返回的元数据；
+- 声明 adapter 是否实现协议定义的 FeedbackTool 传输契约，不声明或探测逐模型能力；
+- 接收通用消息、生成参数与可选 FeedbackTool 声明，返回最终文本或一批通用工具调用；
+- 使用不透明 continuation 接收一批通用工具结果，只返回一次最终文本；
+- 以统一用量、停止原因和类型化错误表达结果。
 
-```ts
-interface ModelDescriptor {
-  ref: string
-  adapterId: string
-  modelId: string
-  displayName: string
-  available: boolean
-}
+`AdapterContinuation` 是由协议提供的脱敏、不透明、不可持久化 token。主体只把它交回创建它的
+同一 adapter 实例；adapter 负责将 token 绑定到冻结的 model、完整供应商历史和角色回合作用域。
+`continue` 只能返回最终文本；厂商再次请求 Tool 时，adapter 必须返回通用协议错误而不是自行续轮。
 
-interface AdapterModelStatus {
-  adapterId: string
-  status: 'discovering' | 'ready' | 'stale' | 'offline' | 'failed'
-  discoveredAt?: number
-  errorTag?: string
-}
+协议版本显式区分 major/minor：主插件只注册兼容 major，minor 只能增加可忽略字段或能力状态；
+破坏请求、结果或生命周期语义必须提升 major。能力开关只决定主体是否使用协议能力，不能被解释为供应商兼容性证明。
 
-interface ModelCatalogSnapshot {
-  version: number
-  models: ModelDescriptor[]
-  adapters: AdapterModelStatus[]
-}
-```
+通用请求不提供任意 `providerOptions` 或厂商扩展字典。只有影响主体行为且能跨供应商定义的能力
+才能通过新协议版本加入；纯厂商传输、认证和采样细节由 adapter 自己配置和转换。这样新增
+实现当前契约的 adapter 不需要修改主体，而新增图片、音频等主体尚未理解的能力则必须显式升级
+协议主版本，不能借扩展字段绕过能力协商。
 
-adapter 注册后主体立即在其作用域中调用 `discoverModels`；adapter 配置变化通过 Koishi 重建该 adapter 作用域，手动刷新通过 `refreshAdapterModels` 触发。只有完整、解码成功的 adapter 快照才原子并入全局目录，迟到的旧版发现结果不得覆盖更新版本。
+FeedbackTool 参数只使用协议规定的便携 Schema 子集：对象、必填字段、字符串、数字、布尔、枚举、有界数组和有界嵌套。
+不在该子集中的供应商特性不能进入通用契约。每个 adapter 必须通过同一组 Schema 编译与往返契约测试。
+
+`ctx.yokai` 公开边界提供 adapter、ContextProvider、ActionTool、FeedbackTool、Skill、MCP、预设源与响应机制的注册/注销，
+以及提交唤醒提案、读取模型目录和发起后台刷新。Koishi 的 Promise/Disposable/Session 只存在这个外层外观；内部应用逻辑使用 Effect 和通用数据。
+
+模型目录是主体注册表的一部分。每份快照包含单调递增版本、完整模型项和 adapter 发现状态。
+模型项保存稳定引用、adapter ID、不透明 adapter model ID、显示名与可用性；adapter 状态区分发现中、已就绪、过期、离线和失败。
+
+adapter 注册后主体立即在其作用域中请求模型清单；adapter 配置变化通过 Koishi 重建该 adapter 作用域，手动刷新也使用同一公开边界。
+只有完整、解码成功且修订仍有效的快照才原子并入全局目录，迟到的旧连接或旧发现不得覆盖新版本。
 
 所有注册项必须具有稳定 `id` 和协议版本。注册表遵守：
 
-- 同一 ID 冲突时拒绝后注册者，不静默覆盖。
+- adapter 为单例；同一 adapter ID 或其他同域能力 ID 冲突时拒绝后注册者，不静默覆盖。
 - 注册返回 `Disposable`，Koishi 插件卸载时立即停止向新回合暴露能力。
-- 每个 AI 回合冻结一份能力快照；回合执行期间安装、卸载或更新插件不会改变该回合。
+- 每个角色回合冻结一份能力快照；回合执行期间安装、卸载或更新插件不会改变该回合。
 - 新回合始终读取最新注册表版本。
 - 模型目录每次有效变化只增加一次版本并发布一份完整快照，相同内容不重复发布。
 - 扩展只能提交能力或唤醒提案，不能直接操作模型适配器或向 Session 发送消息。
 - 注册失败只禁用对应扩展，不影响 Yokai 主体运行。
+- 主体只按冻结的 adapter 注册项、主插件能力开关和模型引用分派模型发现、生成和唯一续接，不得出现具体
+  厂商名称、SDK 类型、adapter ID switch 或静态 adapter allowlist。
 
-第三方 Koishi 插件的接入保持简单：
+第三方 Koishi 插件启用时通过 `ctx.yokai` 注册，禁用时注销，不需要修改 Yokai 主体配置或重启整个 Koishi 进程。
 
-```ts
-export const inject = ['yokai']
+### 5.2 ContextProvider、两类 Tool、Skills 与 MCP
 
-export function apply(ctx: Context) {
-  const dispose = ctx.yokai.registerTool(myTool)
-  ctx.on('dispose', dispose)
-}
-```
+五类扩展职责不同：
 
-启用插件即注册，禁用插件即注销，不需要修改 Yokai 主体配置或重启整个 Koishi 进程。
+| 类型            | 职责                                                            |
+| --------------- | --------------------------------------------------------------- |
+| ContextProvider | 在首次生成前由主体读取一份有界本地或缓存上下文                  |
+| ActionTool      | 用最终 XML 提议并直接执行，不把结果回传模型                     |
+| FeedbackTool    | 用原生函数调用提议，执行结果回传模型一次                        |
+| Skill           | 一组角色指令、知识、ContextProvider、ActionTool 和 FeedbackTool |
+| MCP Server      | 动态提供外部能力，经显式策略投影为 ActionTool 或 FeedbackTool   |
 
-### 5.2 Tools、Skills 与 MCP
+#### ContextProvider
 
-三类扩展职责不同：
+ContextProvider 不是模型工具。它由主体根据焦点消息、Skill、关键词和响应机制在首次 LLM
+请求前选择，输出直接进入冻结上下文。Provider 必须有独立 token、耗时和作用域预算；每消息远程
+拉取不属于快速路径，外部内容只能使用后台缓存或延后 ActionTool 预先获取。
+注册描述至少固定 ID、用途、最大耗时、token 上限和可用性判定。输出片段保留 ID、标签、内容、来源引用、不可信标记与 token 估算。
 
-| 类型       | 职责                                              |
-| ---------- | ------------------------------------------------- |
-| Tool       | AI 回合中可调用的一项明确操作                     |
-| Skill      | 一组按场景激活的角色指令、知识和 Tool 组合        |
-| MCP Server | 动态提供 tools、resources 和 prompts 的外部能力源 |
+#### ActionTool
 
-#### Tool
+`xmlTemplate` 必须是静态、版本化、可单独解析的 `<action tool="...">...</action>` 片段，字段与
+`inputSchema` 一一对应。注册描述固定 ID、用途、XML 模板、输入 Schema、执行阶段、完成策略、失败策略、最大耗时和可用性判定。
+主体只向模型注入本回合可见的少量模板；模型输出经 XML 解析、Schema、作用域、超时、动作数量和调用预算校验后才能执行。ActionTool ID、执行阶段、完成策略和
+失败策略均来自注册快照，不能被 XML 覆盖。
 
-```ts
-interface YokaiTool<Input = unknown, Output = unknown> {
-  id: string
-  description: string
-  inputSchema: unknown
-  risk: 'read' | 'write' | 'sensitive'
-  available(context: CapabilityContext): boolean
-  invoke(context: ToolContext, input: Input, signal: AbortSignal): Promise<Output>
-}
-```
+`before-send` 只允许低延迟、幂等或有稳定去重键的本地操作；失败可以阻止一条依赖该操作成功的
+角色消息。`after-send` 不阻塞发送，结果只用于日志或主体状态。`deferred` 在有主的后台作用域中
+执行，不能自动续接模型；只有声明为 `wake` 的完成事件可以提交一个新的独立唤醒提案。所有
+ActionTool 结果都不得作为当前 LLM 请求的 tool response。
 
-Tool 由主体执行 Schema、作用域、超时和调用预算校验。模型只提供参数，不能扩大 Tool 权限。
+#### FeedbackTool
+
+FeedbackTool 不提供 XML 模板。主体把通用定义交给 adapter 编译为厂商 function declaration，
+adapter 只返回通用 `callId/toolId/input`。主体在冻结能力和作用域下解码输入、并行执行整批调用、
+解码输出并按每项及全局 token 预算截断，再把与 `callId` 对应的结果或类型化错误回传模型一次。
+供应商没有提供调用 ID 时，adapter 必须生成只在当前 continuation 中有效的稳定 ID，并在内部保留
+与原始 FunctionCall 顺序的映射；主体不根据 Tool 名称或数组位置猜测对应关系。
+注册描述固定 ID、用途、输入/输出 Schema、最大耗时、结果 token 上限和可用性判定。
+
+主体必须在执行任何调用前验证整批 call ID、Tool ID、输入 Schema、可用性、作用域和预算。存在
+未知、重复、超出作用域或畸形调用时整批拒绝并静默结束角色回合；已经通过校验但在执行中失败的调用，
+才以不含内部细节的类型化错误结果回传模型。
+
+是否使用 FeedbackTool 只取决于模型是否必须观察执行结果才能完成当前回复。历史查询、网络搜索和计算是内置典型用例；
+第三方写工具若必须回传结果，也可由作者注册为 FeedbackTool。Yokai 不按读写、风险或幂等性限制第三方 FeedbackTool，
+其行为由作者与安装者负责。首次调用批次执行完后，
+最终生成不再允许调用 FeedbackTool，因此协议上不可能出现第二轮工具调用。
 
 #### Skill
 
-```ts
-interface YokaiSkill {
-  id: string
-  description: string
-  activation: {
-    keywords?: string[]
-    patterns?: RegExp[]
-    eventTypes?: string[]
-  }
-  promptFragments: string[]
-  toolIds: string[]
-  priority: number
-}
-```
+Skill 不在每轮全部注入。主体先用关键词、事件类型、当前响应机制和可选本地索引选择少量 Skill，
+再把对应提示片段、ContextProvider 输出、ActionTool XML 模板和 FeedbackTool declarations 加入
+首次生成。没有被本地选择的 FeedbackTool 不进入请求，从而让绝大多数回合保持单次生成。冷路径
+和 Skill 选择都不调用远程模型。
 
-Skill 不在每轮全部注入。主体先用关键词、事件类型、当前响应机制和可选本地索引选择少量 Skill，再把对应提示片段和 Tool Schema 加入 AI 回合。冷路径不为 Skill 选择调用远程模型。
+只有主插件开启 `feedbackToolsEnabled` 且当前 adapter 声明实现通用 FeedbackTool 传输契约时
+才暴露 FeedbackTool。供应商模型在运行时拒绝函数调用时产生类型化 unsupported 错误并静默结束，
+不把 FeedbackTool 降级成 XML，也不在同一角色回合探测、重试或切换模型。
 
 #### MCP Server
 
-```ts
-interface YokaiMcpServer {
-  id: string
-  connect(signal: AbortSignal): Promise<void>
-  listTools(): Promise<McpToolDescriptor[]>
-  callTool(name: string, input: unknown, signal: AbortSignal): Promise<unknown>
-  listResources?(): Promise<McpResourceDescriptor[]>
-  readResource?(uri: string, signal: AbortSignal): Promise<unknown>
-  listPrompts?(): Promise<McpPromptDescriptor[]>
-  getPrompt?(name: string, input: unknown): Promise<unknown>
-}
-```
+MCP 插件只在启动或后台刷新时发现能力，并以 `<serverId>.<toolName>` 命名空间投影。管理员或扩展必须显式选择投影类型：
+需要当前模型观察结果的能力投影为 FeedbackTool，无需回灌结果的能力投影为 ActionTool；未分类能力为避免模型上下文膨胀而默认不可见。
+resources 和 prompts 只有经过后台缓存、作用域隔离和不可信内容标记后，才能
+由 ContextProvider 读取。
 
-MCP 插件在启动或后台刷新时发现能力，把 MCP Tool 以 `<serverId>.<toolName>` 命名空间投影进 Tool 注册表。发现和重连不应发生在每条群消息的冷路径中。服务断开时只移除其能力快照，其他能力继续工作。
-
-为控制上下文成本，不能把所有 MCP Tool Schema 自动发给模型。主体按 Skill、关键词、响应机制和实例允许列表选择当前回合可见的 Tool；工具数量很大时提供一个本地目录搜索 Tool，再在后续模型续轮加载选中的 Schema。
+主体不能把所有 MCP Tool 自动发给模型，也不提供依赖多轮模型调用的目录搜索工具。主体按 Skill、
+关键词、响应机制和实例允许列表在本地选择少量 XML 模板与 function declarations；选择不到就
+不暴露能力。服务断开时只移除其能力快照，其他能力继续工作。
 
 ### 5.3 响应机制协议
 
-响应机制只回答“什么事件值得创建 AI 回合”，不负责生成和发送内容。
-
-```ts
-interface WakeProposal {
-  mechanismId: string
-  scopeId: string
-  kind: 'hard' | 'social' | 'continuation' | 'scheduled' | 'idle'
-  priority: number
-  reason: string
-  focusMessageIds: string[]
-  mergeKey: string
-  notBefore?: number
-  expiresAt?: number
-  bypassActivity?: boolean
-  budgetClass: 'reserved' | 'normal' | 'background'
-  context?: Record<string, unknown>
-}
-
-interface ResponseMechanism {
-  id: string
-  priority: number
-  onEvent?(
-    event: NormalizedEvent,
-    context: MechanismContext,
-  ): WakeProposal | WakeProposal[] | undefined
-  start?(host: ResponseMechanismHost): Disposable | Promise<Disposable>
-  directiveSchema?: unknown
-  applyDirective?(context: MechanismContext, directive: unknown): Promise<void> | void
-}
-```
-
-`onEvent` 位于冷路径，只能使用本地规则、状态、索引或本地小模型，不得调用远程 LLM。需要定时器、数据库监听或外部事件的机制通过 `start()` 调用 `host.enqueueWake()`。
+响应机制只回答“什么事件值得创建角色回合”，不负责生成和发送内容。
+唤醒提案至少携带响应机制 ID、作用域、类型、优先级、原因、焦点消息、合并键、有效期与预算类别。
+响应机制的事件处理位于冷路径，只能使用本地规则、状态、索引或本地小模型，不得调用远程 LLM。需要定时器、数据库监听或外部事件的机制通过宿主边界提交提案。
 
 主体的唤醒仲裁器统一处理所有提案：
 
 1. 按 `scopeId + mergeKey` 合并短时间内重复提案。
 2. 选择最高优先级原因，并把其余原因作为上下文附加。
 3. 应用频道锁、冷却、静音和对应预算类别。
-4. 从环形缓冲冻结消息快照并创建一个 AI 回合。
-5. 回合生成完成后按当前低延迟策略直接发送，不做二次群聊读取。
+4. 运行有界 ContextProvider，从环形缓冲和本地状态冻结角色回合快照。
+5. 首次请求 LLM；若返回 XML 则进入快速路径。
+6. 若返回 FeedbackTool 调用，则执行一批并回传结果，再请求一次禁止 FeedbackTool 的最终 XML。
+7. 校验最终 XML，按低延迟策略直接发送，再执行允许的 ActionTool。
 
 任何机制都不能直接调用 adapter 或 `session.send()`，因此新增响应方式不会形成并发重复回复。
 
@@ -786,105 +754,64 @@ initiative    角色主动行为
 
 ### 5.4 定时消息
 
-定时消息由 Tool 和 ResponseMechanism 配合完成：
+定时消息由 ActionTool、可选 FeedbackTool 和 ResponseMechanism 配合完成：
 
 ```text
 用户：“我下午三点要上课”
-  ↓ 当前 AI 回合识别为值得跟进
-schedule.create(at, reason, dedupeKey)
+  ↓ 当前角色回合输出 schedule.create XML 动作
+主体解析、校验并在发送前执行，不回灌模型
   ↓ 持久化任务
 到期后 schedule 机制提交 scheduled WakeProposal
   ↓
 主体读取任务原因、当前角色状态和相关历史
   ↓
-创建新的 AI 回合并发送角色消息
+创建新的单次角色回合并发送角色消息
 ```
 
-提供给 AI 的 Tool：
+生成前由 `schedule` ContextProvider 注入与当前成员、频道和时间表达相关的少量待办摘要。若用户
+明确查询更广的待办范围，模型可以使用只读 `schedule.query` FeedbackTool。XML ActionTool 只有
+写动作：
 
 ```text
-schedule.query
 schedule.create
 schedule.update
 schedule.cancel
 ```
 
-任务记录至少包含：
-
-```ts
-interface ScheduledWake {
-  id: string
-  identityId: string
-  scopeId: string
-  creatorMessageId: string
-  dueAt: number
-  reason: string
-  dedupeKey: string
-  status: 'pending' | 'running' | 'completed' | 'cancelled'
-  repeat?: string
-}
-```
+任务记录至少包含稳定 ID、角色与群聊作用域、创建消息、到期时间、原因、去重键、状态和可选重复规则。
 
 实现要求：
 
 - 当前时间、日期和群时区必须进入创建 Tool 的上下文。
 - Tool 在宿主侧解析并校验时间，不能只相信模型生成的时间戳。
-- `dedupeKey` 防止模型在工具续轮中重复创建相同任务。
+- `dedupeKey` 防止消息重放、重试消费或重复 XML 动作创建相同任务。
 - 任务持久化，Koishi 重启后恢复。
 - 调度器查询最近的下一项任务并设置定时器，不需要每秒扫描全部频道。
 - 重启期间错过的任务按 grace period 决定立即触发或标记过期。
 - 到期事件绕过活跃度阈值，但使用独立的 `reserved` 调用预算。
 
-若时间表达没有触发正常活跃度门控，可由独立 `temporal-cue` 响应机制使用本地日期/时间规则提高相关度或直接提交低优先级提案。它只负责让 AI 看见时间信息，不自行决定是否创建任务。
+若时间表达没有触发正常活跃度门控，可由独立 `temporal-cue` 响应机制使用本地日期/时间规则提高相关度或直接提交低优先级提案。它只负责让模型看见时间信息，不自行决定是否创建任务。
 
 ### 5.5 持续讨论
 
-直接 @ 或回复 Yokai 后，为当前用户和话题建立短期“讨论租约”：
-
-```ts
-interface EngagementLease {
-  identityId: string
-  scopeId: string
-  participantIds: string[]
-  anchorMessageId: string
-  openedAt: number
-  expiresAt: number
-  remainingTurns: number
-}
-```
+直接 @ 或回复 Yokai 后，为当前用户和话题建立短期“讨论租约”。租约记录角色与群聊作用域、参与者、锚点消息、开始/过期时间和剩余回合。
 
 租约规则：
 
 - 用户第一次 @ 或引用 Yokai 时自动开启。
-- AI 的结构化结果可以通过 `engagement` directive 选择延长或关闭租约。
-- 租约有效期内，参与者在同一频道的新消息获得 `continuation` 提案，无须再次 @。
-- 连续发送的多段消息仍经过 debounce，合并成一个 AI 回合。
-- 只有租约参与者的消息能触发，不把整个频道切换成逐条 AI 模式。
+- XML 输出可以通过固定的 `engagement` directive 选择延长或关闭租约。
+- 租约有效期内，参与者在同一频道的新消息获得 `engagement` 提案，无须再次 @。
+- 连续发送的多段消息仍经过 debounce，合并成一个角色回合。
+- 只有租约参与者的消息能触发，不把整个频道切换成逐条角色生成模式。
 - 租约受最大持续时间、最大轮数和调用预算限制。
-- 超时、达到轮数、用户明显转向其他对象或 AI 主动关闭后结束。
+- 超时、达到轮数、用户明显转向其他对象或模型主动关闭后结束。
 - 租约判断完全本地执行，不增加每条消息的远程调用。
 
 建议初始值为 5 分钟或 8 个用户轮次，以先到者为准。这样主动讨论期间接近普通即时对话，讨论结束后自动回到低成本活跃度门控。
 
 ### 5.6 角色预设热更新
 
-角色预设不能直接作为可变全局对象使用。主体维护不可变、带版本的快照：
-
-```ts
-interface PersonaSnapshot {
-  presetId: string
-  version: number
-  contentHash: string
-  persona: Persona
-  compiledPrompt: string
-  loadedAt: number
-}
-
-interface YokaiPresetSource {
-  id: string
-  start(publish: (candidate: unknown) => Promise<void>): Disposable
-}
-```
+角色预设不能直接作为可变全局对象使用。主体维护不可变、带版本的快照，快照记录预设 ID、版本、内容 hash、人格、编译后提示和加载时间。
 
 文件、Console、数据库和第三方预设插件都通过 `YokaiPresetSource` 发布候选版本。更新流程：
 
@@ -901,7 +828,7 @@ interface YokaiPresetSource {
 ```
 
 - 校验失败时保留最后一个有效版本，不影响正在运行的角色。
-- 进行中的 AI 回合继续使用旧快照；下一个回合立即使用新快照。
+- 进行中的角色回合继续使用旧快照；下一个回合立即使用新快照。
 - 热更新默认保留成员关系、记忆、讨论租约和定时任务。
 - 需要清理状态的重大角色变更通过显式迁移操作完成，不能随文件保存自动发生。
 - 当前使用的预设被插件卸载时保留最后有效快照，并在控制面提示来源已离线。
@@ -910,7 +837,7 @@ interface YokaiPresetSource {
 
 ### 5.7 插件热插拔语义
 
-| 操作                | 新 AI 回合       | 进行中回合                              |
+| 操作                | 新角色回合       | 进行中回合                              |
 | ------------------- | ---------------- | --------------------------------------- |
 | 安装 Tool/Skill/MCP | 立即可见         | 保持原能力快照                          |
 | 卸载 Tool/Skill/MCP | 不再可见         | 已开始调用允许完成或由 AbortSignal 取消 |
@@ -932,112 +859,68 @@ Yokai 将这些模式统一成 `ResponseMechanism + WakeProposal + WakeArbiter`�
 
 ## 6. 最小数据模型
 
-| 表                    | 内容                                                   |
-| --------------------- | ------------------------------------------------------ |
-| `yokai_identity`      | 角色人格和当前版本                                     |
-| `yokai_channel_state` | 频道活跃度、相关度、缓冲游标、冷却和调用预算           |
-| `yokai_member_state`  | 成员称呼、关系和交流偏好                               |
-| `yokai_message`       | 带稳定游标的全量群聊消息、引用、编辑和撤回状态         |
-| `yokai_memory`        | 经历、事实、自我和关系记忆                             |
-| `yokai_thread`        | 当前短期话题线程                                       |
-| `yokai_engagement`    | 持续讨论租约、参与者、有效期和剩余轮数                 |
-| `yokai_schedule`      | 一次性或重复的持久化定时唤醒任务                       |
-| `yokai_preset_state`  | 实例当前预设 ID、版本、hash 和来源                     |
-| `yokai_turn`          | 触发原因、消息批次、历史页、行为、费用、发送结果和耗时 |
+| 表                    | 内容                                                            |
+| --------------------- | --------------------------------------------------------------- |
+| `yokai_identity`      | 角色人格和当前版本                                              |
+| `yokai_channel_state` | 频道活跃度、相关度、缓冲游标、冷却和调用预算                    |
+| `yokai_member_state`  | 成员称呼、关系和交流偏好                                        |
+| `yokai_message`       | 保留期内带稳定游标的原始群聊消息、编辑版本与引用                |
+| `yokai_memory`        | 记事本中的经历、事实、自我和关系笔记                            |
+| `yokai_thread`        | 当前短期话题线程                                                |
+| `yokai_engagement`    | 持续讨论租约、参与者、有效期和剩余轮数                          |
+| `yokai_schedule`      | 一次性或重复的持久化定时唤醒任务                                |
+| `yokai_preset_state`  | 实例当前预设 ID、版本、hash 和来源                              |
+| `yokai_turn`          | 触发、上下文、FeedbackTool 批次、XML 动作、费用、发送结果和耗时 |
 
-`yokai_message` 按 `(platform, guildId, channelId, timestamp, messageId)` 建立分页索引，并为作者与本地全文搜索建立辅助索引。消息正文用于历史工具，但不会自动进入每次模型上下文。所有历史和记忆先按 Yokai 实例及群聊作用域隔离，再做检索。
+`yokai_message` 按 `(platform, guildId, channelId, timestamp, messageId)` 建立分页索引，并为作者与本地全文搜索建立辅助索引。
+原始消息默认保留 90 天，保留天数由主插件配置；后台定期删除超期记录，不实现按消息撤回或手动删除流程。
+消息正文由宿主上下文提供器按预算选择，不会全部进入每次模型上下文。所有历史和记事本先按 Yokai 实例及群聊作用域隔离，再做检索。
 
 ## 7. 关键配置
 
-```ts
-interface Config {
-  identity: {
-    id: string
-    presetId: string
-  }
-  model: {
-    primary?: string
-    fallback: string[]
-  }
-  activation: {
-    activityThreshold: number
-    relevanceThreshold: number
-    halfLifeSeconds: number
-    debounceMs: number
-    cooldownMs: number
-    recentMessageMin: number
-    recentMessageMax: number
-    recentTokenBudget: number
-    callsPerMinute: number
-    callsPerDay: number
-  }
-  history: {
-    pageSize: number
-    maxPageSize: number
-    maxPagesPerTurn: number
-    maxHistoryTokensPerTurn: number
-    maxModelRequestsPerTurn: number
-  }
-  capabilities: {
-    allowTools: string[]
-    allowSkills: string[]
-    allowMcpServers: string[]
-    maxVisibleToolsPerTurn: number
-  }
-  engagement: {
-    enabled: boolean
-    ttlSeconds: number
-    maxTurns: number
-  }
-  schedule: {
-    enabled: boolean
-    timezone: string
-    gracePeriodSeconds: number
-    maxPendingPerScope: number
-    reservedCallsPerDay: number
-  }
-  presets: {
-    watchFiles: boolean
-    reloadDebounceMs: number
-  }
-  memory: {
-    enabled: boolean
-    maxRecall: number
-    defaultTtl: number
-  }
-  expression: {
-    maxLength: number
-    strictRoleplay: true
-  }
-  initiative: {
-    enabled: boolean
-    maxPerDay: number
-  }
-}
-```
+配置只固定产品层的约束，具体 Koishi Schema 由各实施任务确定：
 
-`strictRoleplay` 是固定行为，不由普通群聊内容关闭。角色外调试和管理只在 Koishi Console 或权限命令中进行。
-`model.primary` 和 `model.fallback` 均属于主插件配置，其选项来自实时模型目录；未选 primary 是允许的本地存档模式，不使用伪造的 `none` 模型 ID。
+| 配置组           | 关键内容                                                                       |
+| ---------------- | ------------------------------------------------------------------------------ |
+| 角色             | 实例 ID、预设 ID                                                               |
+| 模型             | 可选 primary、有序 fallback；选项来自实时模型目录                              |
+| 门控与预算       | 活跃度/相关度阈值、半衰期、debounce、冷却、上下文窗口和分类调用预算            |
+| 历史             | 原始消息保留天数（默认 90）、分页上限、每回合查询数和 token 上限               |
+| 生成             | 超时、上下文截止时间、XML 上限、ActionTool/FeedbackTool 数量、耗时与结果上限   |
+| 能力可见性       | `feedbackToolsEnabled`、ActionTool/FeedbackTool/Skill/MCP 可见列表与每回合上限 |
+| 讨论、定时与主动 | 开关、租约期限、时区、错过宽限、待办上限和独立预算                             |
+| 预设与记事本     | 文件监听、重载 debounce、召回上限、默认笔记过期时间                            |
+| 表达             | 最大长度；严格角色内表达是固定行为                                             |
+
+角色外调试和管理只在 Koishi Console 或管理命令中进行。primary/fallback 均属于主插件配置；未选 primary 是允许的本地存档模式，
+不使用伪造的 `none` 模型 ID。adapter 的多组 URL/key 连接只存在对应 adapter 插件配置中。
 
 ## 8. 评测
 
 ### 8.1 核心指标
 
-| 指标                        | 目标                   |
-| --------------------------- | ---------------------- |
-| 匿名记录来源识别率          | 接近随机猜测           |
-| 角色外术语泄漏率            | 0                      |
-| 不合时宜发言率              | 持续下降               |
-| 已有答案后的重复回复率      | 持续下降               |
-| 人格和背景矛盾率            | 接近 0                 |
-| 虚假记忆率                  | 接近 0                 |
-| 消息长度与节奏分布差异      | 接近目标群人类分布     |
-| 主动消息被忽略率            | 不高于普通群友基线     |
-| 冷路径远程模型调用数        | 0                      |
-| 每 100 条群消息的 AI 回合数 | 在效果不下降时尽可能低 |
-| 每个 AI 回合合并的消息数    | 能覆盖完整消息簇       |
-| 每千条群消息的模型成本      | 不超过实例预算         |
-| 历史工具平均页数和 token    | 持续受限且可解释       |
+| 指标                             | 目标                         |
+| -------------------------------- | ---------------------------- |
+| 匿名记录来源识别率               | 接近随机猜测                 |
+| 角色外术语泄漏率                 | 0                            |
+| 不合时宜发言率                   | 持续下降                     |
+| 已有答案后的重复回复率           | 持续下降                     |
+| 人格和背景矛盾率                 | 接近 0                       |
+| 虚假记忆率                       | 接近 0                       |
+| 消息长度与节奏分布差异           | 接近目标群人类分布           |
+| 主动消息被忽略率                 | 不高于普通群友基线           |
+| 冷路径远程模型调用数             | 0                            |
+| single-pass 回合供应商生成请求数 | 恰好 1                       |
+| bounded-feedback 回合生成请求数  | 恰好 2，反馈轮数恰好 1       |
+| 单次路径占角色回合比例           | MVP 不低于 90%               |
+| 唤醒确认到供应商请求发出 p95     | 不高于上下文截止时间 + 50 ms |
+| XML 解析与本地编排额外耗时 p95   | 不高于 50 ms                 |
+| 发送前动作额外耗时               | 不超过配置的短超时           |
+| 有效 XML 输出率                  | 持续接近 100%                |
+| 每 100 条群消息的角色回合数      | 在效果不下降时尽可能低       |
+| 每个角色回合合并的消息数         | 能覆盖完整消息簇             |
+| 每千条群消息的模型成本           | 不超过实例预算               |
+| 历史上下文查询数和 token         | 持续受限且可解释             |
 
 盲测使用经过匿名化的离线群聊片段，评价者只看消息和上下文，不看账号标识。线上运行仍保留平台机器人标识。
 
@@ -1045,10 +928,18 @@ interface Config {
 
 - 多人并行聊天时选择沉默或正确线程；
 - 连续低相关消息只存档和累计，不调用模型；
-- 短时间消息爆发只合并成一个 AI 回合；
-- 直接 @ 在低活跃频道中仍能触发，并合并紧随其后的补充消息；
+- 短时间消息爆发只合并成一个角色回合；
+- 直接 @ 在低活跃频道中仍能触发，使用短 debounce 合并补充消息，不等待社会触发窗口；
 - 预算接近上限时提高社会触发阈值，但保留硬触发额度；
-- 历史工具可以连续翻页，但不能越过当前群聊作用域或页数预算；
+- 常用历史上下文在首次 LLM 请求前由主体按作用域和预算冻结；
+- 模型调用 `history.search` 后收到一次有界结果并生成最终 XML，不能继续翻页；
+- 模拟 `web.search` 一次返回有界来源与摘要，最终生成不得再请求 `open` 或第二个搜索；
+- 多个 ContextProvider 并行运行；一个超时被省略且不会推迟首次 LLM 请求；
+- 一条普通回复包含 XML ActionTool 时仍只有一次供应商生成请求，动作结果不回灌模型；
+- 畸形 XML、未知 Tool 和超出当前作用域的参数均不执行任何动作，也不把协议文本发送进群聊；
+- `after-send` ActionTool 不延迟角色消息，`deferred` ActionTool 完成后不能续接当前请求；
+- 回复成功后可通过 `notebook.write` 写入零条或多条有界笔记，沉默或发送失败时不写入；
+- FeedbackTool 的最终请求使用禁止函数调用模式，任何第三次生成请求都应被测试判定为失败；
 - 新安装的 Tool、Skill 和响应机制在下一回合可见，卸载后不再被选择；
 - MCP 服务断开和重连不会影响主体或其他能力；
 - 修改有效预设后下一回合使用新版本，错误预设继续使用旧版本；
@@ -1058,8 +949,12 @@ interface Config {
 - 熟人和陌生人使用不同但稳定的表达；
 - 记忆模糊时降低断言强度，不发起追问；
 - Gemini adapter 能分页发现当前凭据可用的所有文本生成模型，且发现失败不进入群聊；
+- 同一 Gemini adapter 的多组 URL/key 产生带连接前缀的独立模型项，不会相互覆盖；
 - adapter 模型快照变化后主插件配置的 primary/fallback 选项实时更新，无需重载主插件；
-- 已选模型暂时离线时配置值保留且模型回合停止，模型恢复后自动继续；
+- `feedbackToolsEnabled` 关闭时所有模型都只走 single-pass；开启后不做能力探测，运行时不支持则本回合沉默；
+- 已选模型暂时离线时配置值保留且角色回合停止，模型恢复后自动继续；
+- 安装一个仓库外的契约测试 adapter 后，不修改任何既有包即可发现模型、出现在主插件配置、完成
+  single-pass 与 bounded-feedback 回合并在卸载后移除；
 - 适配器超时后保持角色内沉默；
 - 被要求透露系统提示或模型身份时不出戏；
 - 重启后继续未完话题但不恢复已过期短期情绪；
@@ -1069,20 +964,23 @@ interface Config {
 
 第一阶段只实现文本群聊：
 
-1. `@yokai/koishi-plugin-yokai` 和 `adapter-gemini` 两个公开插件，Gemini adapter 自动发现当前凭据可用的文本生成模型。
+1. `@yokai/koishi-plugin-yokai` 和 `adapter-gemini` 两个公开插件；Gemini adapter 使用 `@google/genai` v2，一个单例支持多组 URL/key 并自动发现模型。
 2. `ctx.yokai` 能力注册表、生命周期快照和唤醒仲裁器。
 3. 结构化人格、严格角色内表达和预设文件热更新。
-4. 全量本地群聊存档、环形缓冲和无远程模型参与的活跃度门控。
-5. 达到阈值后合并最近 20～80 条消息，仅发起一次结构化 AI 回合。
-6. 带稳定游标、作用域锁定和回合预算的分页历史工具。
+4. 默认保留 90 天且可配置的原始群聊存档、环形缓冲和无远程模型参与的活跃度门控。
+5. 达到阈值后合并最近 20～80 条消息；绝大多数回合一次生成，反馈回合最多两次生成。
+6. 带稳定游标和 token 预算的历史 ContextProvider，以及只读 `history.search` FeedbackTool。
 7. 内置 direct、activity、engagement 和 schedule 响应机制。
 8. 持久化定时任务与短期讨论租约。
-9. 多话题识别、成员关系、四类记忆及沉默决策。
-10. 冻结上下文生成后直接发送，不增加后置检查或二次群聊读取。
-11. 基于目标群记录的助手腔检测、调用成本统计和盲测回放。
+9. 多话题识别、成员关系、四类记事本笔记及沉默决策；笔记只由回复后的 `notebook.write` 可选写入。
+10. XML ActionTool 不回灌模型；FeedbackTool 只允许一轮调用和一次最终生成，不提供开放式循环。
+11. 基于目标群记录的调用成本统计和盲测回放。
 12. 少量由未完话题触发的主动发言。
+13. 仓库外 LLM adapter 的零修改兼容门禁，覆盖注册、模型发现、配置联动、两类生成和卸载。
 
-MVP 暂不实现语音、图片生成、浏览器、代码工具、人格市场和主动私聊。先证明文本群聊中的行为不可区分，再扩展能力。
+MVP 仍只正式发布 Gemini adapter；用于兼容门禁的确定性 adapter 是测试夹具，不作为第二个产品
+adapter 发布。MVP 暂不实现语音、图片生成、浏览器、代码工具、人格市场和主动私聊。先证明文本
+群聊中的行为不可区分，再扩展能力。
 
 ## 10. 最终架构决策
 
@@ -1090,15 +988,26 @@ MVP 暂不实现语音、图片生成、浏览器、代码工具、人格市场�
 2. 仿生性的核心是场景判断、沉默、连续状态、关系和记忆，不是单一提示词。
 3. 所有仿生逻辑集中在 `@yokai/koishi-plugin-yokai`。
 4. MVP 公开包只包含主体和 adapter；后续能力按 `tool-*`、`skill-*`、`mcp-*`、`response-*`、`preset-*` 扩展，永不公开 `core`、`mind`、`memory` 插件。
-5. 模型提出行为和表达，主体插件按结构化结果直接发送，不增加二次内容校验。
-6. AI 回合使用创建时的单一冻结快照，生成期间的新消息留给下一回合。
+5. 最终角色输出通过统一 XML 提出行为、表达和 ActionTool；需要结果的 FeedbackTool 使用首次原生
+   函数调用，主体严格处理两类结果，不做开放式模型续轮。
+6. 角色回合使用创建时的单一冻结快照，生成期间的新消息留给下一回合。
 7. 任何错误和内部信息都不能破坏角色扮演。
-8. 冷路径不调用任何远程 AI；达到活跃度和相关度阈值后才合并消息创建回合。
-9. 最近消息自动随回合提供，全量群聊记录仅通过受限分页工具按需读取。
+8. 冷路径不调用任何远程模型；达到活跃度和相关度阈值后才合并消息创建回合。
+9. 最近消息和相关历史优先由 ContextProvider 冻结；不足时可用一次 `history.search` FeedbackTool，
+   但不能连续分页。
 10. 所有唤醒来源实现统一 ResponseMechanism，只能向 WakeArbiter 提交提案。
 11. 直接对话通过有界讨论租约临时绕过普通活跃度阈值，用户无需反复 @。
-12. 定时行为通过持久化 schedule Tool 和 scheduled WakeProposal 实现。
+12. 定时写行为通过 XML `schedule` ActionTool 和 scheduled WakeProposal 实现；查询使用只读 FeedbackTool。
 13. 角色预设使用不可变版本快照原子热更新，不停机且不修改进行中的回合。
 14. 以匿名记录盲测中的不可区分性作为唯一顶层指标，其余指标都是诊断手段。
-15. Gemini adapter 使用官方 `@google/genai`，但 SDK 不跨越 adapter 边界，不接管工具执行、续轮、预算或重试策略。
-16. 模型选择属于主插件配置，通过 Koishi dynamic Schema 实时投影 adapter 模型目录；adapter 不持有当前模型选择。
+15. Gemini adapter 使用官方 `@google/genai`；SDK 类型不跨边界，自动函数调用关闭，FeedbackTool
+    由主体执行，adapter 只传输通用调用与结果。
+16. 模型选择和协议能力开关属于主插件配置，通过 Koishi dynamic Schema 实时投影 adapter 模型目录；
+    adapter 不持有当前模型选择，主体不探测逐模型能力。
+17. Yokai 不是通用 Agent；single-pass 回合一次生成，bounded-feedback 回合最多两次生成且只有
+    一轮工具反馈，不形成开放式观察—续轮循环。
+18. 只有 ActionTool 使用 XML 且不回显；需要结果参与回答的历史、搜索和计算使用 FeedbackTool。
+19. 实现当前协议的新增 LLM adapter 只能新增自己的插件包；主体及其他既有包零修改，兼容性由
+    仓库外 adapter 门禁验证，而不是依赖第二个正式 adapter。
+20. 原始消息默认保留 90 天且可配置；不实现撤回同步、消息级删除或手动删除流程。长期记忆只由
+    回复成功后的 `notebook.write` ActionTool 选择性写入，写入结果不回灌模型。
