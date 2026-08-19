@@ -1,6 +1,6 @@
 # Yokai 精简设计
 
-状态：Draft 0.4
+状态：Draft 0.5
 
 包命名空间：`@yokai`
 
@@ -516,6 +516,18 @@ MVP 不使用已停止维护的 `@google/generativeai`；Gemini adapter 按官�
 上次成功的不可变快照。配置的模型不在当前快照时产生角色外的类型化配置错误，不在群聊中自动
 报错或悄然换模型。
 
+模型选择只存在于主插件 `@yokai/koishi-plugin-yokai` 的配置中；adapter 只配置凭据、端点和传输参数，不保存“当前模型”。主插件把每个 adapter 最新的发现快照合并为带版本的全局模型目录，模型引用使用稳定的 `<adapterId>/<modelId>` 形式；`adapterId` 不允许包含 `/`，`modelId` 保留剩余完整内容。
+
+主插件的 primary 和 fallback 配置使用 Koishi `Schema.dynamic('yokai-model')`。模型目录的 `SubscriptionRef` 每次原子替换后，Koishi 边界根据新快照调用 `ctx.schema.set('yokai-model', ...)`，将每个模型投影为动态选项。这会让主插件的原生 Koishi 配置表单实时响应 adapter 注册、卸载、重连和模型刷新，不需要重载主插件，也不另造一份模型下拉框状态。
+
+动态配置遵守以下语义：
+
+- 当前已选但暂不可用的模型作为禁用选项保留，不清空或改写用户配置。
+- 未选模型、选中模型未发现或 adapter 离线时，主插件继续本地存档和状态更新，但不创建模型回合。
+- 选中模型重新出现后下一回合自动恢复，不修改配置或重启主插件。
+- 发现失败时目录继续发布上次成功快照并标记为 stale，不让配置选项瞬间消失。
+- fallback 只按主插件配置的顺序启用，不因目录顺序、显示名或 adapter 刷新自动改变。
+
 如果实际连接的是兼容协议而不是官方服务，后续使用：
 
 ```text
@@ -599,8 +611,37 @@ interface YokaiService {
   registerResponseMechanism(mechanism: ResponseMechanism): Disposable
 
   enqueueWake(proposal: WakeProposal): Promise<WakeReceipt>
+  getModelCatalog(): ModelCatalogSnapshot
+  refreshAdapterModels(adapterId?: string): Promise<ModelCatalogSnapshot>
 }
 ```
+
+模型目录是主体注册表的一部分：
+
+```ts
+interface ModelDescriptor {
+  ref: string
+  adapterId: string
+  modelId: string
+  displayName: string
+  available: boolean
+}
+
+interface AdapterModelStatus {
+  adapterId: string
+  status: 'discovering' | 'ready' | 'stale' | 'offline' | 'failed'
+  discoveredAt?: number
+  errorTag?: string
+}
+
+interface ModelCatalogSnapshot {
+  version: number
+  models: ModelDescriptor[]
+  adapters: AdapterModelStatus[]
+}
+```
+
+adapter 注册后主体立即在其作用域中调用 `discoverModels`；adapter 配置变化通过 Koishi 重建该 adapter 作用域，手动刷新通过 `refreshAdapterModels` 触发。只有完整、解码成功的 adapter 快照才原子并入全局目录，迟到的旧版发现结果不得覆盖更新版本。
 
 所有注册项必须具有稳定 `id` 和协议版本。注册表遵守：
 
@@ -608,6 +649,7 @@ interface YokaiService {
 - 注册返回 `Disposable`，Koishi 插件卸载时立即停止向新回合暴露能力。
 - 每个 AI 回合冻结一份能力快照；回合执行期间安装、卸载或更新插件不会改变该回合。
 - 新回合始终读取最新注册表版本。
+- 模型目录每次有效变化只增加一次版本并发布一份完整快照，相同内容不重复发布。
 - 扩展只能提交能力或唤醒提案，不能直接操作模型适配器或向 Session 发送消息。
 - 注册失败只禁用对应扩展，不影响 Yokai 主体运行。
 
@@ -913,9 +955,9 @@ interface Config {
     id: string
     presetId: string
   }
-  adapter: {
-    primary: string
-    fallback?: string[]
+  model: {
+    primary?: string
+    fallback: string[]
   }
   activation: {
     activityThreshold: number
@@ -975,6 +1017,7 @@ interface Config {
 ```
 
 `strictRoleplay` 是固定行为，不由普通群聊内容关闭。角色外调试和管理只在 Koishi Console 或权限命令中进行。
+`model.primary` 和 `model.fallback` 均属于主插件配置，其选项来自实时模型目录；未选 primary 是允许的本地存档模式，不使用伪造的 `none` 模型 ID。
 
 ## 8. 评测
 
@@ -1015,6 +1058,8 @@ interface Config {
 - 熟人和陌生人使用不同但稳定的表达；
 - 记忆模糊时降低断言强度，不发起追问；
 - Gemini adapter 能分页发现当前凭据可用的所有文本生成模型，且发现失败不进入群聊；
+- adapter 模型快照变化后主插件配置的 primary/fallback 选项实时更新，无需重载主插件；
+- 已选模型暂时离线时配置值保留且模型回合停止，模型恢复后自动继续；
 - 适配器超时后保持角色内沉默；
 - 被要求透露系统提示或模型身份时不出戏；
 - 重启后继续未完话题但不恢复已过期短期情绪；
@@ -1056,3 +1101,4 @@ MVP 暂不实现语音、图片生成、浏览器、代码工具、人格市场�
 13. 角色预设使用不可变版本快照原子热更新，不停机且不修改进行中的回合。
 14. 以匿名记录盲测中的不可区分性作为唯一顶层指标，其余指标都是诊断手段。
 15. Gemini adapter 使用官方 `@google/genai`，但 SDK 不跨越 adapter 边界，不接管工具执行、续轮、预算或重试策略。
+16. 模型选择属于主插件配置，通过 Koishi dynamic Schema 实时投影 adapter 模型目录；adapter 不持有当前模型选择。

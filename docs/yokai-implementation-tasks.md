@@ -1,6 +1,6 @@
 # Yokai 可验收实施任务
 
-状态：Draft 0.2
+状态：Draft 0.3
 
 依据：[`yokai-design.md`](./yokai-design.md)
 
@@ -16,6 +16,7 @@ Gemini 客户端：Google 官方 `@google/genai`
 - 所有任务都必须通过 `yarn build` 和 `yarn lint`；时间相关测试使用 `TestClock`，不等待真实时间。
 - 应用逻辑使用 Effect，`Effect.run*` 只能出现在 Koishi 边界和测试基础设施。
 - `@google/genai` 只存在于 Gemini adapter 工作区；所有 SDK Promise、流和错误都在 adapter 边界转换为 Effect 和 `@yokai/protocol` 类型。
+- 模型选择只存在主插件配置；adapter 仅发布模型快照，不保存 primary 或 fallback。
 
 ## 2. 优先交付：Gemini adapter
 
@@ -36,11 +37,12 @@ Gemini 客户端：Google 官方 `@google/genai`
 
 前置：YK-001。
 
-交付：在 `@yokai/protocol` 定义稳定 ID、协议版本、统一生成请求/结果、用量、能力声明和类型化 adapter 错误。
+交付：在 `@yokai/protocol` 定义稳定 ID、协议版本、`<adapterId>/<modelId>` 模型引用、统一生成请求/结果、用量、能力声明和类型化 adapter 错误。
 
 验收：
 
 - Schema 可对合法样例往返编解码，并拒绝缺少 ID、越界 token 用量和未知结果变体。
+- adapter ID 不允许 `/`；模型引用只在第一个 `/` 处分割，保留完整 model ID。
 - 错误至少区分配置、认证、限流、超时、取消、供应商响应和协议解码失败。
 - 协议不引用 Gemini 或 Koishi 具体类型。
 
@@ -65,6 +67,7 @@ Gemini 客户端：Google 官方 `@google/genai`
 验收：
 
 - 无 key 时给出角色外配置错误，不发出网络请求。
+- adapter 配置中不存在 primary、fallback 或任何“当前模型”字段。
 - API key 在 Schema、错误、日志和测试快照中均不以明文出现。
 - `GoogleGenAI` 客户端只在 Layer 作用域内构造，SDK 类型不出现于 `@yokai/protocol` 公开声明。
 - SDK Promise 通过 `Effect.tryPromise` 调用，SDK 异常在服务边界翻译为类型化 adapter 错误。
@@ -132,25 +135,34 @@ Gemini 客户端：Google 官方 `@google/genai`
 
 前置：YK-002。
 
-交付：实现 adapter、tool、skill、MCP、preset source 和 response mechanism 的注册/注销，以及不可变的回合能力快照。
+交付：实现 adapter、tool、skill、MCP、preset source 和 response mechanism 的注册/注销，以及不可变的回合能力快照。adapter 模型快照合并到主体持有的 `SubscriptionRef`。
 
-验收：同 ID 冲突被拒绝；卸载后新回合不可见；旧回合快照不受安装、卸载影响；一个扩展注册失败不影响其他扩展。
+验收：同 ID 冲突被拒绝；卸载后新回合不可见；旧回合快照不受安装、卸载影响；模型目录快照版本单调增加且原子替换；一个扩展注册失败不影响其他扩展。
 
 ### YK-010 `ctx.yokai` Koishi 服务边界
 
 前置：YK-009。
 
-交付：由主体插件暴露 `ctx.yokai`，将 Koishi 生命周期、配置和 Session 转成内部 Effect 服务输入。
+交付：由主体插件暴露 `ctx.yokai`，将 Koishi 生命周期、配置和 Session 转成内部 Effect 服务输入。在主插件 Config 中定义使用 `Schema.dynamic('yokai-model')` 的可选 primary 和有序 fallback。
 
-验收：第三方测试插件可注册并注销能力；内部包无 Koishi 依赖；插件 dispose 会中断主体所有有主的 fiber。
+验收：第三方测试插件可注册并注销能力；primary/fallback 只出现在主插件 Config；无 primary 时主插件仍可启动本地存档路径；内部包无 Koishi 依赖；插件 dispose 会中断主体所有有主的 fiber。
 
-### YK-011 Gemini 模型目录与选择
+### YK-011 实时模型目录与主插件选择
 
 前置：YK-005、YK-009、YK-010。
 
-交付：主体聚合 adapter 的最新模型快照，按 `adapterId + modelId` 验证 primary/fallback 配置，向控制面提供刷新和状态查询。
+交付：主体聚合所有 adapter 的最新模型快照，订阅目录 `SubscriptionRef`，并在每次更新时通过 `ctx.schema.set('yokai-model', Schema.union(...))` 实时更新主插件的 primary/fallback 选项。当前配置中已选但不可用的引用使用 `Schema.const(ref).disabled()` 保留。按模型引用验证选择，并向控制面提供刷新和状态查询。
 
-验收：新 adapter 注册后可刷新；卸载后不可选；选中模型必须属于对应 adapter 快照；fallback 只按显式配置顺序启用。
+验收：
+
+- 假 adapter 注册、发布新快照、卸载和重新注册时，主插件配置选项均立即更新，不重载主插件。
+- 每次有效目录变化只发出一次 `internal/schema('yokai-model')`，内容未变时不重复发布。
+- 选项值是稳定模型引用，显示文案可变但不会改写配置。
+- 已选但不可用的模型以禁用选项保留，主体返回类型化 unavailable 状态并不创建模型回合。
+- 已选模型再次可用时，下一回合自动恢复，不需要保存配置或重启。
+- 发现失败保留上次成功选项并标记 stale；从未成功时只显示当前已选的禁用项。
+- 同一 adapter 两次发现乱序完成时，旧作用域或旧请求的结果不会覆盖新快照。
+- fallback 去重、不得重复 primary，且只按主插件显式配置顺序启用。
 
 ### YK-012 直接 @ 的最小端到端回路
 
@@ -306,11 +318,11 @@ Gemini 客户端：Google 官方 `@google/genai`
 
 前置：YK-011、YK-019、YK-029。
 
-交付：提供 Koishi Console 页面与后端服务，管理预设、频道停用和数据操作，并展示 adapter 状态、最近发现时间、发现的模型及手动刷新操作。
+交付：提供 Koishi Console 页面与后端服务，管理预设、频道停用和数据操作，并展示 adapter 状态、最近发现时间、发现的模型及手动刷新操作。模型选择继续使用主插件原生配置表单，此页不维护第二份选择状态。
 
 验收：
 
-- 模型选项来自当前 adapter 快照，不是前端固定列表，且保留 `adapterId + modelId` 关联。
+- 状态页与主插件配置表单读取同一模型目录快照，不存在前端固定列表或独立选中值。
 - 用户可查看上次成功/失败状态并手动刷新；刷新不阻塞普通消息存档。
 - 已配置但当前不可用的模型显示明确警告，不自动改写配置。
 - 页面、RPC 和浏览器日志均不返回 API key、完整群聊或完整模型提示。
@@ -337,7 +349,7 @@ Gemini 客户端：Google 官方 `@google/genai`
 | ---- | -------------- | ------------------------------------------------------------- |
 | A    | YK-001～YK-005 | Gemini adapter 能使用凭据自动列出全部可用文本生成模型         |
 | B    | YK-006～YK-008 | Gemini adapter 独立通过发现、生成、结构化输出、工具和容错契约 |
-| C    | YK-009～YK-012 | @ Yokai 后通过自动发现并选中的 Gemini 模型回复                |
+| C    | YK-009～YK-012 | 主插件配置实时展示 adapter 模型，@ Yokai 后使用选中模型回复   |
 | D    | YK-013～YK-021 | 存档、门控、历史工具、人格和结构化回合管线完整运行            |
 | E    | YK-022～YK-028 | 话题、状态、关系、记忆、讨论租约、定时与主动行为逐项可用      |
 | F    | YK-029～YK-032 | 可运维、可计费、可回放并可执行盲测的 MVP                      |
