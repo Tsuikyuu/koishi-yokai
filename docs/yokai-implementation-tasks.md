@@ -1,6 +1,6 @@
 # Yokai 可验收实施任务
 
-状态：Draft 0.7
+状态：Draft 0.8
 
 依据：[`yokai-design.md`](./yokai-design.md)
 
@@ -41,16 +41,17 @@ Gemini 客户端：Google 官方 `@google/genai` v2
 
 前置：YK-001。
 
-交付：在 `@yokai/protocol` 定义完整 `YokaiAdapter` 接口、稳定 ID、协议版本、`<adapterId>/<modelId>` 模型引用、`discoverModels/generate/continue`、统一文本/FeedbackTool 生成请求、文本或 ToolCallBatch 结果、ToolResultBatch、用量、adapter 级 FeedbackTool 契约声明和类型化 adapter 错误。
+交付：在 `@yokai/protocol` 定义完整 `YokaiAdapter` 接口、稳定 ID、协议版本与注册前握手、`<adapterId>/<modelId>` 模型引用、可表达逐模型 fresh/stale 的不可变 adapter 模型发现快照、`discoverModels/generate/continue`、统一文本/FeedbackTool 生成请求、文本或 ToolCallBatch 结果、ToolResultBatch、用量、adapter 级 FeedbackTool 契约声明和类型化 adapter 错误。代码级规范见 [`yokai-llm-adapter-protocol.md`](./yokai-llm-adapter-protocol.md)。
 
 验收：
 
-- Schema 可对合法样例往返编解码，并拒绝缺少 ID、越界 token 用量和未知结果变体。
+- 可持久化 Schema 可对合法样例往返编解码，并拒绝缺少 ID、越界 token 用量和未知结果变体；continuation 支持内存 Schema 往返，但 canonical JSON 编码必须失败。
 - Tool call/result 通过稳定 call ID 关联；协议支持同一批多个调用，但不包含厂商 FunctionCall 类型。
-- ToolCallBatch 携带不透明、单次消费的 continuation handle；主体协议不能读取其中的供应商历史。
+- ToolCallBatch 携带不透明 continuation handle；YK-002 固定单次消费和不暴露供应商历史的语义，实际状态机行为由 YK-003 conformance suite 验证。
 - `continue` 只接受原 adapter 的 handle 和通用 ToolResultBatch，且只能返回最终文本；协议没有开放式续轮方法。
+- `generate` 的 Effect 环境提供角色回合 Scope，使实现能把 handle 绑定 adapter、model 和 owning Scope；YK-002 固定 Scope 关闭即失效且 `continue` 不比较当前子 Scope identity 的契约，运行时验证归 YK-003。
 - adapter ID 不允许 `/`；模型引用只在第一个 `/` 处分割，保留完整 model ID。
-- 协议版本显式区分 major/minor；兼容 minor 可注册，不兼容 major 在调用发现或生成前被拒绝。
+- 协议版本显式区分 major/minor；兼容 minor 可注册，不兼容 major 由统一握手在调用发现或生成前拒绝，adapter 方法调用数为 `0`。
 - 错误至少区分配置、认证、限流、超时、取消、供应商响应和协议解码失败。
 - adapter 只声明是否实现 FeedbackTool 传输契约；协议没有逐模型能力探测方法或能力探测请求。
 - 协议不引用 Gemini 或 Koishi 具体类型。
@@ -60,11 +61,11 @@ Gemini 客户端：Google 官方 `@google/genai` v2
 
 前置：YK-002。
 
-交付：定义不可变的模型快照、发现时间、模型 ID/显示名、token 上限、供应商明确返回的生成方法和 adapter 级 FeedbackTool 契约声明，同时提供所有 adapter 可复用的供应商无关契约测试与确定性 fake adapter。
+交付：基于 YK-002 已定义的不可变 adapter 模型发现快照和 adapter 级 FeedbackTool 契约声明，提供所有 adapter 可复用的供应商无关契约测试与确定性 fake adapter；主体全局模型目录的 revision 和状态仍由后续注册表任务定义。
 
 验收：
 
-- 契约测试验证 ID 唯一、结果排序稳定、不可变快照、取消传播和错误分类。
+- 契约测试验证 ID 唯一、结果排序稳定、不可变快照、逐模型 freshness、取消传播和错误分类；快照内容等价比较排除 `discoveredAt`。
 - 契约测试分别覆盖 single-pass 文本结果，以及 ToolCallBatch → 单次 continue → 最终文本结果。
 - continuation 必须绑定原 adapter/model/回合、单次消费并随作用域失效；重复或跨 adapter 消费失败。
 - `generate` 或 `continue` 每次调用只允许 adapter 发起一次供应商生成请求；再次 ToolCall 作为协议失败。
@@ -397,7 +398,7 @@ Gemini 客户端：Google 官方 `@google/genai` v2
 前置：YK-003、YK-011、YK-021。
 
 交付：在仓库工作区之外构造并安装一个确定性的 Koishi LLM adapter 测试包。该包只依赖
-`@yokai/protocol`、Koishi 和自己的模拟供应商客户端，通过公开 `ctx.yokai.registerAdapter`
+`@yokai/protocol`、协议锁定的精确 Effect 版本、Koishi 和自己的模拟供应商客户端，通过公开 `ctx.yokai.registerAdapter`
 注册；兼容测试不得向主体或任何既有包加入该 adapter 的导入、ID、配置或分支。
 
 验收：

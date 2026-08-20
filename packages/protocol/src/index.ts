@@ -1,2 +1,1 @@
-/** Vendor-neutral Yokai extension contracts are introduced in YK-002. */
-export {}
+export * from './llm-adapter/index.js'
