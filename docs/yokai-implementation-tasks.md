@@ -61,7 +61,7 @@ Gemini 客户端：Google 官方 `@google/genai` v2
 
 前置：YK-002。
 
-交付：基于 YK-002 已定义的不可变 adapter 模型发现快照和 adapter 级 FeedbackTool 契约声明，提供所有 adapter 可复用的供应商无关契约测试与确定性 fake adapter；主体全局模型目录的 revision 和状态仍由后续注册表任务定义。
+交付：基于 YK-002 已定义的不可变 adapter 模型发现快照和 adapter 级 FeedbackTool 契约声明，提供所有 adapter 可复用的供应商无关契约测试与确定性 fake adapter；主体全局模型目录的 revision 和状态仍由后续注册表任务定义。代码级设计、测试 factory 与包入口见 [`yokai-adapter-conformance.md`](./yokai-adapter-conformance.md)。
 
 验收：
 

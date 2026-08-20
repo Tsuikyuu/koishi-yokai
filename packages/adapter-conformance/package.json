@@ -1,0 +1,54 @@
+{
+  "name": "@yokai/adapter-conformance",
+  "description": "Reusable conformance tests and deterministic test doubles for Yokai adapters",
+  "version": "0.0.1",
+  "main": "lib/index.js",
+  "typings": "lib/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./lib/index.d.ts",
+      "require": "./lib/index.js",
+      "default": "./lib/index.js"
+    },
+    "./fake": {
+      "types": "./lib/fake/index.d.ts",
+      "require": "./lib/fake/index.js",
+      "default": "./lib/fake/index.js"
+    },
+    "./vitest": {
+      "types": "./lib/vitest/index.d.ts",
+      "import": "./lib/vitest/index.mjs"
+    }
+  },
+  "files": [
+    "lib"
+  ],
+  "sideEffects": false,
+  "license": "MIT",
+  "scripts": {
+    "typecheck": "tsc --project tsconfig.json --noEmit --pretty false",
+    "typecheck:test": "tsc --project test/tsconfig.json --pretty false"
+  },
+  "dependencies": {
+    "effect": "4.0.0-rc.110"
+  },
+  "peerDependencies": {
+    "@effect/vitest": "4.0.0-rc.110",
+    "@yokai/protocol": "workspace:^",
+    "vitest": ">=4.1.0 <5.0.0"
+  },
+  "peerDependenciesMeta": {
+    "@effect/vitest": {
+      "optional": true
+    },
+    "vitest": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@effect/vitest": "4.0.0-rc.110",
+    "@yokai/protocol": "workspace:^",
+    "typescript": "^5.6.2",
+    "vitest": "4.1.11"
+  }
+}
