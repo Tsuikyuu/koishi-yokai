@@ -1,7 +1,7 @@
 import { Schema } from 'effect'
 
-import { AdapterModelId } from './identity.js'
-import { TokenLimit } from './token.js'
+import { AdapterModelId } from './identity'
+import { TokenLimit } from './token'
 
 export const MAX_MODEL_DISPLAY_NAME_LENGTH = 256
 export const MAX_GENERATION_METHOD_NAME_LENGTH = 128

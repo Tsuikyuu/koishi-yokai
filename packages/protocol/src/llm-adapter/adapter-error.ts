@@ -1,7 +1,7 @@
 import { Schema } from 'effect'
 
-import { AdapterId, AdapterModelId } from './identity.js'
-import { AdapterProtocolVersion } from './protocol-version.js'
+import { AdapterId, AdapterModelId } from './identity'
+import { AdapterProtocolVersion } from './protocol-version'
 
 export const MAX_SAFE_ADAPTER_ERROR_MESSAGE_LENGTH = 1024
 

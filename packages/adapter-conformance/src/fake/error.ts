@@ -17,7 +17,7 @@ import {
   type AdapterModelId,
 } from '@yokai/protocol'
 
-import type { AdapterConformanceFailure } from '../index.js'
+import type { AdapterConformanceFailure } from '../index'
 
 const errorFields = (
   adapterId: AdapterId,

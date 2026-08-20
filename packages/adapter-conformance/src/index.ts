@@ -1,1 +1,1 @@
-export * from './conformance/index.js'
+export * from './conformance/index'

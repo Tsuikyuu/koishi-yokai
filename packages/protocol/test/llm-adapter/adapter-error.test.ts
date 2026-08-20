@@ -5,8 +5,8 @@ import {
   AdapterError,
   AdapterInvocationError,
   makeAdapterContinuationError,
-} from '../../src/llm-adapter/adapter-error.js'
-import { AdapterId } from '../../src/llm-adapter/identity.js'
+} from '../../src/llm-adapter/adapter-error'
+import { AdapterId } from '../../src/llm-adapter/identity'
 
 it.effect('round-trips a typed adapter error without retaining provider internals', () =>
   Effect.gen(function* () {

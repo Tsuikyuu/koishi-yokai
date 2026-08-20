@@ -7,7 +7,7 @@ import {
   type YokaiAdapter,
 } from '@yokai/protocol'
 
-import type { AdapterConformanceSetup } from './setup.js'
+import type { AdapterConformanceSetup } from './setup'
 
 export const AdapterTestProviderRequestKind = Schema.Literals([
   'model-list',

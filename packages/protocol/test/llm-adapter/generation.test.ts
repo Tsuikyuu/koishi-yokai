@@ -1,12 +1,12 @@
 import { expect, it } from '@effect/vitest'
 import { Effect, Schema } from 'effect'
 
-import { makeAdapterContinuation } from '../../src/llm-adapter/continuation.js'
+import { makeAdapterContinuation } from '../../src/llm-adapter/continuation'
 import {
   GenerateRequest,
   InitialGenerationResult,
   ToolCallBatch,
-} from '../../src/llm-adapter/generation.js'
+} from '../../src/llm-adapter/generation'
 
 it.effect('round-trips final text with bounded provider-neutral usage', () =>
   Effect.gen(function* () {

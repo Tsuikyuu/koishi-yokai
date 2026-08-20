@@ -14,7 +14,7 @@ import {
   type AdapterConformanceErrorCategory,
   type AdapterConformanceFactory,
   adapterModelSnapshotContentEqual,
-} from '../conformance/index.js'
+} from '../conformance/index'
 import {
   decodeConformanceSetup,
   makeFeedbackRequest,
@@ -23,14 +23,14 @@ import {
   makeReversedResultContinueRequest,
   makeSingleResultContinueRequest,
   makeTextRequest,
-} from './fixtures.js'
+} from './fixtures'
 import {
   makeTurnScope,
   requestStarts,
   requireFailureCause,
   requireToolCallBatch,
   takeStartedRequestId,
-} from './helpers.js'
+} from './helpers'
 
 const ERROR_CATEGORIES = [
   'configuration',

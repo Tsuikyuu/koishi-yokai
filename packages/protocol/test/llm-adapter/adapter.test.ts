@@ -8,7 +8,7 @@ import {
   makeAdapterContinuation,
   negotiateAdapterProtocol,
   type YokaiAdapter,
-} from '../../src/index.js'
+} from '../../src/index'
 
 it.effect('rejects an incompatible major before discovery or generation is invoked', () =>
   Effect.gen(function* () {

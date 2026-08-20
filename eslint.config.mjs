@@ -45,6 +45,18 @@ export default tseslint.config(
       '@typescript-eslint/no-explicit-any': 'error',
       '@typescript-eslint/no-non-null-assertion': 'error',
       '@typescript-eslint/prefer-readonly': 'error',
+      'no-restricted-imports': [
+        'error',
+        {
+          patterns: [
+            {
+              regex: '^\\.{1,2}/.*\\.js(?:[?#].*)?$',
+              message:
+                'Use an extensionless relative specifier so TypeScript source loaders can resolve the module.',
+            },
+          ],
+        },
+      ],
       'no-param-reassign': [
         'error',
         {
@@ -77,6 +89,18 @@ export default tseslint.config(
           selector: 'PropertyDefinition[definite=true], VariableDeclarator[definite=true]',
           message:
             'Definite assignment assertions are prohibited. Initialize the value or model its absence explicitly.',
+        },
+        {
+          selector:
+            'ImportExpression[source.value=/^\\.{1,2}\\/.*\\.js(?:[?#].*)?$/], TSImportType[source.value=/^\\.{1,2}\\/.*\\.js(?:[?#].*)?$/]',
+          message:
+            'Use an extensionless relative specifier so TypeScript source loaders can resolve the module.',
+        },
+        {
+          selector:
+            "ImportExpression[source.type='TemplateLiteral'][source.expressions.length=0][source.quasis.0.value.cooked=/^\\.{1,2}\\/.*\\.js(?:[?#].*)?$/]",
+          message:
+            'Use an extensionless relative specifier so TypeScript source loaders can resolve the module.',
         },
       ],
       'no-var': 'error',

@@ -1,7 +1,7 @@
 import { expect, it } from '@effect/vitest'
 import { Effect, Schema } from 'effect'
 
-import { AdapterModelSnapshot } from '../../src/llm-adapter/model.js'
+import { AdapterModelSnapshot } from '../../src/llm-adapter/model'
 
 const discoveredAt = '2026-08-20T04:00:00.000Z'
 

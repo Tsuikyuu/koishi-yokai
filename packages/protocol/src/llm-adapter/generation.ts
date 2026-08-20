@@ -1,10 +1,10 @@
 import { Schema } from 'effect'
 
-import { AdapterContinuation } from './continuation.js'
-import { FeedbackToolDeclarations, ToolCalls, ToolResultBatch } from './feedback-tool.js'
-import { AdapterModelId } from './identity.js'
-import { ConversationMessage } from './message.js'
-import { TokenCount, TokenLimit } from './token.js'
+import { AdapterContinuation } from './continuation'
+import { FeedbackToolDeclarations, ToolCalls, ToolResultBatch } from './feedback-tool'
+import { AdapterModelId } from './identity'
+import { ConversationMessage } from './message'
+import { TokenCount, TokenLimit } from './token'
 
 export const GenerationLimits = Schema.Struct({
   maxOutputTokens: TokenLimit,

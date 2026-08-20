@@ -16,6 +16,18 @@ All paths in this document are relative to the repository root.
 Source code belongs in each workspace's `src/` directory. Do not edit generated `lib/`,
 `dist/`, or `*.tsbuildinfo` files directly.
 
+## TypeScript module specifiers
+
+- Relative module specifiers that resolve to TypeScript source must be extensionless. Write
+  `./module`, not `./module.js`, in imports, type-only imports, re-exports, dynamic imports,
+  and import types. The Koishi development host maps Yokai workspaces directly to `src/`
+  and loads them through `esbuild-register`; a source-spelled `.js` suffix can prevent HMR
+  from loading the module and its exported plugin schema.
+- `yarn lint` enforces this invariant. Do not suppress it for TypeScript modules. Fix the
+  specifier and run `yarn lint` and `yarn build`; when changing a plugin entry or export
+  chain, also smoke-test its source entry through the development loader. A narrow,
+  documented disable is permitted only when importing an actual JavaScript runtime file.
+
 ## Effect baseline
 
 - The repository targets exactly `effect@4.0.0-rc.110`. Every workspace that imports

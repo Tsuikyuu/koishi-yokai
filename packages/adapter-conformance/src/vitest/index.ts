@@ -1,1 +1,1 @@
-export { defineAdapterConformanceSuite } from './suite.js'
+export { defineAdapterConformanceSuite } from './suite'

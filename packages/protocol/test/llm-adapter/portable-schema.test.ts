@@ -5,7 +5,7 @@ import {
   MAX_PORTABLE_ARRAY_ITEMS,
   MAX_PORTABLE_ENUM_VALUE_LENGTH,
   PortableToolInputSchema,
-} from '../../src/llm-adapter/portable-schema.js'
+} from '../../src/llm-adapter/portable-schema'
 
 it.effect('round-trips the closed portable FeedbackTool schema subset', () =>
   Effect.gen(function* () {
