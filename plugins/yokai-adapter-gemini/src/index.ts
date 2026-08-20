@@ -1,11 +1,23 @@
-import { Context, Schema } from 'koishi'
+import { Effect, ManagedRuntime } from 'effect'
+import type { Context } from 'koishi'
+
+import {
+  Config as ConfigSchema,
+  type Config as GeminiPluginConfig,
+} from './config/plugin-config.js'
+import { GeminiConnectionPool } from './connection/pool.js'
+import { GeminiRuntime } from './runtime/layer.js'
 
 export const name = 'yokai-adapter-gemini'
+export const reusable = false
 
-export interface Config {}
+export const Config = ConfigSchema
+export type Config = GeminiPluginConfig
+export { makeLayer as makeGeminiLayer } from './runtime/layer.js'
 
-export const Config: Schema<Config> = Schema.object({})
+export function apply(ctx: Context, config: Config): void {
+  const runtime = ManagedRuntime.make(GeminiRuntime.makeLayer(config))
 
-export function apply(_ctx: Context, _config: Config) {
-  // Gemini adapter registration is introduced in YK-004.
+  ctx.on('dispose', runtime.dispose)
+  runtime.runSync(GeminiConnectionPool.Service.pipe(Effect.asVoid))
 }
