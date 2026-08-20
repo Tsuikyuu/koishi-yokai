@@ -1,6 +1,6 @@
 # Yokai 精简设计
 
-状态：Draft 0.10
+状态：Draft 0.11
 
 包命名空间：`@yokai`
 
@@ -606,10 +606,13 @@ plugins/
 `@yokai/protocol` 必须先固定供应商无关的 adapter 契约。契约只表达 Yokai 当前需要的模型清单发现、
 文本生成和一次工具反馈，不包含 Gemini、OpenAI 或其他厂商字段。
 
+YK-002 的代码级字段、边界、生命周期和版本规则见
+[`yokai-llm-adapter-protocol.md`](./yokai-llm-adapter-protocol.md)。
+
 adapter 对主体暴露的最小行为是：
 
 - 注册稳定 adapter ID 和协议版本；
-- 发布不可变的模型清单快照，模型项包含 adapter-local ID、显示名、可用性与供应商明确返回的元数据；
+- 发布不可变的模型清单快照，模型项包含 adapter-local ID、显示名、可用性、当前发现的 fresh/stale 状态与供应商明确返回的元数据；
 - 声明 adapter 是否实现协议定义的 FeedbackTool 传输契约，不声明或探测逐模型能力；
 - 接收通用消息、生成参数与可选 FeedbackTool 声明，返回最终文本或一批通用工具调用；
 - 使用不透明 continuation 接收一批通用工具结果，只返回一次最终文本；
