@@ -1,6 +1,6 @@
 import { Context, Effect, Layer, Schema } from 'effect'
 
-import type { Config } from './plugin-config.js'
+import type { Config } from './plugin-config'
 
 const ConnectionId = Schema.Trimmed.check(
   Schema.isNonEmpty(),
@@ -101,4 +101,4 @@ export const layer = (config: Config) =>
     decode(config).pipe(Effect.map((configuration) => Service.of(configuration))),
   )
 
-export * as GeminiConfiguration from './configuration.js'
+export * as GeminiConfiguration from './configuration'

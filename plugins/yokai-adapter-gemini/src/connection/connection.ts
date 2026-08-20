@@ -13,12 +13,12 @@ import {
 } from '@yokai/protocol'
 import { Effect, Exit, Fiber, FiberSet, Option, Redacted, Ref, Scope } from 'effect'
 
-import { GeminiClientFactory } from '../client/client-factory.js'
+import { GeminiClientFactory } from '../client/client-factory'
 import type {
   Connection as ConnectionConfiguration,
   ConnectionId,
   DiscoveryRetryPolicy,
-} from '../config/configuration.js'
+} from '../config/configuration'
 
 const GEMINI_ADAPTER_ID = AdapterId.make('gemini')
 const DISCOVERY_OPERATION = 'discoverModels'
@@ -172,4 +172,4 @@ export const make = Effect.fn('GeminiConnection.make')(function* (
   } satisfies Interface
 })
 
-export * as GeminiConnection from './connection.js'
+export * as GeminiConnection from './connection'

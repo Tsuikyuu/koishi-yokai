@@ -7,7 +7,7 @@ import {
 } from '@google/genai'
 import { Context, Effect, Layer, Redacted, Schema, Scope } from 'effect'
 
-import type { Connection, ConnectionId } from '../config/configuration.js'
+import type { Connection, ConnectionId } from '../config/configuration'
 
 export interface Client {
   readonly listModels: (params: ListModelsParameters, signal: AbortSignal) => Promise<Pager<Model>>
@@ -108,4 +108,4 @@ export const layerWithSdkClientFactory = (sdkClientFactory: SdkClientFactory) =>
 
 export const layer = layerWithSdkClientFactory(liveSdkClientFactory)
 
-export * as GeminiClientFactory from './client-factory.js'
+export * as GeminiClientFactory from './client-factory'

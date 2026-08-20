@@ -1,19 +1,16 @@
 import { Effect, ManagedRuntime } from 'effect'
 import type { Context } from 'koishi'
 
-import {
-  Config as ConfigSchema,
-  type Config as GeminiPluginConfig,
-} from './config/plugin-config.js'
-import { GeminiConnectionPool } from './connection/pool.js'
-import { GeminiRuntime } from './runtime/layer.js'
+import { Config as ConfigSchema, type Config as GeminiPluginConfig } from './config/plugin-config'
+import { GeminiConnectionPool } from './connection/pool'
+import { GeminiRuntime } from './runtime/layer'
 
 export const name = 'yokai-adapter-gemini'
 export const reusable = false
 
 export const Config = ConfigSchema
 export type Config = GeminiPluginConfig
-export { makeLayer as makeGeminiLayer } from './runtime/layer.js'
+export { makeLayer as makeGeminiLayer } from './runtime/layer'
 
 export function apply(ctx: Context, config: Config): void {
   const runtime = ManagedRuntime.make(GeminiRuntime.makeLayer(config))

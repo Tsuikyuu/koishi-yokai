@@ -2,9 +2,9 @@ import { AdapterConfigurationError, AdapterId, type AdapterInvocationError } fro
 import type { ListModelsParameters } from '@google/genai'
 import { Context, Effect, HashMap, Layer, Option, Ref, Scope } from 'effect'
 
-import type { ConnectionId } from '../config/configuration.js'
-import { GeminiConfiguration } from '../config/configuration.js'
-import { GeminiConnection } from './connection.js'
+import type { ConnectionId } from '../config/configuration'
+import { GeminiConfiguration } from '../config/configuration'
+import { GeminiConnection } from './connection'
 
 const GEMINI_ADAPTER_ID = AdapterId.make('gemini')
 const DISCOVERY_OPERATION = 'discoverModels'
@@ -80,4 +80,4 @@ const make = Effect.fn('GeminiConnectionPool.make')(function* () {
 
 export const layer = Layer.effect(Service, make())
 
-export * as GeminiConnectionPool from './pool.js'
+export * as GeminiConnectionPool from './pool'
