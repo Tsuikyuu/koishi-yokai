@@ -1,7 +1,7 @@
 import { AdapterId } from '@yokai/protocol'
 
-import { makeFakeAdapterConformanceFactory } from '../../src/fake/index.js'
-import { defineAdapterConformanceSuite } from '../../src/vitest/index.js'
+import { makeFakeAdapterConformanceFactory } from '../../src/fake/index'
+import { defineAdapterConformanceSuite } from '../../src/vitest/index'
 
 defineAdapterConformanceSuite(
   'deterministic fake adapter with feedback tools',

@@ -31,10 +31,10 @@ import type {
   AdapterConformanceSubject,
   AdapterDiscoveryStep,
   AdapterGenerationStep,
-} from '../index.js'
-import { makeFakeContinuationStore } from './continuation-store.js'
-import { makeFakeInvocationError } from './error.js'
-import { makeFakeProviderHarness } from './provider-harness.js'
+} from '../index'
+import { makeFakeContinuationStore } from './continuation-store'
+import { makeFakeInvocationError } from './error'
+import { makeFakeProviderHarness } from './provider-harness'
 
 export interface FakeAdapterFactoryOptions {
   readonly adapterId: AdapterId

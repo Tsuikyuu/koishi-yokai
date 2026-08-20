@@ -1,7 +1,7 @@
 import { Schema } from 'effect'
 
-import { FeedbackToolId, ToolCallId } from './identity.js'
-import { PortableToolInputSchema } from './portable-schema.js'
+import { FeedbackToolId, ToolCallId } from './identity'
+import { PortableToolInputSchema } from './portable-schema'
 
 export const MAX_FEEDBACK_TOOL_DESCRIPTION_LENGTH = 2048
 export const MAX_SAFE_TOOL_RESULT_MESSAGE_LENGTH = 1024

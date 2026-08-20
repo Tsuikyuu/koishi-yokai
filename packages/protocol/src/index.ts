@@ -1,1 +1,1 @@
-export * from './llm-adapter/index.js'
+export * from './llm-adapter/index'

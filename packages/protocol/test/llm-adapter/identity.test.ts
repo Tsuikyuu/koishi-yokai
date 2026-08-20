@@ -1,7 +1,7 @@
 import { expect, it } from '@effect/vitest'
 import { Effect, Schema } from 'effect'
 
-import { AdapterId, ModelReference } from '../../src/llm-adapter/identity.js'
+import { AdapterId, ModelReference } from '../../src/llm-adapter/identity'
 
 it.effect('round-trips a model reference by splitting only the first slash', () =>
   Effect.gen(function* () {

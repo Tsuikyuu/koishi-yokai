@@ -1,23 +1,20 @@
 import type { Scope } from 'effect'
 import { Effect, Schema } from 'effect'
 
-import {
-  type AdapterInvocationError,
-  AdapterProtocolVersionMismatchError,
-} from './adapter-error.js'
-import type { AdapterModelSnapshot } from './model.js'
+import { type AdapterInvocationError, AdapterProtocolVersionMismatchError } from './adapter-error'
+import type { AdapterModelSnapshot } from './model'
 import type {
   ContinueRequest,
   FinalTextResult,
   GenerateRequest,
   InitialGenerationResult,
-} from './generation.js'
-import { AdapterId } from './identity.js'
+} from './generation'
+import { AdapterId } from './identity'
 import {
   AdapterProtocolVersion,
   CURRENT_ADAPTER_PROTOCOL_VERSION,
   isAdapterProtocolVersionCompatible,
-} from './protocol-version.js'
+} from './protocol-version'
 
 export const AdapterCapabilities = Schema.Struct({
   /** Transport support only; it is not a per-model capability claim. */

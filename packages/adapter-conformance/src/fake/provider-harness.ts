@@ -25,7 +25,7 @@ import type {
   AdapterGenerationStep,
   AdapterTestEvent,
   AdapterTestProviderRequestKind,
-} from '../index.js'
+} from '../index'
 
 type FakeProviderResponse = AdapterDiscoveryStep | AdapterGenerationStep
 

@@ -2,7 +2,7 @@ import { Schema } from 'effect'
 
 import { ContinueRequest, GenerateRequest, type AdapterContinuation } from '@yokai/protocol'
 
-import { AdapterConformanceSetup } from '../conformance/index.js'
+import { AdapterConformanceSetup } from '../conformance/index'
 
 export const decodeConformanceSetup = (input: typeof AdapterConformanceSetup.Encoded) =>
   Schema.decodeUnknownEffect(AdapterConformanceSetup)(input)

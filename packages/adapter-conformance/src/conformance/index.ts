@@ -1,3 +1,3 @@
-export * from './control.js'
-export * from './setup.js'
-export * from './snapshot.js'
+export * from './control'
+export * from './setup'
+export * from './snapshot'

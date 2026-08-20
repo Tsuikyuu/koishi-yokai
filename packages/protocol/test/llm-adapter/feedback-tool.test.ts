@@ -1,7 +1,7 @@
 import { expect, it } from '@effect/vitest'
 import { Effect, Schema } from 'effect'
 
-import { ToolResultBatch } from '../../src/llm-adapter/feedback-tool.js'
+import { ToolResultBatch } from '../../src/llm-adapter/feedback-tool'
 
 it.effect('round-trips ordered success and safe failure results by call ID', () =>
   Effect.gen(function* () {

@@ -2,7 +2,7 @@ import { Effect, Exit, Scope, type Cause } from 'effect'
 
 import { type InitialGenerationResult, type ToolCallBatch } from '@yokai/protocol'
 
-import type { AdapterConformanceControl, AdapterTestEvent } from '../conformance/index.js'
+import type { AdapterConformanceControl, AdapterTestEvent } from '../conformance/index'
 
 export type RequestStartedEvent = Extract<AdapterTestEvent, { readonly _tag: 'RequestStarted' }>
 

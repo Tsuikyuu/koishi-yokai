@@ -5,7 +5,7 @@ import {
   AdapterProtocolVersion,
   CURRENT_ADAPTER_PROTOCOL_VERSION,
   isAdapterProtocolVersionCompatible,
-} from '../../src/llm-adapter/protocol-version.js'
+} from '../../src/llm-adapter/protocol-version'
 
 it.effect('accepts every minor version with the supported major', () =>
   Effect.sync(() => {
