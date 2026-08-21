@@ -1,17 +1,20 @@
 import { PagedItem, Pager, type ListModelsParameters, type Model } from '@google/genai'
 import { expect, it } from '@effect/vitest'
-import { Effect, Redacted, Schema } from 'effect'
+import { Effect, Layer, Redacted, Schema } from 'effect'
 import { inspect } from 'node:util'
 
 import { GeminiClientFactory } from '../../src/client/client-factory'
 import { GeminiConfiguration } from '../../src/config/configuration'
+import { GeminiHttpTransport } from '../../src/transport/http-transport'
 
 const PRIMARY_API_KEY_CANARY = 'gemini-primary-api-key-canary'
 const FALLBACK_API_KEY_CANARY = 'gemini-fallback-api-key-canary'
 const SDK_ERROR_CANARY = 'sdk-error-secret-canary'
 const PRIMARY_BASE_URL = 'https://generativelanguage.googleapis.com/'
 const FALLBACK_BASE_URL = 'https://gemini-fallback.example.com/'
-const SHARED_REQUEST_TIMEOUT_MS = 60_000
+const unusedFetch: GeminiHttpTransport.FetchImplementation = () =>
+  Promise.reject(new Error('Unexpected HTTP request'))
+const transportLayer = GeminiHttpTransport.layerWithFetch(unusedFetch)
 
 const makeEndpoint = Schema.decodeUnknownEffect(GeminiConfiguration.Endpoint)
 
@@ -37,8 +40,8 @@ it.effect('keeps GoogleGenAI and endpoint API keys inside closure-private ports'
   Effect.gen(function* () {
     const endpoint = yield* makeEndpoint(primaryEndpointInput)
     const factory = yield* GeminiClientFactory.Service
-    const first = yield* factory.create(endpoint, SHARED_REQUEST_TIMEOUT_MS)
-    const second = yield* factory.create(endpoint, SHARED_REQUEST_TIMEOUT_MS)
+    const first = yield* factory.create(endpoint)
+    const second = yield* factory.create(endpoint)
 
     const json = JSON.stringify({ first, second })
     const inspected = inspect({ first, second })
@@ -52,48 +55,54 @@ it.effect('keeps GoogleGenAI and endpoint API keys inside closure-private ports'
     expect(inspected).not.toContain('GoogleGenAI')
     expect(json).not.toContain('apiClient')
     expect(inspected).not.toContain('apiClient')
-  }).pipe(Effect.provide(GeminiClientFactory.layer), Effect.scoped),
+  }).pipe(
+    Effect.provide(GeminiClientFactory.layer.pipe(Layer.provide(transportLayer))),
+    Effect.scoped,
+  ),
 )
 
-it.effect('passes one shared timeout while endpoint SDK inputs differ only by URL and key', () => {
-  const captured: Array<{
-    readonly endpoint: GeminiConfiguration.Endpoint
-    readonly requestTimeoutMs: number
-  }> = []
-  const testLayer = GeminiClientFactory.layerWithSdkClientFactory({
-    create: (endpoint, requestTimeoutMs) => {
-      captured.push({ endpoint, requestTimeoutMs })
-      return {
-        listModels: () => Promise.resolve(makeEmptyPager()),
+it.effect(
+  'injects the same instance-local fetch while endpoint SDK inputs differ by URL and key',
+  () => {
+    const captured: Array<{
+      readonly endpoint: GeminiConfiguration.Endpoint
+      readonly fetchImplementation: GeminiHttpTransport.FetchImplementation
+    }> = []
+    const testLayer = GeminiClientFactory.layerWithSdkClientFactory({
+      create: (endpoint, fetchImplementation) => {
+        captured.push({ endpoint, fetchImplementation })
+        return {
+          listModels: () => Promise.resolve(makeEmptyPager()),
+        }
+      },
+    }).pipe(Layer.provide(transportLayer))
+
+    return Effect.gen(function* () {
+      const primaryEndpoint = yield* makeEndpoint(primaryEndpointInput)
+      const fallbackEndpoint = yield* makeEndpoint(fallbackEndpointInput)
+      const factory = yield* GeminiClientFactory.Service
+
+      yield* factory.create(primaryEndpoint)
+      yield* factory.create(fallbackEndpoint)
+
+      const primaryCapture = captured[0]
+      const fallbackCapture = captured[1]
+      if (primaryCapture === undefined || fallbackCapture === undefined) {
+        return yield* Effect.die('Expected both endpoint SDK creations to be captured')
       }
-    },
-  })
 
-  return Effect.gen(function* () {
-    const primaryEndpoint = yield* makeEndpoint(primaryEndpointInput)
-    const fallbackEndpoint = yield* makeEndpoint(fallbackEndpointInput)
-    const factory = yield* GeminiClientFactory.Service
-
-    yield* factory.create(primaryEndpoint, SHARED_REQUEST_TIMEOUT_MS)
-    yield* factory.create(fallbackEndpoint, SHARED_REQUEST_TIMEOUT_MS)
-
-    const primaryCapture = captured[0]
-    const fallbackCapture = captured[1]
-    if (primaryCapture === undefined || fallbackCapture === undefined) {
-      return yield* Effect.die('Expected both endpoint SDK creations to be captured')
-    }
-
-    expect(captured).toHaveLength(2)
-    expect(primaryCapture.requestTimeoutMs).toBe(SHARED_REQUEST_TIMEOUT_MS)
-    expect(fallbackCapture.requestTimeoutMs).toBe(SHARED_REQUEST_TIMEOUT_MS)
-    expect(Object.keys(primaryCapture.endpoint).sort()).toEqual(['apiKey', 'baseUrl'])
-    expect(Object.keys(fallbackCapture.endpoint).sort()).toEqual(['apiKey', 'baseUrl'])
-    expect(primaryCapture.endpoint.baseUrl).toEqual(new URL(PRIMARY_BASE_URL))
-    expect(fallbackCapture.endpoint.baseUrl).toEqual(new URL(FALLBACK_BASE_URL))
-    expect(Redacted.value(primaryCapture.endpoint.apiKey)).toBe(PRIMARY_API_KEY_CANARY)
-    expect(Redacted.value(fallbackCapture.endpoint.apiKey)).toBe(FALLBACK_API_KEY_CANARY)
-  }).pipe(Effect.provide(testLayer), Effect.scoped)
-})
+      expect(captured).toHaveLength(2)
+      expect(primaryCapture.fetchImplementation).toBe(unusedFetch)
+      expect(fallbackCapture.fetchImplementation).toBe(unusedFetch)
+      expect(Object.keys(primaryCapture.endpoint).sort()).toEqual(['apiKey', 'baseUrl'])
+      expect(Object.keys(fallbackCapture.endpoint).sort()).toEqual(['apiKey', 'baseUrl'])
+      expect(primaryCapture.endpoint.baseUrl).toEqual(new URL(PRIMARY_BASE_URL))
+      expect(fallbackCapture.endpoint.baseUrl).toEqual(new URL(FALLBACK_BASE_URL))
+      expect(Redacted.value(primaryCapture.endpoint.apiKey)).toBe(PRIMARY_API_KEY_CANARY)
+      expect(Redacted.value(fallbackCapture.endpoint.apiKey)).toBe(FALLBACK_API_KEY_CANARY)
+    }).pipe(Effect.provide(testLayer), Effect.scoped)
+  },
+)
 
 it.effect('forwards safe list options and removes call-level SDK HTTP options', () => {
   const captured: Array<ListModelsParameters> = []
@@ -104,12 +113,12 @@ it.effect('forwards safe list options and removes call-level SDK HTTP options', 
         return Promise.resolve(makeEmptyPager())
       },
     }),
-  })
+  }).pipe(Layer.provide(transportLayer))
 
   return Effect.gen(function* () {
     const endpoint = yield* makeEndpoint(primaryEndpointInput)
     const factory = yield* GeminiClientFactory.Service
-    const client = yield* factory.create(endpoint, SHARED_REQUEST_TIMEOUT_MS)
+    const client = yield* factory.create(endpoint)
     const effectController = new AbortController()
     const ignoredController = new AbortController()
 
@@ -162,12 +171,12 @@ it.effect('maps initialization failures to a safe endpoint-agnostic public error
     create: () => {
       throw new Error(SDK_ERROR_CANARY + PRIMARY_API_KEY_CANARY)
     },
-  })
+  }).pipe(Layer.provide(transportLayer))
 
   return Effect.gen(function* () {
     const endpoint = yield* makeEndpoint(primaryEndpointInput)
     const factory = yield* GeminiClientFactory.Service
-    const error = yield* factory.create(endpoint, SHARED_REQUEST_TIMEOUT_MS).pipe(Effect.flip)
+    const error = yield* factory.create(endpoint).pipe(Effect.flip)
     const surfaces = [String(error), JSON.stringify(error), inspect(error)]
 
     expect(error._tag).toBe('GeminiClientInitializationError')

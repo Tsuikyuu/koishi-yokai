@@ -7,7 +7,8 @@ import {
 } from '@google/genai'
 import { Context, Effect, Layer, Redacted, Schema, Scope } from 'effect'
 
-import type { Configuration, Endpoint } from '../config/configuration'
+import type { Endpoint } from '../config/configuration'
+import { GeminiHttpTransport } from '../transport/http-transport'
 
 export interface Client {
   readonly listModels: (params: ListModelsParameters, signal: AbortSignal) => Promise<Pager<Model>>
@@ -19,7 +20,10 @@ export interface SdkClient {
 }
 
 export interface SdkClientFactory {
-  readonly create: (endpoint: Endpoint, requestTimeoutMs: number) => SdkClient
+  readonly create: (
+    endpoint: Endpoint,
+    fetchImplementation: GeminiHttpTransport.FetchImplementation,
+  ) => SdkClient
 }
 
 export class InitializationError extends Schema.TaggedError<InitializationError>(
@@ -29,10 +33,7 @@ export class InitializationError extends Schema.TaggedError<InitializationError>
 }) {}
 
 export interface Interface {
-  readonly create: (
-    endpoint: Endpoint,
-    requestTimeoutMs: Configuration['requestTimeoutMs'],
-  ) => Effect.Effect<Client, InitializationError, Scope.Scope>
+  readonly create: (endpoint: Endpoint) => Effect.Effect<Client, InitializationError, Scope.Scope>
 }
 
 export class Service extends Context.Service<Service, Interface>()(
@@ -57,15 +58,22 @@ const makeInitializationError = () =>
   })
 
 const liveSdkClientFactory: SdkClientFactory = {
-  create: (endpoint, requestTimeoutMs) => {
+  create: (endpoint, fetchImplementation) => {
+    let fetchImplementationRead = false
     const client = new GoogleGenAI({
       vertexai: false,
       apiKey: Redacted.value(endpoint.apiKey),
       httpOptions: {
         baseUrl: endpoint.baseUrl.toString(),
-        timeout: requestTimeoutMs,
+      },
+      get fetchImplementation() {
+        fetchImplementationRead = true
+        return fetchImplementation
       },
     })
+    if (!fetchImplementationRead) {
+      throw new Error('Installed @google/genai does not support instance-local fetch injection')
+    }
 
     return {
       listModels: (params) => client.models.list(params),
@@ -73,16 +81,16 @@ const liveSdkClientFactory: SdkClientFactory = {
   },
 }
 
-const makeCreate = (sdkClientFactory: SdkClientFactory) =>
-  Effect.fn('GeminiClientFactory.create')(function* (
-    endpoint: Endpoint,
-    requestTimeoutMs: Configuration['requestTimeoutMs'],
-  ) {
+const makeCreate = (
+  sdkClientFactory: SdkClientFactory,
+  fetchImplementation: GeminiHttpTransport.FetchImplementation,
+) =>
+  Effect.fn('GeminiClientFactory.create')(function* (endpoint: Endpoint) {
     yield* Scope.Scope
 
     return yield* Effect.try({
       try: () => {
-        const sdkClient = sdkClientFactory.create(endpoint, requestTimeoutMs)
+        const sdkClient = sdkClientFactory.create(endpoint, fetchImplementation)
 
         return {
           listModels: (params, signal) =>
@@ -98,10 +106,13 @@ const makeCreate = (sdkClientFactory: SdkClientFactory) =>
 
 /** Internal injection seam for deterministic adapter tests. */
 export const layerWithSdkClientFactory = (sdkClientFactory: SdkClientFactory) =>
-  Layer.succeed(
+  Layer.effect(
     Service,
-    Service.of({
-      create: makeCreate(sdkClientFactory),
+    Effect.gen(function* () {
+      const transport = yield* GeminiHttpTransport.Service
+      return Service.of({
+        create: makeCreate(sdkClientFactory, transport.fetch),
+      })
     }),
   )
 

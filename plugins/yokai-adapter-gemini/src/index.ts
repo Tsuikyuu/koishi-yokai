@@ -13,7 +13,7 @@ export type Config = GeminiPluginConfig
 export { makeLayer as makeGeminiLayer } from './runtime/layer'
 
 export function apply(ctx: Context, config: Config): void {
-  const runtime = ManagedRuntime.make(GeminiRuntime.makeLayer(config))
+  const runtime = ManagedRuntime.make(GeminiRuntime.makeLayer(config, ctx.http))
 
   ctx.on('dispose', runtime.dispose)
   runtime.runSync(GeminiConnection.Service.pipe(Effect.asVoid))

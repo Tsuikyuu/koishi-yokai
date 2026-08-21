@@ -14,6 +14,16 @@ The adapter has no separate proxy configuration. Generation is unary: Yokai call
 `generateContent`, waits for the complete response, and never requests or consumes
 SSE.
 
+`@google/genai` 2.18.0 does not yet expose this transport seam upstream. The
+minimal development-only Yarn patch used to verify the integration lives at
+`patches/google-genai-2.18.0-instance-fetch.patch` and is referenced by this
+workspace dependency; an unpatched SDK fails client initialization instead of
+silently falling back to global fetch. This patch is not a release dependency. A
+published adapter must use an exact upstream version with the seam or an auditable
+published fork, as required by the design. The workspace remains `private` while
+the development patch is in use so this non-portable dependency cannot be
+published accidentally.
+
 ```yaml
 endpoints:
   - baseUrl: https://generativelanguage.googleapis.com/

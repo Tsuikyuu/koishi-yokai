@@ -13,11 +13,13 @@ import {
   Ref,
   Scope,
 } from 'effect'
+import { TestClock } from 'effect/testing'
 import { inspect } from 'node:util'
 
 import { GeminiClientFactory } from '../../src/client/client-factory'
 import { GeminiConfiguration } from '../../src/config/configuration'
 import { GeminiConnection } from '../../src/connection/connection'
+import { GeminiHttpTransport } from '../../src/transport/http-transport'
 
 const API_KEY_CANARY = 'gemini-connection-api-key-canary'
 const SECOND_API_KEY_CANARY = 'gemini-connection-second-api-key-canary'
@@ -37,7 +39,6 @@ interface EndpointInput {
 
 interface Creation {
   readonly baseUrl: string
-  readonly requestTimeoutMs: number
 }
 
 interface SwitchScenario {
@@ -104,10 +105,9 @@ const makeTrackedClientFactory = (
   GeminiClientFactory.Service.of({
     create: Effect.fn('GeminiConnectionTest.ClientFactory.create')(function* (
       endpoint: GeminiConfiguration.Endpoint,
-      requestTimeoutMs: GeminiConfiguration.Configuration['requestTimeoutMs'],
     ) {
       const baseUrl = endpoint.baseUrl.toString()
-      yield* Ref.update(created, (current) => [...current, { baseUrl, requestTimeoutMs }])
+      yield* Ref.update(created, (current) => [...current, { baseUrl }])
       yield* Effect.addFinalizer(() => Ref.update(finalized, (current) => [...current, baseUrl]))
       return clientFor(baseUrl)
     }),
@@ -118,12 +118,8 @@ const makeConnectionLayer = (
   clientFactory: GeminiClientFactory.Interface,
 ) =>
   GeminiConnection.layer.pipe(
-    Layer.provide(
-      Layer.mergeAll(
-        GeminiConfiguration.layer(configuration),
-        Layer.succeed(GeminiClientFactory.Service, clientFactory),
-      ),
-    ),
+    Layer.provide(GeminiConfiguration.layer(configuration)),
+    Layer.provide(Layer.succeed(GeminiClientFactory.Service, clientFactory)),
   )
 
 const namedError = (name: string, message: string): Error => {
@@ -175,7 +171,7 @@ it.effect('rejects empty endpoints before constructing clients', () =>
   }),
 )
 
-it.effect('builds one logical service and creates every endpoint once with shared config', () =>
+it.effect('builds one logical service and creates every endpoint once', () =>
   Effect.gen(function* () {
     const created = yield* Ref.make<ReadonlyArray<Creation>>([])
     const finalized = yield* Ref.make<ReadonlyArray<string>>([])
@@ -191,9 +187,9 @@ it.effect('builds one logical service and creates every endpoint once with share
       expect(first).toBe(second)
       expect(first.discoveryRetry).toEqual(discoveryRetry)
       expect(creations).toEqual([
-        { baseUrl: PRIMARY_URL, requestTimeoutMs: REQUEST_TIMEOUT_MS },
-        { baseUrl: SECONDARY_URL, requestTimeoutMs: REQUEST_TIMEOUT_MS },
-        { baseUrl: TERTIARY_URL, requestTimeoutMs: REQUEST_TIMEOUT_MS },
+        { baseUrl: PRIMARY_URL },
+        { baseUrl: SECONDARY_URL },
+        { baseUrl: TERTIARY_URL },
       ])
     }).pipe(Effect.provide(makeConnectionLayer(makeConfiguration(endpoints), clientFactory)))
 
@@ -246,6 +242,11 @@ it.effect(
         secondError: networkFailure('ECONNRESET'),
       },
       {
+        name: 'Koishi timeout then transport',
+        firstError: new GeminiHttpTransport.TimeoutError(SDK_ERROR_CANARY),
+        secondError: new GeminiHttpTransport.TransportError(SDK_ERROR_CANARY),
+      },
+      {
         name: '408 then 504',
         firstError: new ApiError({ status: 408, message: SDK_ERROR_CANARY }),
         secondError: new ApiError({ status: 504, message: SDK_ERROR_CANARY }),
@@ -291,6 +292,37 @@ it.effect(
   },
 )
 
+it.effect('applies one Effect timeout to each complete endpoint attempt', () =>
+  Effect.gen(function* () {
+    const created = yield* Ref.make<ReadonlyArray<Creation>>([])
+    const finalized = yield* Ref.make<ReadonlyArray<string>>([])
+    const started = yield* Queue.unbounded<AbortSignal>()
+    const invoked: Array<string> = []
+    const clientFactory = makeTrackedClientFactory(created, finalized, (baseUrl) => ({
+      listModels: (_params, signal) => {
+        invoked.push(baseUrl)
+        if (baseUrl !== PRIMARY_URL) return Promise.resolve(makePager(undefined))
+        Queue.offerUnsafe(started, signal)
+        return new Promise<Pager<Model>>(() => undefined)
+      },
+    }))
+
+    yield* Effect.gen(function* () {
+      const connection = yield* GeminiConnection.Service
+      const listingFiber = yield* Effect.forkChild(connection.listModels())
+      const primarySignal = yield* Queue.take(started)
+
+      expect(primarySignal.aborted).toBe(false)
+      yield* TestClock.adjust(REQUEST_TIMEOUT_MS)
+      const listing = yield* Fiber.join(listingFiber)
+
+      expect(primarySignal.aborted).toBe(true)
+      expect(invoked).toEqual([PRIMARY_URL, SECONDARY_URL])
+      expect(listing.models).toEqual([])
+    }).pipe(Effect.provide(makeConnectionLayer(makeConfiguration(endpoints), clientFactory)))
+  }),
+)
+
 it.effect('does not fail over for ordinary 4xx, cancellation, or internal errors', () => {
   const scenarios: ReadonlyArray<TerminalScenario> = [
     {
@@ -320,6 +352,12 @@ it.effect('does not fail over for ordinary 4xx, cancellation, or internal errors
     {
       name: 'SDK decode TypeError',
       error: new TypeError(SDK_ERROR_CANARY),
+      expectedTag: 'AdapterProtocolDecodeError',
+      expectedStatusCode: undefined,
+    },
+    {
+      name: 'SDK JSON decode SyntaxError',
+      error: new SyntaxError(SDK_ERROR_CANARY),
       expectedTag: 'AdapterProtocolDecodeError',
       expectedStatusCode: undefined,
     },

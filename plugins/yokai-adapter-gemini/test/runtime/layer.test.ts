@@ -4,6 +4,7 @@ import { inspect } from 'node:util'
 
 import { GeminiConnection } from '../../src/connection/connection'
 import { GeminiRuntime } from '../../src/runtime/layer'
+import { GeminiHttpTransport } from '../../src/transport/http-transport'
 
 const FIRST_API_KEY = 'first-runtime-api-key-canary'
 const SECOND_API_KEY = 'second-runtime-api-key-canary'
@@ -28,7 +29,12 @@ const configuration = {
 }
 
 it.effect('builds synchronously without exposing SDK clients or credentials', () => {
-  const runtime = ManagedRuntime.make(GeminiRuntime.makeLayer(configuration))
+  const httpTransport = GeminiHttpTransport.layerWithFetch(() =>
+    Promise.reject(new Error('Unexpected HTTP request')),
+  )
+  const runtime = ManagedRuntime.make(
+    GeminiRuntime.makeLayerWithTransport(configuration, httpTransport),
+  )
 
   return Effect.acquireUseRelease(
     Effect.succeed(runtime),

@@ -13,6 +13,7 @@ import {
   AdapterTransportError,
 } from '@yokai/protocol'
 import {
+  Cause,
   Context,
   Data,
   Deferred,
@@ -33,6 +34,7 @@ import {
 import { GeminiClientFactory } from '../client/client-factory'
 import { GeminiConfiguration } from '../config/configuration'
 import type { Configuration, DiscoveryRetryPolicy } from '../config/configuration'
+import { GeminiHttpTransport } from '../transport/http-transport'
 
 const GEMINI_ADAPTER_ID = AdapterId.make('gemini')
 const DISCOVERY_OPERATION = 'discoverModels'
@@ -212,7 +214,7 @@ const makeConnection = Effect.fn('GeminiConnection.makeConnection')(function* (
   )
   const clientsRef = yield* Effect.forEach(configuration.endpoints, (endpoint, index) =>
     clientFactory
-      .create(endpoint, configuration.requestTimeoutMs)
+      .create(endpoint)
       .pipe(Effect.map((client) => ({ index, client }) satisfies ClientEntry)),
   ).pipe(Effect.flatMap((clients) => Ref.make(Option.some<ReadonlyArray<ClientEntry>>(clients))))
   yield* Effect.addFinalizer(() => Ref.set(clientsRef, Option.none()))
@@ -228,8 +230,11 @@ const makeConnection = Effect.fn('GeminiConnection.makeConnection')(function* (
       try: (signal) => client.listModels(params, signal),
       catch: (cause) => {
         if (cause instanceof ApiError) return classifyApiError(cause)
+        if (cause instanceof GeminiHttpTransport.TimeoutError) return timeoutError()
+        if (cause instanceof GeminiHttpTransport.TransportError) return transportError()
         if (cause instanceof Error && cause.name === 'AbortError') return timeoutError()
         if (cause instanceof Error && cause.name === 'TimeoutError') return timeoutError()
+        if (cause instanceof SyntaxError) return protocolDecodeError()
         if (cause instanceof TypeError) {
           return isFetchTransportError(cause) ? transportError() : protocolDecodeError()
         }
@@ -321,6 +326,8 @@ const makeConnection = Effect.fn('GeminiConnection.makeConnection')(function* (
       if (entry === undefined) return yield* Effect.die('Expected at least one Gemini endpoint')
 
       return yield* listAllModels(entry.client).pipe(
+        Effect.timeout(configuration.requestTimeoutMs),
+        Effect.mapError((error) => (Cause.isTimeoutError(error) ? timeoutError() : error)),
         Effect.matchEffect({
           onFailure: (error) => {
             const rest = remaining.slice(1)

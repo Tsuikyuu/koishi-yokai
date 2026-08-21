@@ -1,0 +1,58 @@
+diff --git a/dist/node/index.mjs b/dist/node/index.mjs
+--- a/dist/node/index.mjs
++++ b/dist/node/index.mjs
+@@ -13613,6 +13613,7 @@
+     constructor(opts) {
+         var _a, _b, _c;
+         this.clientOptions = Object.assign({}, opts);
++        this.fetchImplementation = opts.fetchImplementation;
+         this.customBaseUrl = (_a = opts.httpOptions) === null || _a === void 0 ? void 0 : _a.baseUrl;
+         const initHttpOptions = {};
+         if (this.clientOptions.vertexai) {
+@@ -13973,7 +13974,8 @@
+             const attempt = createAttemptSignal(timeout, abortSignal);
+             let response;
+             try {
+-                response = await fetch(url, Object.assign(Object.assign({}, requestInit), { signal: attempt.signal }));
++                const fetchImplementation = this.fetchImplementation === undefined ? fetch : this.fetchImplementation;
++                response = await fetchImplementation(url, Object.assign(Object.assign({}, requestInit), { signal: attempt.signal }));
+             }
+             catch (e) {
+                 attempt.dispose();
+@@ -26281,6 +26283,7 @@
+             userAgentExtra: LANGUAGE_LABEL_PREFIX + process.version,
+             uploader: new NodeUploader(),
+             downloader: new NodeDownloader(),
++            fetchImplementation: options.fetchImplementation,
+         });
+         this.models = new Models(this.apiClient);
+         this.live = new Live(this.apiClient, auth, new NodeWebSocketFactory());
+diff --git a/dist/node/index.cjs b/dist/node/index.cjs
+--- a/dist/node/index.cjs
++++ b/dist/node/index.cjs
+@@ -13635,6 +13635,7 @@
+     constructor(opts) {
+         var _a, _b, _c;
+         this.clientOptions = Object.assign({}, opts);
++        this.fetchImplementation = opts.fetchImplementation;
+         this.customBaseUrl = (_a = opts.httpOptions) === null || _a === void 0 ? void 0 : _a.baseUrl;
+         const initHttpOptions = {};
+         if (this.clientOptions.vertexai) {
+@@ -13995,7 +13996,8 @@
+             const attempt = createAttemptSignal(timeout, abortSignal);
+             let response;
+             try {
+-                response = await fetch(url, Object.assign(Object.assign({}, requestInit), { signal: attempt.signal }));
++                const fetchImplementation = this.fetchImplementation === undefined ? fetch : this.fetchImplementation;
++                response = await fetchImplementation(url, Object.assign(Object.assign({}, requestInit), { signal: attempt.signal }));
+             }
+             catch (e) {
+                 attempt.dispose();
+@@ -26303,6 +26305,7 @@
+             userAgentExtra: LANGUAGE_LABEL_PREFIX + process.version,
+             uploader: new NodeUploader(),
+             downloader: new NodeDownloader(),
++            fetchImplementation: options.fetchImplementation,
+         });
+         this.models = new Models(this.apiClient);
+         this.live = new Live(this.apiClient, auth, new NodeWebSocketFactory());
