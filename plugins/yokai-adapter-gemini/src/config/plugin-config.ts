@@ -1,5 +1,7 @@
+import { MAX_ADAPTER_ID_LENGTH } from '@yokai/protocol'
 import { Schema } from 'koishi'
 
+export const DEFAULT_ADAPTER_ID = 'gemini'
 export const DEFAULT_GEMINI_BASE_URL = 'https://generativelanguage.googleapis.com/'
 export const DEFAULT_REQUEST_TIMEOUT_MS = 60_000
 export const DEFAULT_DISCOVERY_MAX_ATTEMPTS = 3
@@ -43,6 +45,12 @@ const EndpointConfig = Schema.object({
 })
 
 export const Config = Schema.object({
+  adapterId: Schema.string()
+    .min(1)
+    .max(MAX_ADAPTER_ID_LENGTH)
+    .pattern(/^[A-Za-z][A-Za-z0-9._-]*$/)
+    .default(DEFAULT_ADAPTER_ID)
+    .description('此 Gemini adapter 实例的稳定 ID；须保证唯一性。'),
   endpoints: Schema.array(EndpointConfig)
     .role('table')
     .default([])

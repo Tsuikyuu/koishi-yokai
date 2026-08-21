@@ -25,6 +25,7 @@ const API_KEY_CANARY = 'gemini-connection-api-key-canary'
 const SECOND_API_KEY_CANARY = 'gemini-connection-second-api-key-canary'
 const THIRD_API_KEY_CANARY = 'gemini-connection-third-api-key-canary'
 const SDK_ERROR_CANARY = 'gemini-connection-sdk-error-canary'
+const ADAPTER_ID = 'gemini-connection-test'
 const REQUEST_TIMEOUT_MS = 12_345
 const PRIMARY_URL = 'https://primary.example.com/'
 const SECONDARY_URL = 'https://secondary.example.com/'
@@ -79,6 +80,7 @@ const endpoints: ReadonlyArray<EndpointInput> = [
 const makeConfiguration = (
   configuredEndpoints: ReadonlyArray<EndpointInput>,
 ): PluginConfiguration => ({
+  adapterId: ADAPTER_ID,
   endpoints: [...configuredEndpoints],
   requestTimeoutMs: REQUEST_TIMEOUT_MS,
   discoveryRetry,
@@ -150,6 +152,7 @@ it.effect('rejects empty endpoints before constructing clients', () =>
       listModels: () => Promise.reject(new Error('Unexpected Gemini client invocation')),
     }))
     const invalidConfiguration: PluginConfiguration = {
+      adapterId: ADAPTER_ID,
       endpoints: [],
       requestTimeoutMs: REQUEST_TIMEOUT_MS,
       discoveryRetry,
@@ -185,6 +188,7 @@ it.effect('builds one logical service and creates every endpoint once', () =>
       const creations = yield* Ref.get(created)
 
       expect(first).toBe(second)
+      expect(first.adapterId).toBe(ADAPTER_ID)
       expect(first.discoveryRetry).toEqual(discoveryRetry)
       expect(creations).toEqual([
         { baseUrl: PRIMARY_URL },
@@ -637,6 +641,7 @@ it.effect('tries every endpoint at most once and returns the last safe failure',
     expect(countOccurrences(invoked, SECONDARY_URL)).toBe(1)
     expect(countOccurrences(invoked, TERTIARY_URL)).toBe(1)
     expect(failure._tag).toBe('AdapterProviderResponseError')
+    expect(failure.adapterId).toBe(ADAPTER_ID)
     if (failure._tag === 'AdapterProviderResponseError') {
       expect(failure.statusCode).toBe(503)
       expect(failure.message).toBe('Gemini rejected the model discovery request')
@@ -682,6 +687,7 @@ it.effect('close takes no id, is idempotent, and interrupts all in-flight reques
 
       const closedFailure = yield* connection.listModels().pipe(Effect.flip)
       expect(closedFailure._tag).toBe('AdapterConfigurationError')
+      expect(closedFailure.adapterId).toBe(ADAPTER_ID)
       expect(closedFailure.message).toBe('Gemini connection is closed')
     }).pipe(Effect.provide(makeConnectionLayer(makeConfiguration(endpoints), clientFactory)))
 

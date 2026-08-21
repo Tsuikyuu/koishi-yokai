@@ -35,7 +35,7 @@ Gemini 客户端：Google 官方 `@google/genai` v2 API，以实例级 fetch 注
 
 - 每个工作区可独立类型检查，根工作区能构建全部包。
 - 每个导入 Effect 的工作区都精确声明 `effect@4.0.0-rc.110`。
-- Gemini adapter 将官方 `@google/genai` 锁定为稳定 2.x 精确版本，并声明 `node >= 20` 运行时基线；其他工作区不引入该 SDK。实际发布依赖必须包含实例级 fetch 注入口，不能只依赖消费者无法继承的仓库根级补丁。
+- Gemini adapter 将官方 `@google/genai` 锁定为稳定 2.x 精确版本，并声明 `node >= 20` 运行时基线；其他工作区不引入该 SDK。当前精确版本尚无实例级 fetch 注入口时，Gemini adapter 工作区允许把本地 Yarn patch 作为已接受的开发期偏差并保持 `private: true`；正式发布门禁延后，发布前仍必须改用包含该注入口的上游精确版本或已发布、可审计的 scoped fork/npm alias。
 - 包名、依赖方向和输出目录符合设计文档，没有 Koishi 依赖泄漏到内部包。
 
 ### YK-002 通用 adapter 协议
@@ -76,20 +76,22 @@ Gemini 客户端：Google 官方 `@google/genai` v2 API，以实例级 fetch 注
 - 发现接口不包含消息、人格、记忆或发送权限。
 - fake adapter 不包含 Gemini 或其他真实厂商语义，供主体集成测试验证其只依赖通用协议。
 
-### YK-004 Gemini adapter 单例、单逻辑连接与端点配置
+### YK-004 Gemini adapter 实例、单逻辑连接与端点配置
 
 前置：YK-002。
 
-交付：创建单例 `@yokai/koishi-plugin-yokai-adapter-gemini`，引入官方 `@google/genai` v2，将一份非空、
-有序的 `endpoints`（每项仅含 `baseUrl` 和 `apiKey`），以及顶层共享的 `requestTimeoutMs` 和仅用于后台
-发现的 `discoveryRetry`，从 Koishi 配置转换为单一逻辑连接的显式 Effect 服务。Koishi `apply` 边界把
+交付：创建 `@yokai/koishi-plugin-yokai-adapter-gemini`，每个 Koishi 插件实例拥有一个 adapter 和一条
+逻辑连接；引入官方 `@google/genai` v2，将顶层 `adapterId`（默认 `gemini`）、一份非空、有序的
+`endpoints`（每项仅含 `baseUrl` 和 `apiKey`），以及顶层共享的 `requestTimeoutMs` 和仅用于后台发现的
+`discoveryRetry`，从 Koishi 配置转换为该实例单一逻辑连接的显式 Effect 服务。Koishi `apply` 边界把
 当前插件上下文的 `ctx.http` 转换为 adapter-private HTTP transport Layer，并在构造每个 `GoogleGenAI`
 实例时注入该实例专属的 fetch implementation；最终提供可由后续注册表持有的 adapter Layer。
 
 验收：
 
-- 不允许注册第二个 Gemini adapter 实例；同一 Koishi 上下文中重复 adapter ID 明确失败。
-- `endpoints` 为空、任一 endpoint 缺少 key、任一显式 base URL 非法，或顶层共享配置非法时给出角色外配置错误，
+- `adapterId` 省略时为 `gemini`；若有多个插件实例同时注册到同一 Yokai 主体，它们必须配置不同的合法
+  `adapterId`。YK-009 注册表仍明确拒绝同一 adapter ID 的后注册者；Gemini 插件不声明 Koishi `reusable` 策略。
+- `adapterId` 非法、`endpoints` 为空、任一 endpoint 缺少 key、任一显式 base URL 非法，或顶层共享配置非法时给出角色外配置错误，
   不发出网络请求；省略 base URL 时使用 Gemini 官方服务根 URL。
 - endpoint 项严格只有 `baseUrl` 和 `apiKey`，不接受额外身份、显示文案、独立超时或独立重试字段；
   所有 endpoint 使用相同的 `requestTimeoutMs` 和 `discoveryRetry`。
@@ -108,8 +110,9 @@ Gemini 客户端：Google 官方 `@google/genai` v2 API，以实例级 fetch 注
   `Response`；非 `2xx` 仍由 SDK 转换为 `ApiError`，不能在 body 消费前让 `ctx.http` 提前撤销 timeout 或 dispose 管理。
 - SDK 的内建 timeout 和 retry 均保持关闭。`requestTimeoutMs` 由 Effect 对每个 endpoint 尝试施加硬截止并
   通过 AbortSignal 传播到 SDK、注入 fetch 和 `ctx.http`；Koishi HTTP 自身的全局 timeout 仍生效，较早者终止请求。
-- 若当前官方精确版本没有实例级 fetch 注入口，开发期补丁只能用于验证；公开包必须依赖包含该最小注入口的
-  上游精确版本或已发布的可审计 scoped fork/npm alias，不能要求使用者复现仓库根级 Yarn patch。
+- 当前官方精确版本没有实例级 fetch 注入口时，本地 Yarn patch 是已接受的开发期偏差，Gemini adapter 包必须
+  保持 `private: true`，且该偏差不阻塞后续内部任务；正式发布门禁延后，发布前仍须切换到包含该最小注入口的
+  上游精确版本或已发布、可审计的 scoped fork/npm alias，不能要求使用者复现仓库根级 Yarn patch。
 - SDK Promise 通过 `Effect.tryPromise` 调用，SDK 异常在服务边界翻译为类型化 adapter 错误。
 - adapter Layer 的作用域关闭后，进行中的 header 或 body 读取均被中断，client 引用和密钥被释放；共享的
   `ctx.http` 服务仍归 Koishi Context 所有，adapter 不主动 dispose 它。
@@ -118,7 +121,7 @@ Gemini 客户端：Google 官方 `@google/genai` v2 API，以实例级 fetch 注
 
 前置：YK-003、YK-004。
 
-交付：单例 adapter 从逻辑连接的当前活动端点开始，通过 `ai.models.list` 调用 Gemini Developer API，
+交付：插件实例的 adapter 从自身逻辑连接的当前活动端点开始，通过 `ai.models.list` 调用 Gemini Developer API，
 读完 SDK 分页器的所有页，并发布首个完整成功端点的一份通用模型快照；不同 endpoint 的发现结果不合并。
 
 验收：
@@ -470,14 +473,14 @@ bounded-feedback 为 2 且无第三次逻辑生成，同时单独观察每次逻
 
 ## 7. 推荐交付批次
 
-| 批次 | 任务           | 可演示结果                                                           |
-| ---- | -------------- | -------------------------------------------------------------------- |
-| A    | YK-001～YK-005 | Gemini adapter 单例通过单逻辑连接的有序 URL/key 端点发布一份模型目录 |
-| B    | YK-006～YK-008 | Gemini adapter 通过文本、函数调用、单次反馈、用量和容错契约          |
-| C    | YK-009～YK-012 | 主插件配置实时展示 adapter 模型，@ Yokai 后使用选中模型回复          |
-| D    | YK-013～YK-021 | 存档、门控、上下文、双 Tool 协议和有界反馈管线完整运行               |
-| E    | YK-022～YK-028 | 话题、状态、关系、记事本、讨论租约、定时与主动行为逐项可用           |
-| F    | YK-029～YK-033 | 可运维、可回放、可盲测且能零修改接入新 adapter 的 MVP                |
+| 批次 | 任务           | 可演示结果                                                                |
+| ---- | -------------- | ------------------------------------------------------------------------- |
+| A    | YK-001～YK-005 | 每个 Gemini adapter 实例通过单逻辑连接的有序 URL/key 端点发布一份模型目录 |
+| B    | YK-006～YK-008 | Gemini adapter 通过文本、函数调用、单次反馈、用量和容错契约               |
+| C    | YK-009～YK-012 | 主插件配置实时展示 adapter 模型，@ Yokai 后使用选中模型回复               |
+| D    | YK-013～YK-021 | 存档、门控、上下文、双 Tool 协议和有界反馈管线完整运行                    |
+| E    | YK-022～YK-028 | 话题、状态、关系、记事本、讨论租约、定时与主动行为逐项可用                |
+| F    | YK-029～YK-033 | 可运维、可回放、可盲测且能零修改接入新 adapter 的 MVP                     |
 
 Gemini `models.list` 的分页、`supportedGenerationMethods` 和 token 上限字段以
 [Gemini Developer API 官方模型参考](https://ai.google.dev/api/models)为验收基准，不在代码中维护固定模型名单。

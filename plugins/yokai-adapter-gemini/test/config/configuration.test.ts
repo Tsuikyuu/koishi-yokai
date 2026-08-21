@@ -1,4 +1,5 @@
 import { expect, it } from '@effect/vitest'
+import { MAX_ADAPTER_ID_LENGTH } from '@yokai/protocol'
 import { Cause, Effect, Exit, Redacted, Schema } from 'effect'
 import { vi } from 'vitest'
 
@@ -10,6 +11,7 @@ vi.mock('koishi', async () => {
 import { GeminiConfiguration } from '../../src/config/configuration'
 import {
   Config,
+  DEFAULT_ADAPTER_ID,
   DEFAULT_DISCOVERY_BACKOFF_MULTIPLIER,
   DEFAULT_DISCOVERY_INITIAL_DELAY_MS,
   DEFAULT_DISCOVERY_MAX_ATTEMPTS,
@@ -21,6 +23,7 @@ import {
 const PRIMARY_API_KEY_CANARY = 'gemini-primary-api-key-must-not-leak'
 const FALLBACK_API_KEY_CANARY = 'gemini-fallback-api-key-must-not-leak'
 const FALLBACK_BASE_URL = 'https://gemini-fallback.example.com/'
+const CUSTOM_ADAPTER_ID = 'gemini-work'
 
 const makeEndpoint = (apiKey = PRIMARY_API_KEY_CANARY, baseUrl = DEFAULT_GEMINI_BASE_URL) => ({
   apiKey,
@@ -28,6 +31,7 @@ const makeEndpoint = (apiKey = PRIMARY_API_KEY_CANARY, baseUrl = DEFAULT_GEMINI_
 })
 
 const makeConfiguration = () => ({
+  adapterId: DEFAULT_ADAPTER_ID,
   endpoints: [makeEndpoint()],
   requestTimeoutMs: DEFAULT_REQUEST_TIMEOUT_MS,
   discoveryRetry: {
@@ -64,6 +68,7 @@ it.effect('applies shared Koishi defaults and decodes endpoint API keys as redac
 
     expect(primaryPluginEndpoint.baseUrl).toBe(DEFAULT_GEMINI_BASE_URL)
     expect(fallbackPluginEndpoint.baseUrl).toBe(FALLBACK_BASE_URL)
+    expect(pluginConfig.adapterId).toBe(DEFAULT_ADAPTER_ID)
     expect(pluginConfig.requestTimeoutMs).toBe(DEFAULT_REQUEST_TIMEOUT_MS)
     expect(pluginConfig.discoveryRetry).toEqual({
       maxAttempts: DEFAULT_DISCOVERY_MAX_ATTEMPTS,
@@ -93,6 +98,7 @@ it.effect('applies shared Koishi defaults and decodes endpoint API keys as redac
     expect(String(fallbackEndpoint.apiKey)).toBe('<redacted:GeminiApiKey>')
     expect(Redacted.value(primaryEndpoint.apiKey)).toBe(PRIMARY_API_KEY_CANARY)
     expect(Redacted.value(fallbackEndpoint.apiKey)).toBe(FALLBACK_API_KEY_CANARY)
+    expect(configuration.adapterId).toBe(DEFAULT_ADAPTER_ID)
     expect(configuration.requestTimeoutMs).toBe(DEFAULT_REQUEST_TIMEOUT_MS)
     expect(configuration.discoveryRetry).toEqual(pluginConfig.discoveryRetry)
   }),
@@ -105,9 +111,11 @@ it.effect('marks endpoint, secret, URL, and shared timeout fields with Koishi UI
       return yield* Effect.die('Expected the Koishi config schema to expose object fields')
     }
     const endpointsSchema = rootFields.endpoints
+    const adapterIdSchema = rootFields.adapterId
     const requestTimeoutSchema = rootFields.requestTimeoutMs
     const discoveryRetrySchema = rootFields.discoveryRetry
     if (
+      adapterIdSchema === undefined ||
       endpointsSchema === undefined ||
       requestTimeoutSchema === undefined ||
       discoveryRetrySchema === undefined
@@ -138,6 +146,7 @@ it.effect('marks endpoint, secret, URL, and shared timeout fields with Koishi UI
 
     expect(endpointsSchema.meta.role).toBe('table')
     expect(endpointsSchema.meta.default).toEqual([])
+    expect(adapterIdSchema.meta.default).toBe(DEFAULT_ADAPTER_ID)
     expect(apiKeySchema.meta.role).toBe('secret')
     expect(apiKeySchema.meta.default).toBeUndefined()
     expect(baseUrlSchema.meta.role).toBe('link')
@@ -189,12 +198,32 @@ it.effect(
           },
         }),
         expectInvalid({
+          adapterId: valid.adapterId,
           connections: [makeEndpoint()],
           requestTimeoutMs: valid.requestTimeoutMs,
           discoveryRetry: valid.discoveryRetry,
         }),
       ])
     }),
+)
+
+it.effect('preserves a valid custom adapter ID and rejects invalid IDs', () =>
+  Effect.gen(function* () {
+    const customPluginConfig = Config({
+      adapterId: CUSTOM_ADAPTER_ID,
+      endpoints: [{ apiKey: PRIMARY_API_KEY_CANARY }],
+    })
+    const custom = yield* GeminiConfiguration.decode(customPluginConfig)
+
+    expect(customPluginConfig.adapterId).toBe(CUSTOM_ADAPTER_ID)
+    expect(custom.adapterId).toBe(CUSTOM_ADAPTER_ID)
+
+    const invalidAdapterIds = ['', '1gemini', 'gemini/work', 'a'.repeat(MAX_ADAPTER_ID_LENGTH + 1)]
+    for (const adapterId of invalidAdapterIds) {
+      expect(() => Config({ adapterId, endpoints: [{ apiKey: PRIMARY_API_KEY_CANARY }] })).toThrow()
+      yield* expectInvalid({ ...makeConfiguration(), adapterId })
+    }
+  }),
 )
 
 it.effect('rejects malformed URLs and URLs containing credentials, queries, or fragments', () =>

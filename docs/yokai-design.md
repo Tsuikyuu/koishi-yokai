@@ -506,9 +506,10 @@ Koishi `ETIMEDOUT` 映射为 adapter timeout，其他代理、请求或完整 bo
 非 `2xx` 继续走 SDK status/error 解码，成功 status 下的畸形供应商 payload 映射为 protocol decode error。
 任何映射后的错误都不能携带原始 URL、headers、body、API key 或底层 cause。
 
-用于公开发布的精确 SDK 依赖必须暴露实例级 fetch 注入口。优先采用包含该能力的上游 `@google/genai` v2；
-在上游尚未提供时，只允许使用保持 SDK wire/解析语义不变的最小、可审计 scoped fork/npm alias。仓库根级
-Yarn patch 可以验证设计，但不能作为正式交付，因为插件使用者不会可靠继承该补丁。
+当前上游精确版本尚未暴露实例级 fetch 注入口，因此仓库采用最小本地 Yarn patch 作为已接受的开发期偏差，
+并在使用该补丁期间保持 Gemini adapter 工作区 `private: true`。这项偏差不阻塞后续内部实现任务，但正式发布
+门禁延后：公开发布前必须改用包含该能力的上游 `@google/genai` v2 精确版本，或保持 SDK wire/解析语义不变的
+最小、可审计 scoped fork/npm alias；不能要求插件使用者继承仓库根级补丁。
 
 adapter 不依赖 SDK 的高层自动工具循环，而是显式关闭 automatic function calling，读取原始函数调用部件，
 由 Yokai 主体执行工具并且只续接一次。
@@ -540,11 +541,12 @@ unsupported 错误，本回合保持沉默，不探测、不重试、不切换�
 能力必须先进入通用协议和主插件配置；adapter 私有传输特性不进入主体能力配置。
 
 模型选择只存在于主插件 `@yokai/koishi-plugin-yokai` 的配置中；adapter 只配置单一逻辑连接与传输参数，
-不保存“当前模型”。每种 adapter 在一个 Koishi 上下文中是单例，同一 adapter ID 重复注册必须拒绝。
-Gemini 单例配置一份非空、有序的 `endpoints`；每项严格只有 `baseUrl` 和 `apiKey`，没有额外身份、
-显示文案或独立传输配置。`requestTimeoutMs` 和仅用于后台发现的 `discoveryRetry` 位于顶层，对所有端点
-使用相同值。`apiKey` 必填；`baseUrl` 省略时由 Koishi Schema 补成 Gemini 官方服务根 URL。endpoint
-列表为空、任一 key 缺失或任一显式 URL 非法时整份配置失效，不发出网络请求。
+不保存“当前模型”。每个 Gemini Koishi 插件实例拥有一个 adapter 和一条逻辑连接；插件不声明 Koishi
+`reusable` 策略。顶层 `adapterId` 默认为 `gemini`，同时注册到同一 Yokai 主体的实例必须使用不同的合法
+`adapterId`，注册表仍拒绝后注册的同 ID adapter。每个实例配置一份非空、有序的 `endpoints`；每项严格只有 `baseUrl` 和 `apiKey`，
+没有额外身份、显示文案或独立传输配置。`requestTimeoutMs` 和仅用于后台发现的 `discoveryRetry` 位于顶层，
+对该实例所有端点使用相同值。`apiKey` 必填；`baseUrl` 省略时由 Koishi Schema 补成 Gemini 官方服务根 URL。
+`adapterId` 非法、endpoint 列表为空、任一 key 缺失或任一显式 URL 非法时整份配置失效，不发出网络请求。
 
 第一个配置端点初始为活动端点；此后每次 `discoverModels`、`generate` 或 `continue` 都从当前活动端点开始，
 再按配置顺序循环尝试后续端点，每个端点在同一次逻辑调用内至多一次。`401/403` 认证失败、`402/429` 余额
@@ -693,7 +695,7 @@ adapter 注册后主体立即在其作用域中请求模型清单；adapter 配�
 
 所有注册项必须具有稳定 `id` 和协议版本。注册表遵守：
 
-- adapter 为单例；同一 adapter ID 或其他同域能力 ID 冲突时拒绝后注册者，不静默覆盖。
+- adapter 注册项以 adapter ID 唯一标识；同一 adapter ID 或其他同域能力 ID 冲突时拒绝后注册者，不静默覆盖。
 - 注册返回 `Disposable`，Koishi 插件卸载时立即停止向新回合暴露能力。
 - 每个角色回合冻结一份能力快照；回合执行期间安装、卸载或更新插件不会改变该回合。
 - 新回合始终读取最新注册表版本。
@@ -1025,9 +1027,9 @@ Yokai 将这些模式统一成 `ResponseMechanism + WakeProposal + WakeArbiter`�
 
 第一阶段只实现文本群聊：
 
-1. `@yokai/koishi-plugin-yokai` 和 `adapter-gemini` 两个公开插件；Gemini adapter 使用 `@google/genai` v2，
-   每个 SDK 实例注入由 `ctx.http` 支撑的 fetch，只调用 unary API；一个单例以有序 URL/key 端点支撑单一
-   逻辑连接，并自动发现一份无端点前缀的模型目录。
+1. `@yokai/koishi-plugin-yokai` 和目标正式发布的 `adapter-gemini`；Gemini adapter 使用 `@google/genai` v2，
+   每个 SDK 实例注入由 `ctx.http` 支撑的 fetch，只调用 unary API；每个 Koishi 插件实例以有序 URL/key 端点
+   支撑自己的一条逻辑连接，并自动发现一份以其 `adapterId` 为命名空间、无端点前缀的模型目录。
 2. `ctx.yokai` 能力注册表、生命周期快照和唤醒仲裁器。
 3. 结构化人格、严格角色内表达和预设文件热更新。
 4. 默认保留 90 天且可配置的原始群聊存档、环形缓冲和无远程模型参与的活跃度门控。
@@ -1041,9 +1043,10 @@ Yokai 将这些模式统一成 `ResponseMechanism + WakeProposal + WakeArbiter`�
 12. 少量由未完话题触发的主动发言。
 13. 仓库外 LLM adapter 的零修改兼容门禁，覆盖注册、模型发现、配置联动、两类生成和卸载。
 
-MVP 仍只正式发布 Gemini adapter；用于兼容门禁的确定性 adapter 是测试夹具，不作为第二个产品
-adapter 发布。MVP 暂不实现语音、图片生成、浏览器、代码工具、人格市场和主动私聊。先证明文本
-群聊中的行为不可区分，再扩展能力。
+开发期本地 Yarn patch 是已接受偏差，Gemini adapter 工作区因此暂时保持 private，正式发布门禁延后到上游
+提供实例级 fetch 注入口或项目改用已发布、可审计的 scoped fork。达到该门禁后，MVP 仍只正式发布 Gemini
+adapter；用于兼容门禁的确定性 adapter 是测试夹具，不作为第二个产品 adapter 发布。MVP 暂不实现语音、
+图片生成、浏览器、代码工具、人格市场和主动私聊。先证明文本群聊中的行为不可区分，再扩展能力。
 
 ## 10. 最终架构决策
 
@@ -1064,8 +1067,9 @@ adapter 发布。MVP 暂不实现语音、图片生成、浏览器、代码工�
 13. 角色预设使用不可变版本快照原子热更新，不停机且不修改进行中的回合。
 14. 以匿名记录盲测中的不可区分性作为唯一顶层指标，其余指标都是诊断手段。
 15. Gemini adapter 使用官方 `@google/genai` v2 API；每个 SDK 实例注入由当前 `ctx.http` 支撑的 fetch，
-    不修改全局 fetch/dispatcher，不另设代理。上游未提供注入口时，正式包使用精确发布的最小兼容 fork，
-    不依赖仓库根级 patch。
+    不修改全局 fetch/dispatcher，不另设代理。上游未提供注入口期间，允许以本地 Yarn patch 作为已接受的
+    开发期偏差并保持包 private；正式发布门禁延后，届时必须使用带注入口的上游精确版本或已发布、可审计的
+    最小兼容 scoped fork，不把仓库根级 patch 交给使用者。
 16. Yokai 的 LLM 生成只接受完整 unary 响应，不调用供应商 streaming API，不请求、解析或消费 SSE。
     SDK 类型不跨边界，自动函数调用关闭，FeedbackTool 由主体执行，adapter 只传输通用调用与结果。
     Gemini 的有序 URL/key 端点共享配置、只做同模型传输容灾，不形成独立模型身份，也不替代主插件 model fallback。

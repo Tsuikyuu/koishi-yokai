@@ -2,9 +2,13 @@
 
 Gemini model adapter for Yokai.
 
-The plugin owns one Gemini adapter and one logical Gemini connection. An ordered
-endpoint list supplies equivalent transports for that connection; endpoints are
-not separate model sources or selectable accounts.
+Each Koishi plugin instance owns one Gemini adapter and one logical Gemini
+connection. The plugin does not declare a Koishi `reusable` policy. The top-level
+`adapterId` defaults to `gemini`; if multiple plugin instances are registered
+with the same Yokai host, they must use unique adapter IDs because the host
+registry rejects a later registration with an ID already in use. An ordered
+endpoint list supplies equivalent transports for one instance's connection;
+endpoints are not separate model sources or selectable accounts.
 
 Every `GoogleGenAI` client receives an instance-local fetch implementation backed
 by this plugin context's `ctx.http`. Gemini requests therefore follow Koishi HTTP
@@ -15,16 +19,17 @@ The adapter has no separate proxy configuration. Generation is unary: Yokai call
 SSE.
 
 `@google/genai` 2.18.0 does not yet expose this transport seam upstream. The
-minimal development-only Yarn patch used to verify the integration lives at
+minimal Yarn patch used by the workspace is an accepted development-only
+deviation and lives at
 `patches/google-genai-2.18.0-instance-fetch.patch` and is referenced by this
 workspace dependency; an unpatched SDK fails client initialization instead of
-silently falling back to global fetch. This patch is not a release dependency. A
-published adapter must use an exact upstream version with the seam or an auditable
-published fork, as required by the design. The workspace remains `private` while
-the development patch is in use so this non-portable dependency cannot be
-published accidentally.
+silently falling back to global fetch. The workspace remains `private` while the
+patch is in use, and the public-release gate is deferred. A formal release must
+instead use an exact upstream version with the seam or an auditable published
+scoped fork; users will not be asked to reproduce the repository-local patch.
 
 ```yaml
+adapterId: gemini
 endpoints:
   - baseUrl: https://generativelanguage.googleapis.com/
     apiKey: <primary-secret>
@@ -38,7 +43,9 @@ discoveryRetry:
   backoffMultiplier: 2
 ```
 
-Each endpoint contains only `baseUrl` and `apiKey`. `apiKey` is required;
+`adapterId` is optional and defaults to `gemini`; configure a distinct valid ID
+for each instance that will be registered with the same Yokai host. Each
+endpoint contains only `baseUrl` and `apiKey`. `apiKey` is required;
 omitting `baseUrl` uses `https://generativelanguage.googleapis.com/`. The Google
 SDK appends its API version and resource path to that service root.
 `requestTimeoutMs` and `discoveryRetry` are top-level settings shared by every

@@ -8,6 +8,7 @@ import { GeminiHttpTransport } from '../../src/transport/http-transport'
 
 const FIRST_API_KEY = 'first-runtime-api-key-canary'
 const SECOND_API_KEY = 'second-runtime-api-key-canary'
+const ADAPTER_ID = 'gemini-runtime-test'
 
 const makeEndpoint = (apiKey: string, baseUrl: string) => ({
   apiKey,
@@ -15,6 +16,7 @@ const makeEndpoint = (apiKey: string, baseUrl: string) => ({
 })
 
 const configuration = {
+  adapterId: ADAPTER_ID,
   endpoints: [
     makeEndpoint(FIRST_API_KEY, 'https://primary.example.com/'),
     makeEndpoint(SECOND_API_KEY, 'https://secondary.example.com/'),
@@ -51,6 +53,7 @@ it.effect('builds synchronously without exposing SDK clients or credentials', ()
           maxDelayMs: 10_000,
           backoffMultiplier: 2,
         })
+        expect(connection.adapterId).toBe(ADAPTER_ID)
         expect(surfaces.every((surface) => !surface.includes(FIRST_API_KEY))).toBe(true)
         expect(surfaces.every((surface) => !surface.includes(SECOND_API_KEY))).toBe(true)
         expect(surfaces.every((surface) => !surface.includes('GoogleGenAI'))).toBe(true)

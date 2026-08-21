@@ -351,6 +351,7 @@ it.live('aborts buffered bodies on adapter close without disposing shared ctx.ht
         const ctx = new CordisContext()
         const http = new HTTP(ctx)
         const config = {
+          adapterId: 'gemini-buffered-body-test',
           endpoints: [{ apiKey: API_KEY, baseUrl }],
           requestTimeoutMs: 60_000,
           discoveryRetry: {

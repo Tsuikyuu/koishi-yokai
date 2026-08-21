@@ -6,7 +6,6 @@ import { GeminiConnection } from './connection/connection'
 import { GeminiRuntime } from './runtime/layer'
 
 export const name = 'yokai-adapter-gemini'
-export const reusable = false
 export const inject = ['http']
 
 export const Config = ConfigSchema

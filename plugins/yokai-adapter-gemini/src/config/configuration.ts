@@ -1,3 +1,4 @@
+import { AdapterId } from '@yokai/protocol'
 import { Context, Effect, Layer, Schema } from 'effect'
 
 import type { Config } from './plugin-config'
@@ -38,6 +39,7 @@ export interface Endpoint extends Schema.Schema.Type<typeof Endpoint> {}
 const Endpoints = Schema.NonEmptyArray(Endpoint)
 
 export const Configuration = Schema.Struct({
+  adapterId: AdapterId,
   endpoints: Endpoints,
   requestTimeoutMs: Schema.Int.check(Schema.isBetween({ minimum: 1_000, maximum: 600_000 })),
   discoveryRetry: DiscoveryRetryPolicy,
@@ -58,6 +60,7 @@ export class ConfigurationError extends Schema.TaggedError<ConfigurationError>(
 }) {}
 
 export interface Interface {
+  readonly adapterId: Configuration['adapterId']
   readonly endpoints: Configuration['endpoints']
   readonly requestTimeoutMs: Configuration['requestTimeoutMs']
   readonly discoveryRetry: Configuration['discoveryRetry']
