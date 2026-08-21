@@ -1,4 +1,11 @@
-import { PagedItem, Pager, type ListModelsParameters, type Model } from '@google/genai'
+import {
+  GenerateContentResponse,
+  PagedItem,
+  Pager,
+  type GenerateContentParameters,
+  type ListModelsParameters,
+  type Model,
+} from '@google/genai'
 import { expect, it } from '@effect/vitest'
 import { Effect, Layer, Redacted, Schema } from 'effect'
 import { inspect } from 'node:util'
@@ -14,6 +21,7 @@ const PRIMARY_BASE_URL = 'https://generativelanguage.googleapis.com/'
 const FALLBACK_BASE_URL = 'https://gemini-fallback.example.com/'
 const unusedFetch: GeminiHttpTransport.FetchImplementation = () =>
   Promise.reject(new Error('Unexpected HTTP request'))
+const unusedGenerateContent = () => Promise.reject(new Error('Unexpected generation request'))
 const transportLayer = GeminiHttpTransport.layerWithFetch(unusedFetch)
 
 const makeEndpoint = Schema.decodeUnknownEffect(GeminiConfiguration.Endpoint)
@@ -46,9 +54,10 @@ it.effect('keeps GoogleGenAI and endpoint API keys inside closure-private ports'
     const json = JSON.stringify({ first, second })
     const inspected = inspect({ first, second })
 
-    expect(Object.keys(first)).toEqual(['listModels'])
+    expect(Object.keys(first).sort()).toEqual(['generateContent', 'listModels'])
     expect(first).not.toBe(second)
     expect(first.listModels).not.toBe(second.listModels)
+    expect(first.generateContent).not.toBe(second.generateContent)
     expect(json).not.toContain(PRIMARY_API_KEY_CANARY)
     expect(inspected).not.toContain(PRIMARY_API_KEY_CANARY)
     expect(json).not.toContain('GoogleGenAI')
@@ -73,6 +82,7 @@ it.effect(
         captured.push({ endpoint, fetchImplementation })
         return {
           listModels: () => Promise.resolve(makeEmptyPager()),
+          generateContent: unusedGenerateContent,
         }
       },
     }).pipe(Layer.provide(transportLayer))
@@ -112,6 +122,7 @@ it.effect('forwards safe list options and removes call-level SDK HTTP options', 
         captured.push(params)
         return Promise.resolve(makeEmptyPager())
       },
+      generateContent: unusedGenerateContent,
     }),
   }).pipe(Layer.provide(transportLayer))
 
@@ -162,6 +173,68 @@ it.effect('forwards safe list options and removes call-level SDK HTTP options', 
       'pageSize',
       'pageToken',
       'queryBase',
+    ])
+  }).pipe(Effect.provide(testLayer), Effect.scoped)
+})
+
+it.effect('injects the Effect signal and removes call-level HTTP options for generation', () => {
+  const captured: Array<GenerateContentParameters> = []
+  const testLayer = GeminiClientFactory.layerWithSdkClientFactory({
+    create: () => ({
+      listModels: () => Promise.resolve(makeEmptyPager()),
+      generateContent: (params) => {
+        captured.push(params)
+        return Promise.resolve(new GenerateContentResponse())
+      },
+    }),
+  }).pipe(Layer.provide(transportLayer))
+
+  return Effect.gen(function* () {
+    const endpoint = yield* makeEndpoint(primaryEndpointInput)
+    const factory = yield* GeminiClientFactory.Service
+    const client = yield* factory.create(endpoint)
+    const effectController = new AbortController()
+    const ignoredController = new AbortController()
+
+    yield* Effect.tryPromise(() =>
+      client.generateContent(
+        {
+          model: 'gemini-test',
+          contents: [{ role: 'user', parts: [{ text: 'hello' }] }],
+          config: {
+            abortSignal: ignoredController.signal,
+            maxOutputTokens: 256,
+            candidateCount: 1,
+            automaticFunctionCalling: { disable: true },
+            httpOptions: {
+              timeout: 1_234,
+              retryOptions: { attempts: 5 },
+            },
+          },
+        },
+        effectController.signal,
+      ),
+    )
+
+    const request = captured[0]
+    if (request === undefined) {
+      return yield* Effect.die('Expected the SDK generation request to be captured')
+    }
+    const config = request.config
+    if (config === undefined) {
+      return yield* Effect.die('Expected the SDK generation request config')
+    }
+
+    expect(config.abortSignal).toBe(effectController.signal)
+    expect(config.maxOutputTokens).toBe(256)
+    expect(config.candidateCount).toBe(1)
+    expect(config.automaticFunctionCalling).toEqual({ disable: true })
+    expect(config.httpOptions).toBeUndefined()
+    expect(Object.keys(config).sort()).toEqual([
+      'abortSignal',
+      'automaticFunctionCalling',
+      'candidateCount',
+      'maxOutputTokens',
     ])
   }).pipe(Effect.provide(testLayer), Effect.scoped)
 })

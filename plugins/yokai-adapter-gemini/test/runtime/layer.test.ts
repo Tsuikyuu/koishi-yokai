@@ -1,9 +1,12 @@
 import { expect, it } from '@effect/vitest'
+import { CURRENT_ADAPTER_PROTOCOL_VERSION } from '@yokai/protocol'
 import { Effect, ManagedRuntime } from 'effect'
 import { inspect } from 'node:util'
 
+import { GeminiAdapter } from '../../src/adapter/adapter'
 import { GeminiConnection } from '../../src/connection/connection'
 import { GeminiModelDiscovery } from '../../src/discovery/discovery'
+import { GeminiTextGeneration } from '../../src/generation/generation'
 import { GeminiRuntime } from '../../src/runtime/layer'
 import { GeminiHttpTransport } from '../../src/transport/http-transport'
 
@@ -49,11 +52,19 @@ it.effect('builds synchronously without exposing SDK clients or credentials', ()
         const discovery = yield* Effect.sync(() =>
           currentRuntime.runSync(GeminiModelDiscovery.Service),
         )
+        const generation = yield* Effect.sync(() =>
+          currentRuntime.runSync(GeminiTextGeneration.Service),
+        )
+        const adapter = yield* Effect.sync(() => currentRuntime.runSync(GeminiAdapter.Service))
         const surfaces = [
           JSON.stringify(connection),
           inspect(connection),
           JSON.stringify(discovery),
           inspect(discovery),
+          JSON.stringify(generation),
+          inspect(generation),
+          JSON.stringify(adapter),
+          inspect(adapter),
         ]
 
         expect(connection.discoveryRetry).toEqual({
@@ -64,6 +75,12 @@ it.effect('builds synchronously without exposing SDK clients or credentials', ()
         })
         expect(connection.adapterId).toBe(ADAPTER_ID)
         expect(discovery.adapterId).toBe(ADAPTER_ID)
+        expect(generation.adapterId).toBe(ADAPTER_ID)
+        expect(adapter.descriptor).toEqual({
+          id: ADAPTER_ID,
+          protocolVersion: CURRENT_ADAPTER_PROTOCOL_VERSION,
+          capabilities: { feedbackTools: false },
+        })
         expect(surfaces.every((surface) => !surface.includes(FIRST_API_KEY))).toBe(true)
         expect(surfaces.every((surface) => !surface.includes(SECOND_API_KEY))).toBe(true)
         expect(surfaces.every((surface) => !surface.includes('GoogleGenAI'))).toBe(true)

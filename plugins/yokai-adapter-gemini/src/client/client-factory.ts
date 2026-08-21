@@ -1,4 +1,7 @@
 import {
+  type GenerateContentConfig,
+  type GenerateContentParameters,
+  type GenerateContentResponse,
   GoogleGenAI,
   type ListModelsConfig,
   type ListModelsParameters,
@@ -12,11 +15,16 @@ import { GeminiHttpTransport } from '../transport/http-transport'
 
 export interface Client {
   readonly listModels: (params: ListModelsParameters, signal: AbortSignal) => Promise<Pager<Model>>
+  readonly generateContent: (
+    params: GenerateContentParameters,
+    signal: AbortSignal,
+  ) => Promise<GenerateContentResponse>
 }
 
 /** Narrow SDK seam. The GoogleGenAI object itself must remain closure-private. */
 export interface SdkClient {
   readonly listModels: (params: ListModelsParameters) => Promise<Pager<Model>>
+  readonly generateContent: (params: GenerateContentParameters) => Promise<GenerateContentResponse>
 }
 
 export interface SdkClientFactory {
@@ -52,6 +60,18 @@ const withAbortSignal = (
   }
 }
 
+const withGenerationAbortSignal = (
+  config: GenerateContentConfig | undefined,
+  signal: AbortSignal,
+): GenerateContentConfig => {
+  if (config === undefined) return { abortSignal: signal }
+  const { abortSignal: _abortSignal, httpOptions: _httpOptions, ...safeConfig } = config
+  return {
+    ...safeConfig,
+    abortSignal: signal,
+  }
+}
+
 const makeInitializationError = () =>
   new InitializationError({
     message: 'Unable to initialize Gemini client',
@@ -77,6 +97,7 @@ const liveSdkClientFactory: SdkClientFactory = {
 
     return {
       listModels: (params) => client.models.list(params),
+      generateContent: (params) => client.models.generateContent(params),
     }
   },
 }
@@ -97,6 +118,11 @@ const makeCreate = (
             sdkClient.listModels({
               ...params,
               config: withAbortSignal(params.config, signal),
+            }),
+          generateContent: (params, signal) =>
+            sdkClient.generateContent({
+              ...params,
+              config: withGenerationAbortSignal(params.config, signal),
             }),
         } satisfies Client
       },
