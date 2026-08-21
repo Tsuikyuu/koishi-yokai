@@ -1,5 +1,6 @@
 import { ApiError, PagedItem, Pager, type ListModelsParameters, type Model } from '@google/genai'
 import { expect, it } from '@effect/vitest'
+import { AdapterProtocolDecodeError } from '@yokai/protocol'
 import {
   Cause,
   Context,
@@ -124,6 +125,8 @@ const makeConnectionLayer = (
     Layer.provide(Layer.succeed(GeminiClientFactory.Service, clientFactory)),
   )
 
+const acceptListing = (listing: GeminiConnection.ModelListing) => Effect.succeed(listing)
+
 const namedError = (name: string, message: string): Error => {
   const error = new Error(message)
   error.name = name
@@ -218,11 +221,45 @@ it.effect('uses the first successful endpoint without invoking a backup', () =>
 
     const listing = yield* Effect.gen(function* () {
       const connection = yield* GeminiConnection.Service
-      return yield* connection.listModels()
+      return yield* connection.listModels(acceptListing)
     }).pipe(Effect.provide(makeConnectionLayer(makeConfiguration(endpoints), clientFactory)))
 
     expect(listing.models).toEqual([{ name: 'models/gemini-primary' }])
     expect(invoked).toEqual([PRIMARY_URL])
+  }),
+)
+
+it.effect('reads three pages exactly once and forwards each next-page token', () =>
+  Effect.gen(function* () {
+    const created = yield* Ref.make<ReadonlyArray<Creation>>([])
+    const finalized = yield* Ref.make<ReadonlyArray<string>>([])
+    const pageTokens: Array<string | undefined> = []
+    const clientFactory = makeTrackedClientFactory(created, finalized, () => ({
+      listModels: (params) => {
+        const config = params.config
+        const pageToken = config === undefined ? undefined : config.pageToken
+        pageTokens.push(pageToken)
+        if (pageToken === undefined) {
+          return Promise.resolve(makePager('page-2', [{ name: 'models/first' }]))
+        }
+        if (pageToken === 'page-2') {
+          return Promise.resolve(makePager('page-3', [{ name: 'models/second' }]))
+        }
+        return Promise.resolve(makePager(undefined, [{ name: 'models/third' }]))
+      },
+    }))
+
+    const listing = yield* Effect.gen(function* () {
+      const connection = yield* GeminiConnection.Service
+      return yield* connection.listModels(acceptListing)
+    }).pipe(Effect.provide(makeConnectionLayer(makeConfiguration(endpoints), clientFactory)))
+
+    expect(pageTokens).toEqual([undefined, 'page-2', 'page-3'])
+    expect(listing.models).toEqual([
+      { name: 'models/first' },
+      { name: 'models/second' },
+      { name: 'models/third' },
+    ])
   }),
 )
 
@@ -285,7 +322,7 @@ it.effect(
 
           const listing = yield* Effect.gen(function* () {
             const connection = yield* GeminiConnection.Service
-            return yield* connection.listModels()
+            return yield* connection.listModels(acceptListing)
           }).pipe(Effect.provide(makeConnectionLayer(makeConfiguration(endpoints), clientFactory)))
 
           expect(invoked).toEqual([PRIMARY_URL, SECONDARY_URL, TERTIARY_URL])
@@ -313,7 +350,7 @@ it.effect('applies one Effect timeout to each complete endpoint attempt', () =>
 
     yield* Effect.gen(function* () {
       const connection = yield* GeminiConnection.Service
-      const listingFiber = yield* Effect.forkChild(connection.listModels())
+      const listingFiber = yield* Effect.forkChild(connection.listModels(acceptListing))
       const primarySignal = yield* Queue.take(started)
 
       expect(primarySignal.aborted).toBe(false)
@@ -385,7 +422,7 @@ it.effect('does not fail over for ordinary 4xx, cancellation, or internal errors
 
         const failure = yield* Effect.gen(function* () {
           const connection = yield* GeminiConnection.Service
-          return yield* connection.listModels().pipe(Effect.flip)
+          return yield* connection.listModels(acceptListing).pipe(Effect.flip)
         }).pipe(Effect.provide(makeConnectionLayer(makeConfiguration(endpoints), clientFactory)))
 
         expect(failure._tag).toBe(scenario.expectedTag)
@@ -431,7 +468,7 @@ it.effect('does not switch endpoints for malformed SDK pager data', () => {
 
         const failure = yield* Effect.gen(function* () {
           const connection = yield* GeminiConnection.Service
-          return yield* connection.listModels().pipe(Effect.flip)
+          return yield* connection.listModels(acceptListing).pipe(Effect.flip)
         }).pipe(Effect.provide(makeConnectionLayer(makeConfiguration(endpoints), clientFactory)))
 
         expect(failure._tag).toBe('AdapterProtocolDecodeError')
@@ -471,7 +508,7 @@ it.effect('discards partial pages and restarts pagination on the backup endpoint
 
     const listing = yield* Effect.gen(function* () {
       const connection = yield* GeminiConnection.Service
-      return yield* connection.listModels()
+      return yield* connection.listModels(acceptListing)
     }).pipe(Effect.provide(makeConnectionLayer(makeConfiguration(endpoints), clientFactory)))
 
     expect(listing.models).toEqual([
@@ -484,6 +521,44 @@ it.effect('discards partial pages and restarts pagination on the backup endpoint
       { baseUrl: SECONDARY_URL, pageToken: undefined },
       { baseUrl: SECONDARY_URL, pageToken: 'secondary-next-page' },
     ])
+  }),
+)
+
+it.effect('does not activate a failover endpoint until its complete listing is accepted', () =>
+  Effect.gen(function* () {
+    const created = yield* Ref.make<ReadonlyArray<Creation>>([])
+    const finalized = yield* Ref.make<ReadonlyArray<string>>([])
+    const invoked: Array<string> = []
+    const clientFactory = makeTrackedClientFactory(created, finalized, (baseUrl) => ({
+      listModels: () => {
+        invoked.push(baseUrl)
+        if (baseUrl === PRIMARY_URL && countOccurrences(invoked, PRIMARY_URL) === 1) {
+          return Promise.reject(new ApiError({ status: 503, message: SDK_ERROR_CANARY }))
+        }
+        return Promise.resolve(makePager(undefined, [{ name: 'models/accepted' }]))
+      },
+    }))
+
+    yield* Effect.gen(function* () {
+      const connection = yield* GeminiConnection.Service
+      const failure = yield* connection
+        .listModels(() =>
+          Effect.fail(
+            new AdapterProtocolDecodeError({
+              adapterId: connection.adapterId,
+              operation: 'discoverModels',
+              message: 'Gemini returned an invalid model discovery response',
+            }),
+          ),
+        )
+        .pipe(Effect.flip)
+
+      expect(failure._tag).toBe('AdapterProtocolDecodeError')
+      const listing = yield* connection.listModels(acceptListing)
+      expect(listing.models).toEqual([{ name: 'models/accepted' }])
+    }).pipe(Effect.provide(makeConnectionLayer(makeConfiguration(endpoints), clientFactory)))
+
+    expect(invoked).toEqual([PRIMARY_URL, SECONDARY_URL, PRIMARY_URL])
   }),
 )
 
@@ -501,12 +576,35 @@ it.effect('rejects cyclic pagination without switching endpoints', () =>
 
     const failure = yield* Effect.gen(function* () {
       const connection = yield* GeminiConnection.Service
-      return yield* connection.listModels().pipe(Effect.flip)
+      return yield* connection.listModels(acceptListing).pipe(Effect.flip)
     }).pipe(Effect.provide(makeConnectionLayer(makeConfiguration(endpoints), clientFactory)))
 
     expect(failure._tag).toBe('AdapterProtocolDecodeError')
     expect(failure.message).toBe('Gemini returned an invalid model discovery response')
     expect(invoked).toEqual([PRIMARY_URL, PRIMARY_URL])
+  }),
+)
+
+it.effect('rejects a listing that would require more than 100 pages', () =>
+  Effect.gen(function* () {
+    const created = yield* Ref.make<ReadonlyArray<Creation>>([])
+    const finalized = yield* Ref.make<ReadonlyArray<string>>([])
+    const invoked: Array<string> = []
+    const clientFactory = makeTrackedClientFactory(created, finalized, (baseUrl) => ({
+      listModels: () => {
+        invoked.push(baseUrl)
+        return Promise.resolve(makePager(`page-${invoked.length}`))
+      },
+    }))
+
+    const failure = yield* Effect.gen(function* () {
+      const connection = yield* GeminiConnection.Service
+      return yield* connection.listModels(acceptListing).pipe(Effect.flip)
+    }).pipe(Effect.provide(makeConnectionLayer(makeConfiguration(endpoints), clientFactory)))
+
+    expect(failure._tag).toBe('AdapterProtocolDecodeError')
+    expect(invoked).toHaveLength(100)
+    expect(invoked.every((baseUrl) => baseUrl === PRIMARY_URL)).toBe(true)
   }),
 )
 
@@ -527,7 +625,7 @@ it.effect('rejects an unbounded model listing without switching endpoints', () =
 
     const failure = yield* Effect.gen(function* () {
       const connection = yield* GeminiConnection.Service
-      return yield* connection.listModels().pipe(Effect.flip)
+      return yield* connection.listModels(acceptListing).pipe(Effect.flip)
     }).pipe(Effect.provide(makeConnectionLayer(makeConfiguration(endpoints), clientFactory)))
 
     expect(failure._tag).toBe('AdapterProtocolDecodeError')
@@ -552,8 +650,8 @@ it.effect('keeps the last successful endpoint sticky for later requests', () =>
 
     yield* Effect.gen(function* () {
       const connection = yield* GeminiConnection.Service
-      yield* connection.listModels()
-      yield* connection.listModels()
+      yield* connection.listModels(acceptListing)
+      yield* connection.listModels(acceptListing)
     }).pipe(Effect.provide(makeConnectionLayer(makeConfiguration(endpoints), clientFactory)))
 
     expect(invoked).toEqual([PRIMARY_URL, SECONDARY_URL, SECONDARY_URL])
@@ -574,7 +672,7 @@ it.effect('uses the endpoint from the last concurrently completed successful req
 
     yield* Effect.gen(function* () {
       const connection = yield* GeminiConnection.Service
-      const firstFiber = yield* Effect.forkChild(connection.listModels())
+      const firstFiber = yield* Effect.forkChild(connection.listModels(acceptListing))
       const firstPrimary = yield* Queue.take(pending)
       expect(firstPrimary.baseUrl).toBe(PRIMARY_URL)
       firstPrimary.reject(new ApiError({ status: 429, message: SDK_ERROR_CANARY }))
@@ -582,7 +680,7 @@ it.effect('uses the endpoint from the last concurrently completed successful req
       const firstSecondary = yield* Queue.take(pending)
       expect(firstSecondary.baseUrl).toBe(SECONDARY_URL)
 
-      const secondFiber = yield* Effect.forkChild(connection.listModels())
+      const secondFiber = yield* Effect.forkChild(connection.listModels(acceptListing))
       const secondPrimary = yield* Queue.take(pending)
       expect(secondPrimary.baseUrl).toBe(PRIMARY_URL)
       secondPrimary.reject(new ApiError({ status: 429, message: SDK_ERROR_CANARY }))
@@ -599,7 +697,7 @@ it.effect('uses the endpoint from the last concurrently completed successful req
       secondTertiary.resolve(makePager(undefined))
       yield* Fiber.join(secondFiber)
 
-      const laterFiber = yield* Effect.forkChild(connection.listModels())
+      const laterFiber = yield* Effect.forkChild(connection.listModels(acceptListing))
       const laterRequest = yield* Queue.take(pending)
       expect(laterRequest.baseUrl).toBe(TERTIARY_URL)
       laterRequest.resolve(makePager(undefined))
@@ -633,7 +731,7 @@ it.effect('tries every endpoint at most once and returns the last safe failure',
 
     const failure = yield* Effect.gen(function* () {
       const connection = yield* GeminiConnection.Service
-      return yield* connection.listModels().pipe(Effect.flip)
+      return yield* connection.listModels(acceptListing).pipe(Effect.flip)
     }).pipe(Effect.provide(makeConnectionLayer(makeConfiguration(endpoints), clientFactory)))
 
     expect(invoked).toEqual([PRIMARY_URL, SECONDARY_URL, TERTIARY_URL])
@@ -671,8 +769,8 @@ it.effect('close takes no id, is idempotent, and interrupts all in-flight reques
 
     yield* Effect.gen(function* () {
       const connection = yield* GeminiConnection.Service
-      const firstFiber = yield* Effect.forkChild(connection.listModels())
-      const secondFiber = yield* Effect.forkChild(connection.listModels())
+      const firstFiber = yield* Effect.forkChild(connection.listModels(acceptListing))
+      const secondFiber = yield* Effect.forkChild(connection.listModels(acceptListing))
       const firstSignal = yield* Queue.take(started)
       const secondSignal = yield* Queue.take(started)
 
@@ -685,7 +783,7 @@ it.effect('close takes no id, is idempotent, and interrupts all in-flight reques
       expect(secondSignal.aborted).toBe(true)
       expect(yield* connection.close()).toBe(false)
 
-      const closedFailure = yield* connection.listModels().pipe(Effect.flip)
+      const closedFailure = yield* connection.listModels(acceptListing).pipe(Effect.flip)
       expect(closedFailure._tag).toBe('AdapterConfigurationError')
       expect(closedFailure.adapterId).toBe(ADAPTER_ID)
       expect(closedFailure.message).toBe('Gemini connection is closed')
@@ -775,8 +873,8 @@ it.effect('closing the parent scope interrupts requests and releases every endpo
             parentScope,
           )
           const connection = Context.get(context, GeminiConnection.Service)
-          const firstFiber = yield* Effect.forkChild(connection.listModels())
-          const secondFiber = yield* Effect.forkChild(connection.listModels())
+          const firstFiber = yield* Effect.forkChild(connection.listModels(acceptListing))
+          const secondFiber = yield* Effect.forkChild(connection.listModels(acceptListing))
           const firstSignal = yield* Queue.take(started)
           const secondSignal = yield* Queue.take(started)
 
@@ -819,7 +917,7 @@ it.effect('does not expose API keys or provider error details on public surfaces
 
     const observed = yield* Effect.gen(function* () {
       const connection = yield* GeminiConnection.Service
-      const exit = yield* Effect.exit(connection.listModels())
+      const exit = yield* Effect.exit(connection.listModels(acceptListing))
       return { connection, exit }
     }).pipe(Effect.provide(makeConnectionLayer(makeConfiguration(endpoints), clientFactory)))
 

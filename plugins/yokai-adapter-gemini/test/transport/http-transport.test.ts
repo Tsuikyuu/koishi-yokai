@@ -18,6 +18,8 @@ import { GeminiHttpTransport } from '../../src/transport/http-transport'
 
 const API_KEY = 'gemini-http-transport-api-key-canary'
 
+const acceptListing = (listing: GeminiConnection.ModelListing) => Effect.succeed(listing)
+
 interface ListeningServer {
   readonly baseUrl: string
   readonly server: Server
@@ -364,7 +366,7 @@ it.live('aborts buffered bodies on adapter close without disposing shared ctx.ht
 
         return Effect.gen(function* () {
           const connection = yield* GeminiConnection.Service
-          const listingFiber = yield* Effect.forkChild(connection.listModels())
+          const listingFiber = yield* Effect.forkChild(connection.listModels(acceptListing))
           yield* Queue.take(bodyStarted)
 
           expect(yield* connection.close()).toBe(true)
