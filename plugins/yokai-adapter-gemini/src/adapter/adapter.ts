@@ -1,8 +1,6 @@
 import {
   AdapterDescriptor,
   CURRENT_ADAPTER_PROTOCOL_VERSION,
-  makeAdapterContinuationError,
-  type ContinueRequest,
   type YokaiAdapter,
 } from '@yokai/protocol'
 import { Context, Effect, Layer } from 'effect'
@@ -22,16 +20,14 @@ const make = Effect.fn('GeminiAdapter.make')(function* () {
   const descriptor = AdapterDescriptor.make({
     id: generation.adapterId,
     protocolVersion: CURRENT_ADAPTER_PROTOCOL_VERSION,
-    capabilities: { feedbackTools: false },
+    capabilities: { feedbackTools: true },
   })
 
   return Service.of({
     descriptor,
     discoverModels: discovery.discoverModels,
     generate: generation.generate,
-    continue: Effect.fn('GeminiAdapter.continue')(function* (_request: ContinueRequest) {
-      return yield* Effect.fail(makeAdapterContinuationError(generation.adapterId))
-    }),
+    continue: generation.continue,
   })
 })
 

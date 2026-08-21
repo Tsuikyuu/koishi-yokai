@@ -51,17 +51,20 @@ export interface ModelListing {
   readonly models: ReadonlyArray<Model>
 }
 
+export type GenerationOperation = 'continue' | 'generate'
+
 export interface Interface {
   readonly adapterId: AdapterId
   readonly discoveryRetry: DiscoveryRetryPolicy
   readonly listModels: <A>(
     accept: (listing: ModelListing) => Effect.Effect<A, AdapterInvocationError>,
   ) => Effect.Effect<A, AdapterInvocationError>
-  readonly generateContent: <A>(
+  readonly generateContent: <A, R>(
+    operation: GenerationOperation,
     modelId: AdapterModelId,
     params: GenerateContentParameters,
-    accept: (response: GenerateContentResponse) => Effect.Effect<A, AdapterInvocationError>,
-  ) => Effect.Effect<A, AdapterInvocationError>
+    accept: (response: GenerateContentResponse) => Effect.Effect<A, AdapterInvocationError, R>,
+  ) => Effect.Effect<A, AdapterInvocationError, R>
   readonly close: () => Effect.Effect<boolean>
 }
 
@@ -153,80 +156,113 @@ const closedConnectionError = (adapterId: AdapterId) =>
     message: 'Gemini connection is closed',
   })
 
-const generationAuthenticationError = (adapterId: AdapterId, modelId: AdapterModelId) =>
+const generationAuthenticationError = (
+  adapterId: AdapterId,
+  modelId: AdapterModelId,
+  operation: GenerationOperation,
+) =>
   new AdapterAuthenticationError({
     adapterId,
     modelId,
-    operation: 'generate',
+    operation,
     message: 'Gemini authentication failed',
   })
 
-const generationRateLimitError = (adapterId: AdapterId, modelId: AdapterModelId) =>
+const generationRateLimitError = (
+  adapterId: AdapterId,
+  modelId: AdapterModelId,
+  operation: GenerationOperation,
+) =>
   new AdapterRateLimitError({
     adapterId,
     modelId,
-    operation: 'generate',
+    operation,
     message: 'Gemini text generation was rate limited',
   })
 
-const generationTimeoutError = (adapterId: AdapterId, modelId: AdapterModelId) =>
+const generationTimeoutError = (
+  adapterId: AdapterId,
+  modelId: AdapterModelId,
+  operation: GenerationOperation,
+) =>
   new AdapterTimeoutError({
     adapterId,
     modelId,
-    operation: 'generate',
+    operation,
     message: 'Gemini text generation timed out',
   })
 
-const generationCancelledError = (adapterId: AdapterId, modelId: AdapterModelId) =>
+const generationCancelledError = (
+  adapterId: AdapterId,
+  modelId: AdapterModelId,
+  operation: GenerationOperation,
+) =>
   new AdapterCancelledError({
     adapterId,
     modelId,
-    operation: 'generate',
+    operation,
     message: 'Gemini text generation was cancelled',
   })
 
-const generationTransportError = (adapterId: AdapterId, modelId: AdapterModelId) =>
+const generationTransportError = (
+  adapterId: AdapterId,
+  modelId: AdapterModelId,
+  operation: GenerationOperation,
+) =>
   new AdapterTransportError({
     adapterId,
     modelId,
-    operation: 'generate',
+    operation,
     message: 'Unable to reach the Gemini generation service',
   })
 
 const generationProviderResponseError = (
   adapterId: AdapterId,
   modelId: AdapterModelId,
+  operation: GenerationOperation,
   statusCode: number,
 ) =>
   new AdapterProviderResponseError({
     adapterId,
     modelId,
-    operation: 'generate',
+    operation,
     message: 'Gemini rejected the generation request',
     statusCode,
   })
 
-const generationInternalError = (adapterId: AdapterId, modelId: AdapterModelId) =>
+const generationInternalError = (
+  adapterId: AdapterId,
+  modelId: AdapterModelId,
+  operation: GenerationOperation,
+) =>
   new AdapterInternalError({
     adapterId,
     modelId,
-    operation: 'generate',
+    operation,
     message: 'Gemini text generation failed',
   })
 
-const generationProtocolDecodeError = (adapterId: AdapterId, modelId: AdapterModelId) =>
+const generationProtocolDecodeError = (
+  adapterId: AdapterId,
+  modelId: AdapterModelId,
+  operation: GenerationOperation,
+) =>
   new AdapterProtocolDecodeError({
     adapterId,
     modelId,
-    operation: 'generate',
+    operation,
     message: 'Gemini returned an invalid generation response',
   })
 
-const generationClosedConnectionError = (adapterId: AdapterId, modelId: AdapterModelId) =>
+const generationClosedConnectionError = (
+  adapterId: AdapterId,
+  modelId: AdapterModelId,
+  operation: GenerationOperation,
+) =>
   new AdapterConfigurationError({
     adapterId,
     modelId,
-    operation: 'generate',
+    operation,
     message: 'Gemini connection is closed',
   })
 
@@ -252,20 +288,21 @@ const classifyApiError = (adapterId: AdapterId, error: ApiError): AdapterInvocat
 const classifyGenerationApiError = (
   adapterId: AdapterId,
   modelId: AdapterModelId,
+  operation: GenerationOperation,
   error: ApiError,
 ): AdapterInvocationError => {
   if (error.status === 401 || error.status === 403) {
-    return generationAuthenticationError(adapterId, modelId)
+    return generationAuthenticationError(adapterId, modelId, operation)
   }
   if (error.status === 408 || error.status === 504) {
-    return generationTimeoutError(adapterId, modelId)
+    return generationTimeoutError(adapterId, modelId, operation)
   }
-  if (error.status === 499) return generationCancelledError(adapterId, modelId)
-  if (error.status === 429) return generationRateLimitError(adapterId, modelId)
+  if (error.status === 499) return generationCancelledError(adapterId, modelId, operation)
+  if (error.status === 429) return generationRateLimitError(adapterId, modelId, operation)
   if (Number.isInteger(error.status) && error.status >= 100 && error.status <= 599) {
-    return generationProviderResponseError(adapterId, modelId, error.status)
+    return generationProviderResponseError(adapterId, modelId, operation, error.status)
   }
-  return generationInternalError(adapterId, modelId)
+  return generationInternalError(adapterId, modelId, operation)
 }
 
 const isSwitchableError = (error: AdapterInvocationError): boolean => {
@@ -436,6 +473,7 @@ const makeConnection = Effect.fn('GeminiConnection.makeConnection')(function* (
 
   const invokeGeneration = Effect.fn('GeminiConnection.invokeGeneration')(function* (
     client: GeminiClientFactory.Client,
+    operation: GenerationOperation,
     modelId: AdapterModelId,
     params: GenerateContentParameters,
   ) {
@@ -443,29 +481,29 @@ const makeConnection = Effect.fn('GeminiConnection.makeConnection')(function* (
       try: (signal) => client.generateContent(params, signal),
       catch: (cause) => {
         if (cause instanceof ApiError) {
-          return classifyGenerationApiError(configuration.adapterId, modelId, cause)
+          return classifyGenerationApiError(configuration.adapterId, modelId, operation, cause)
         }
         if (cause instanceof GeminiHttpTransport.TimeoutError) {
-          return generationTimeoutError(configuration.adapterId, modelId)
+          return generationTimeoutError(configuration.adapterId, modelId, operation)
         }
         if (cause instanceof GeminiHttpTransport.TransportError) {
-          return generationTransportError(configuration.adapterId, modelId)
+          return generationTransportError(configuration.adapterId, modelId, operation)
         }
         if (cause instanceof Error && cause.name === 'AbortError') {
-          return generationTimeoutError(configuration.adapterId, modelId)
+          return generationTimeoutError(configuration.adapterId, modelId, operation)
         }
         if (cause instanceof Error && cause.name === 'TimeoutError') {
-          return generationTimeoutError(configuration.adapterId, modelId)
+          return generationTimeoutError(configuration.adapterId, modelId, operation)
         }
         if (cause instanceof SyntaxError) {
-          return generationProtocolDecodeError(configuration.adapterId, modelId)
+          return generationProtocolDecodeError(configuration.adapterId, modelId, operation)
         }
         if (cause instanceof TypeError) {
           return isFetchTransportError(cause)
-            ? generationTransportError(configuration.adapterId, modelId)
-            : generationProtocolDecodeError(configuration.adapterId, modelId)
+            ? generationTransportError(configuration.adapterId, modelId, operation)
+            : generationProtocolDecodeError(configuration.adapterId, modelId, operation)
         }
-        return generationInternalError(configuration.adapterId, modelId)
+        return generationInternalError(configuration.adapterId, modelId, operation)
       },
     })
 
@@ -520,43 +558,44 @@ const makeConnection = Effect.fn('GeminiConnection.makeConnection')(function* (
     return yield* attempt(orderedClients(currentClients.value, current.value))
   })
 
-  const generateContent = Effect.fn('GeminiConnection.generateContent')(function* <A>(
+  const generateContent = Effect.fn('GeminiConnection.generateContent')(function* <A, R>(
+    operation: GenerationOperation,
     modelId: AdapterModelId,
     params: GenerateContentParameters,
-    accept: (response: GenerateContentResponse) => Effect.Effect<A, AdapterInvocationError>,
+    accept: (response: GenerateContentResponse) => Effect.Effect<A, AdapterInvocationError, R>,
   ) {
     const attempt: (
       remaining: ReadonlyArray<ClientEntry>,
-    ) => Effect.Effect<A, AdapterInvocationError> = Effect.fn('GeminiConnection.generateAttempt')(
-      function* (remaining: ReadonlyArray<ClientEntry>) {
-        const entry = remaining[0]
-        if (entry === undefined) return yield* Effect.die('Expected at least one Gemini endpoint')
+    ) => Effect.Effect<A, AdapterInvocationError, R> = Effect.fn(
+      'GeminiConnection.generateAttempt',
+    )(function* (remaining: ReadonlyArray<ClientEntry>) {
+      const entry = remaining[0]
+      if (entry === undefined) return yield* Effect.die('Expected at least one Gemini endpoint')
 
-        return yield* invokeGeneration(entry.client, modelId, params).pipe(
-          Effect.flatMap(accept),
-          Effect.timeout(configuration.requestTimeoutMs),
-          Effect.mapError((error) =>
-            Cause.isTimeoutError(error)
-              ? generationTimeoutError(configuration.adapterId, modelId)
-              : error,
-          ),
-          Effect.matchEffect({
-            onFailure: (error) => {
-              const rest = remaining.slice(1)
-              return isSwitchableError(error) && rest.length > 0
-                ? attempt(rest)
-                : Effect.fail(error)
-            },
-            onSuccess: (value) => activateIfOpen(entry.index).pipe(Effect.as(value)),
-          }),
-        )
-      },
-    )
+      return yield* invokeGeneration(entry.client, operation, modelId, params).pipe(
+        Effect.flatMap(accept),
+        Effect.timeout(configuration.requestTimeoutMs),
+        Effect.mapError((error) =>
+          Cause.isTimeoutError(error)
+            ? generationTimeoutError(configuration.adapterId, modelId, operation)
+            : error,
+        ),
+        Effect.matchEffect({
+          onFailure: (error) => {
+            const rest = remaining.slice(1)
+            return isSwitchableError(error) && rest.length > 0 ? attempt(rest) : Effect.fail(error)
+          },
+          onSuccess: (value) => activateIfOpen(entry.index).pipe(Effect.as(value)),
+        }),
+      )
+    })
 
     const currentClients = yield* Ref.get(clientsRef)
     const current = yield* SynchronizedRef.get(activeEndpoint)
     if (Option.isNone(currentClients) || Option.isNone(current)) {
-      return yield* Effect.fail(generationClosedConnectionError(configuration.adapterId, modelId))
+      return yield* Effect.fail(
+        generationClosedConnectionError(configuration.adapterId, modelId, operation),
+      )
     }
     return yield* attempt(orderedClients(currentClients.value, current.value))
   })
