@@ -473,7 +473,7 @@ Yokai 内置工具不提供高危写操作。第三方工具的授权、副作�
 - 把统一生成请求转换为 Gemini Developer API 请求；
 - 通过单一逻辑连接的活动端点自动发现可用模型，并暴露统一模型描述；
 - 声明 adapter 是否实现通用 FeedbackTool 传输契约；
-- 处理流式输出、超时、取消、限流和同模型端点故障转移；只对非消息后台发现执行有界重试；
+- 处理完整响应、超时、取消、限流和同模型端点故障转移；只对非消息后台发现执行有界重试；
 - 返回统一结果、用量和错误类型；
 - 对日志中的密钥和内容脱敏。
 
@@ -484,8 +484,38 @@ Gemini adapter 以 Google 官方 [`@google/genai`](https://googleapis.github.io/
 出现在 adapter 包内；其异步接口在边界转换为 Effect，所有返回数据解码为通用协议，不得把 SDK 类型泄漏到
 `@yokai/protocol`。MVP 不使用已停止维护的 `@google/generativeai`。
 
+Gemini 的唯一网络出口是当前插件 Koishi Context 上的 `ctx.http`。adapter 内部定义一个只暴露 fetch
+implementation 的窄 Effect service；`apply(ctx, config)` 只把 `ctx.http` 转成该 service 的 Live Layer，
+不把完整 Koishi `Context` 传入连接或协议层。每个 `GoogleGenAI` 在 Layer 作用域内构造时接收该插件实例专属的
+fetch implementation。不得替换 `globalThis.fetch`、设置进程级 Undici dispatcher、自建另一套代理配置，
+或创建任何绕过 `ctx.http` 的 Gemini HTTP client。
+
+注入 fetch 把 SDK 的 method、headers、body、signal、redirect 和 keepalive 映射到 `ctx.http`，使请求经过
+`http/config`、context intercept、默认 headers、keep-alive、`http/fetch-init` 和 proxy-agent。SDK 生成的
+Headers 先规范化为普通 entries；绝对 endpoint、认证、Content-Type 等单次请求字段在冲突时优先。bridge 对所有 HTTP status 使用通过策略，
+并在 `ctx.http` response decoder 内完整读完 body、重建标准 `Response` 后再交给 SDK；这样非 `2xx` 仍由 SDK
+解码为 `ApiError`，同时 Koishi 的 timeout、取消和 dispose 覆盖整个响应体读取，而不是只覆盖响应头。
+
+SDK 的内建 timeout 和 retry 均关闭。顶层 `requestTimeoutMs` 由 Effect 对每个 endpoint 尝试施加硬截止，
+并通过 `AbortSignal` 贯穿 SDK、注入 fetch 与 `ctx.http`；Koishi HTTP 自身的全局 timeout 同时保留，较早到达的
+截止时间终止请求。SDK 或 Koishi transport 失败在 adapter 边界翻译为类型化错误，caller interruption 与 Layer
+关闭保持 Effect interruption。adapter scope 只清理自己的 fiber、client 引用和密钥，不 dispose 共享的
+`ctx.http` 服务。
+
+Koishi `ETIMEDOUT` 映射为 adapter timeout，其他代理、请求或完整 body 读取失败映射为 transport error；
+非 `2xx` 继续走 SDK status/error 解码，成功 status 下的畸形供应商 payload 映射为 protocol decode error。
+任何映射后的错误都不能携带原始 URL、headers、body、API key 或底层 cause。
+
+用于公开发布的精确 SDK 依赖必须暴露实例级 fetch 注入口。优先采用包含该能力的上游 `@google/genai` v2；
+在上游尚未提供时，只允许使用保持 SDK wire/解析语义不变的最小、可审计 scoped fork/npm alias。仓库根级
+Yarn patch 可以验证设计，但不能作为正式交付，因为插件使用者不会可靠继承该补丁。
+
 adapter 不依赖 SDK 的高层自动工具循环，而是显式关闭 automatic function calling，读取原始函数调用部件，
 由 Yokai 主体执行工具并且只续接一次。
+
+Yokai 的生成传输固定为 non-streaming unary：Gemini adapter 只调用 `ai.models.generateContent`，等待完整响应，
+不调用 `generateContentStream`、不发送 `alt=sse`，也不请求、解析或消费 SSE。公共协议不暴露 chunk，主体只会
+收到完整的 FinalTextResult 或 ToolCallBatch。
 
 首次生成可以接收通用 FeedbackTool 声明，adapter 把它们编译为 v2 的原生 function declarations，再把厂商调用解码为
 通用调用数据和短生命周期、不透明的 continuation handle。主体只能把 handle 与一批通用 ToolResult 交回创建它的同一 adapter；
@@ -499,7 +529,8 @@ adapter 在启动、端点配置更新或手动刷新时调用 Gemini
 [`models.list`](https://ai.google.dev/api/models)，读完所有分页，只将声明 `generateContent` 的模型暴露为文本候选。
 一次发现只发布首个完整成功端点的一份快照，不合并多个端点的结果；分页中途切换端点时必须丢弃
 已经读取的页面并从第一页重新开始。自动发现只回答“有哪些模型”，不探测模型是否支持函数调用、
-流式传输或其他可选能力。
+多模态或其他可选能力。供应商返回的 generation methods 只是 opaque metadata；即使包含流式方法名，Yokai
+也不会调用它。
 
 能力是否启用由使用者显式配置，不由 Yokai 猜测。主插件为当前协议会改变编排行为的能力提供开关；
 MVP 只有 `feedbackToolsEnabled`，默认关闭。关闭时主体不向任何模型暴露 FeedbackTool，只运行
@@ -523,9 +554,8 @@ Gemini 单例配置一份非空、有序的 `endpoints`；每项严格只有 `ba
 以外的普通 `4xx`、协议解码、能力不支持和内容/安全错误不切换端点。模型发现拒绝畸形分页、重复 page token、
 超过 100 页或累计超过 10,000 个模型的响应；这些都作为不可切换的协议解码错误结束本次逻辑调用。
 
-流式生成只能在收到首个 chunk 之前切换端点；收到首个 chunk 后发生的错误直接结束调用，不能在另一端点
-重放完整请求。非流式请求在客户端超时后可能已经被原端点接受或完成，因此超时切换可能造成重复生成和重复计费；
-控制面必须记录端点尝试数并向管理员说明这一风险。
+生成只使用完整的 unary 响应。请求在超时或可切换传输失败后尝试下一端点时，原端点可能已经接受或完成请求，
+因此仍可能造成重复生成和重复计费；控制面必须记录端点尝试数并向管理员说明这一风险。
 
 adapter-local model ID 就是规范化后的 `providerModelId`，完整模型引用为 `<adapterId>/<providerModelId>`。
 同一供应商模型经多个端点可见时仍是一个模型，不因端点重复、不带传输源前缀，也不产生端点显示名。主插件把
@@ -973,11 +1003,14 @@ Yokai 将这些模式统一成 `ResponseMechanism + WakeProposal + WakeArbiter`�
 - 熟人和陌生人使用不同但稳定的表达；
 - 记忆模糊时降低断言强度，不发起追问；
 - Gemini adapter 能分页发现当前逻辑连接可用的所有文本生成模型，且发现失败不进入群聊；
+- Gemini SDK 的每个实例只使用注入的 `ctx.http` fetch；全局 HTTP headers、intercept 和 proxy hook 可观测，
+  两个 Koishi Context 并发时配置不串线，`globalThis.fetch` 与进程级 dispatcher 保持未修改；
 - 多组 URL/key 只形成一个有序端点列表；同一 `providerModelId` 只产生一个无端点前缀的模型项；
 - 分页发现切换端点时丢弃部分结果并从第一页重启，只发布首个完整成功端点的一份快照；
 - 可切换错误按活动端点起始的循环配置顺序有界尝试；只有完整成功的逻辑调用才更新粘性活动端点，
   并发成功调用以最后完成者为准；取消、普通 `4xx` 及协议、能力、内容错误不切换，全部耗尽返回最后错误；
-- 流式生成收到首个 chunk 后不再切换端点；非流式超时切换的重复生成与重复计费风险进入控制面说明；
+- 生成只调用 unary `generateContent`，不调用 `generateContentStream`、不发送 `alt=sse`、不消费 SSE；
+  超时切换的重复生成与重复计费风险进入控制面说明；
 - adapter 模型快照变化后主插件配置的 primary/fallback 选项实时更新，无需重载主插件；
 - `feedbackToolsEnabled` 关闭时所有模型都只走 single-pass；开启后不做能力探测，运行时不支持则本回合沉默；
 - 已选模型暂时离线时配置值保留且角色回合停止，模型恢复后自动继续；
@@ -993,7 +1026,8 @@ Yokai 将这些模式统一成 `ResponseMechanism + WakeProposal + WakeArbiter`�
 第一阶段只实现文本群聊：
 
 1. `@yokai/koishi-plugin-yokai` 和 `adapter-gemini` 两个公开插件；Gemini adapter 使用 `@google/genai` v2，
-   一个单例以有序 URL/key 端点支撑单一逻辑连接，并自动发现一份无端点前缀的模型目录。
+   每个 SDK 实例注入由 `ctx.http` 支撑的 fetch，只调用 unary API；一个单例以有序 URL/key 端点支撑单一
+   逻辑连接，并自动发现一份无端点前缀的模型目录。
 2. `ctx.yokai` 能力注册表、生命周期快照和唤醒仲裁器。
 3. 结构化人格、严格角色内表达和预设文件热更新。
 4. 默认保留 90 天且可配置的原始群聊存档、环形缓冲和无远程模型参与的活跃度门控。
@@ -1029,15 +1063,18 @@ adapter 发布。MVP 暂不实现语音、图片生成、浏览器、代码工�
 12. 定时写行为通过 XML `schedule` ActionTool 和 scheduled WakeProposal 实现；查询使用只读 FeedbackTool。
 13. 角色预设使用不可变版本快照原子热更新，不停机且不修改进行中的回合。
 14. 以匿名记录盲测中的不可区分性作为唯一顶层指标，其余指标都是诊断手段。
-15. Gemini adapter 使用官方 `@google/genai`；SDK 类型不跨边界，自动函数调用关闭，FeedbackTool
-    由主体执行，adapter 只传输通用调用与结果。其有序 URL/key 端点共享配置、只做同模型传输容灾，
-    不形成独立模型身份，也不替代主插件 model fallback。
-16. 模型选择和协议能力开关属于主插件配置，通过 Koishi dynamic Schema 实时投影 adapter 模型目录；
+15. Gemini adapter 使用官方 `@google/genai` v2 API；每个 SDK 实例注入由当前 `ctx.http` 支撑的 fetch，
+    不修改全局 fetch/dispatcher，不另设代理。上游未提供注入口时，正式包使用精确发布的最小兼容 fork，
+    不依赖仓库根级 patch。
+16. Yokai 的 LLM 生成只接受完整 unary 响应，不调用供应商 streaming API，不请求、解析或消费 SSE。
+    SDK 类型不跨边界，自动函数调用关闭，FeedbackTool 由主体执行，adapter 只传输通用调用与结果。
+    Gemini 的有序 URL/key 端点共享配置、只做同模型传输容灾，不形成独立模型身份，也不替代主插件 model fallback。
+17. 模型选择和协议能力开关属于主插件配置，通过 Koishi dynamic Schema 实时投影 adapter 模型目录；
     adapter 不持有当前模型选择，主体不探测逐模型能力。
-17. Yokai 不是通用 Agent；single-pass 回合一次逻辑生成，bounded-feedback 回合最多两次逻辑生成且只有
+18. Yokai 不是通用 Agent；single-pass 回合一次逻辑生成，bounded-feedback 回合最多两次逻辑生成且只有
     一轮工具反馈，不形成开放式观察—续轮循环。
-18. 只有 ActionTool 使用 XML 且不回显；需要结果参与回答的历史、搜索和计算使用 FeedbackTool。
-19. 实现当前协议的新增 LLM adapter 只能新增自己的插件包；主体及其他既有包零修改，兼容性由
+19. 只有 ActionTool 使用 XML 且不回显；需要结果参与回答的历史、搜索和计算使用 FeedbackTool。
+20. 实现当前协议的新增 LLM adapter 只能新增自己的插件包；主体及其他既有包零修改，兼容性由
     仓库外 adapter 门禁验证，而不是依赖第二个正式 adapter。
-20. 原始消息默认保留 90 天且可配置；不实现撤回同步、消息级删除或手动删除流程。长期记忆只由
+21. 原始消息默认保留 90 天且可配置；不实现撤回同步、消息级删除或手动删除流程。长期记忆只由
     回复成功后的 `notebook.write` ActionTool 选择性写入，写入结果不回灌模型。

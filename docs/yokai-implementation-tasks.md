@@ -6,7 +6,7 @@
 
 首发 adapter：`@yokai/koishi-plugin-yokai-adapter-gemini`
 
-Gemini 客户端：Google 官方 `@google/genai` v2
+Gemini 客户端：Google 官方 `@google/genai` v2 API，以实例级 fetch 注入接入 Koishi HTTP
 
 ## 1. 拆分原则
 
@@ -15,7 +15,7 @@ Gemini 客户端：Google 官方 `@google/genai` v2
 - 除端到端任务外，验收不依赖真实 Gemini 账号或真实群聊，使用可控的 Layer、HTTP 模拟和 Koishi 测试实例。
 - 所有任务都必须通过 `yarn build` 和 `yarn lint`；时间相关测试使用 `TestClock`，不等待真实时间。
 - 应用逻辑使用 Effect，`Effect.run*` 只能出现在 Koishi 边界和测试基础设施。
-- `@google/genai` 只存在于 Gemini adapter 工作区，锁定稳定 2.x 精确版本；所有 SDK Promise、流和错误都在 adapter 边界转换为 Effect 和 `@yokai/protocol` 类型。
+- `@google/genai` 只存在于 Gemini adapter 工作区，锁定稳定 2.x 精确版本；所有 SDK Promise、完整响应和错误都在 adapter 边界转换为 Effect 和 `@yokai/protocol` 类型。
 - 模型选择只存在主插件配置；adapter 仅发布模型快照，不保存 primary 或 fallback。
 - 模型自动发现不承担能力探测；MVP 的 `feedbackToolsEnabled` 由使用者在主插件显式配置。
 - Yokai 是角色扮演仿生人群友，不实现通用 Agent 规划—工具—观察循环；single-pass 回合一次逻辑生成，
@@ -35,7 +35,7 @@ Gemini 客户端：Google 官方 `@google/genai` v2
 
 - 每个工作区可独立类型检查，根工作区能构建全部包。
 - 每个导入 Effect 的工作区都精确声明 `effect@4.0.0-rc.110`。
-- Gemini adapter 将官方 `@google/genai` 锁定为稳定 2.x 精确版本，并声明 `node >= 20` 运行时基线；其他工作区不引入该 SDK。
+- Gemini adapter 将官方 `@google/genai` 锁定为稳定 2.x 精确版本，并声明 `node >= 20` 运行时基线；其他工作区不引入该 SDK。实际发布依赖必须包含实例级 fetch 注入口，不能只依赖消费者无法继承的仓库根级补丁。
 - 包名、依赖方向和输出目录符合设计文档，没有 Koishi 依赖泄漏到内部包。
 
 ### YK-002 通用 adapter 协议
@@ -82,7 +82,9 @@ Gemini 客户端：Google 官方 `@google/genai` v2
 
 交付：创建单例 `@yokai/koishi-plugin-yokai-adapter-gemini`，引入官方 `@google/genai` v2，将一份非空、
 有序的 `endpoints`（每项仅含 `baseUrl` 和 `apiKey`），以及顶层共享的 `requestTimeoutMs` 和仅用于后台
-发现的 `discoveryRetry`，从 Koishi 配置转换为单一逻辑连接的显式 Effect 服务，并提供可由后续注册表持有的 adapter Layer。
+发现的 `discoveryRetry`，从 Koishi 配置转换为单一逻辑连接的显式 Effect 服务。Koishi `apply` 边界把
+当前插件上下文的 `ctx.http` 转换为 adapter-private HTTP transport Layer，并在构造每个 `GoogleGenAI`
+实例时注入该实例专属的 fetch implementation；最终提供可由后续注册表持有的 adapter Layer。
 
 验收：
 
@@ -95,9 +97,22 @@ Gemini 客户端：Google 官方 `@google/genai` v2
 - 所有 endpoint 客户端归同一个 adapter Layer 作用域管理；逻辑连接的活动端点初始为配置第一项，只有
   完整成功的逻辑调用才更新活动端点，并发成功调用以最后完成者为准。
 - API key 在 Schema、错误、日志和测试快照中均不以明文出现。
-- `GoogleGenAI` 客户端只在 Layer 作用域内构造，SDK 类型不出现于 `@yokai/protocol` 公开声明。
+- `GoogleGenAI` 客户端只在 Layer 作用域内构造；ClientFactory 只依赖窄 HTTP transport 服务，不持有完整
+  Koishi `Context`，SDK 和 Koishi 类型均不出现于 `@yokai/protocol` 公开声明。
+- 每个 SDK client 只使用自己的注入 fetch；不得替换 `globalThis.fetch`、设置进程级 dispatcher、自建第二套
+  代理配置或直接创建绕过 `ctx.http` 的网络客户端。两个 Koishi Context 并发时 HTTP 配置不得串线。
+- 注入 fetch 必须通过 `ctx.http` 解析 `http/config`、context intercept、默认 headers、keep-alive 和
+  `http/fetch-init`/proxy-agent。SDK 给出的绝对 endpoint、认证、Content-Type 和其他单次请求字段冲突时优先。
+- fetch bridge 把 SDK Headers 规范化为普通 entries，转发 method、body、signal、redirect 和 keepalive，对所有
+  HTTP status 保留原始 status/statusText/headers，并在 `ctx.http` decoder 内完整读完 unary body 后重建标准
+  `Response`；非 `2xx` 仍由 SDK 转换为 `ApiError`，不能在 body 消费前让 `ctx.http` 提前撤销 timeout 或 dispose 管理。
+- SDK 的内建 timeout 和 retry 均保持关闭。`requestTimeoutMs` 由 Effect 对每个 endpoint 尝试施加硬截止并
+  通过 AbortSignal 传播到 SDK、注入 fetch 和 `ctx.http`；Koishi HTTP 自身的全局 timeout 仍生效，较早者终止请求。
+- 若当前官方精确版本没有实例级 fetch 注入口，开发期补丁只能用于验证；公开包必须依赖包含该最小注入口的
+  上游精确版本或已发布的可审计 scoped fork/npm alias，不能要求使用者复现仓库根级 Yarn patch。
 - SDK Promise 通过 `Effect.tryPromise` 调用，SDK 异常在服务边界翻译为类型化 adapter 错误。
-- adapter Layer 的作用域关闭后，进行中请求被中断且 HTTP 资源被释放。
+- adapter Layer 的作用域关闭后，进行中的 header 或 body 读取均被中断，client 引用和密钥被释放；共享的
+  `ctx.http` 服务仍归 Koishi Context 所有，adapter 不主动 dispose 它。
 
 ### YK-005 Gemini 可用模型自动发现
 
@@ -130,15 +145,15 @@ Gemini 客户端：Google 官方 `@google/genai` v2
 
 前置：YK-002、YK-004、YK-005。
 
-交付：将统一 system/对话请求、生成参数和中止信号转换为一次同模型逻辑生成；每个 endpoint 尝试调用
-`ai.models.generateContent` 或 `generateContentStream`，将首个成功端点的候选文本、停止原因和 token 用量
-转回通用结果。流式输出只用于传输与统计，主体收到完整 XML 文本后才解析和发送。
+交付：将统一 system/对话请求、生成参数和中止信号转换为一次同模型逻辑生成；每个 endpoint 只调用
+`ai.models.generateContent`，等待完整响应后将首个成功端点的候选文本、停止原因和 token 用量转回通用结果。
+Yokai 不调用 `generateContentStream`，不发送 `alt=sse`，也不请求、解析或消费任何 SSE。
 
 验收：
 
 - HTTP 黄金测试覆盖 system instruction、多轮角色映射、参数和模型 ID。
-- 流式分块可按顺序合并为与非流式一致的最终结果，不会边生成边向群聊发送；只有首个 chunk 到达前
-  才允许因可切换错误尝试下一 endpoint，首个 chunk 后失败直接结束且不重放请求。
+- HTTP stub 断言每次物理尝试只调用 unary `generateContent`，`generateContentStream` 调用数为 `0`，请求 URL
+  不含 `alt=sse`，响应必须完整读完并解码后才能形成 adapter 结果。
 - 空 candidate、安全拦截、非 2xx 和畸形 JSON 都转换为类型化失败。
 - 取消 `AbortSignal` 会中断底层 HTTP 请求，不留下后台 fiber。
 - 未经主体调用时，adapter 不读写任何人格、历史、记忆或 Koishi Session。
@@ -159,7 +174,7 @@ Gemini 客户端：Google 官方 `@google/genai` v2
 - ToolResult 与规范化 call ID 一一对应并编码为原调用的 function response；最终调用使用同一模型、完整调用历史和 `FunctionCallingConfigMode.NONE`。
 - 带 `thoughtSignature` 的模拟响应中全部 Part 通过 continuation handle 原样回传，不由主体重建。
 - continuation handle 成功消费、超时、取消或 adapter scope 关闭后立即失效，重复消费产生类型化错误。
-- 最终文本中的 XML、转义字符和流分块可无损合并；最终仍返回 FunctionCall 时产生类型化协议失败。
+- 最终完整响应中的 XML 和转义字符可无损保留；最终仍返回 FunctionCall 时产生类型化协议失败。
 - adapter 公开协议中不出现 Gemini FunctionCall/FunctionResponse 类型。
 - 完成本任务后 Gemini adapter 声明已实现通用 FeedbackTool 传输契约；该声明与逐模型能力无关。
 
@@ -167,9 +182,9 @@ Gemini 客户端：Google 官方 `@google/genai` v2
 
 前置：YK-006、YK-007。
 
-交付：关闭 `@google/genai` 内建重试，以 Effect 实现单次逻辑调用内的有序 endpoint 故障转移，为每个
-endpoint 尝试应用顶层共享硬超时，并为后台模型发现加入顶层共享的有界退避；分别记录逻辑生成数、
-物理 endpoint 尝试数、用量、耗时和安全日志。
+交付：保持 `@google/genai` 内建 retry 和 timeout 关闭，以 Effect 实现单次逻辑调用内的有序 endpoint
+故障转移，为每个 endpoint 尝试应用顶层共享硬超时，并为后台模型发现加入顶层共享的有界退避；
+`ctx.http` 的全局网络配置独立生效。分别记录逻辑生成数、物理 endpoint 尝试数、用量、耗时和安全日志。
 
 验收：
 
@@ -179,10 +194,12 @@ endpoint 尝试应用顶层共享硬超时，并为后台模型发现加入顶�
   全部耗尽时返回最后错误。
 - `401/403`、`402/429`、`408/504`、顶层 `requestTimeoutMs` 超时、传输错误和其他 `5xx` 切换下一
   endpoint；调用方取消、其余普通 `4xx`、协议解码、能力不支持以及内容/安全错误不切换。
+- Koishi `ETIMEDOUT`、其他代理/请求/body 读取失败、SDK 非 `2xx` 以及成功 status 下的畸形 payload 分别稳定映射为
+  timeout、transport、对应 provider error 和 protocol decode；调用方取消与 Layer dispose 保持 Effect interruption。
 - 一次发现先完成上述有界 endpoint 尝试；只有后台发现对最终 `429` 和指定 `5xx` 按 `discoveryRetry`
   退避后发起新的逻辑发现调用。认证错误、协议错误和取消不进入后台重试，生成也不安装自动重试。
-- 流式生成收到首个 chunk 后不再切换；非流式生成超时切换可能使原请求与后续请求都被计费，文档、
-  日志指标和测试均明确这一不可消除的风险。
+- 生成只使用完整的 unary 响应；超时或可切换传输失败后尝试下一 endpoint 时，原请求可能已经被接受或完成，
+  文档、日志指标和测试必须明确重复生成与重复计费这一不可消除的风险。
 - 断言每次 adapter `generate/continue` 只有一次同模型逻辑生成，底层 HTTP 尝试数不超过 endpoint 数；
   single-pass 回合逻辑生成总数为 `1`，bounded-feedback 为 `2`，永不产生第三次逻辑生成。
 - endpoint 耗尽后不级联到主插件 model fallback，并保持群聊沉默。

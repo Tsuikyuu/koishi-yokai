@@ -13,13 +13,18 @@
 它不是通用 LLM SDK，也不是 Agent 运行时。协议刻意不包含：
 
 - 任意 `providerOptions`、厂商枚举、SDK 类型、HTTP 请求或响应对象；
-- 流式事件、多模态内容、结构化 JSON 输出、内建工具执行器；
+- SSE 或其他流式生成事件、多模态内容、结构化 JSON 输出、内建工具执行器；
 - 主体级自动重试、模型 fallback、跨 adapter/跨模型凭据轮转或开放式工具循环；
 - Koishi `Context`、`Session`、`Disposable` 或配置类型。
 
 厂商认证、客户端、连接池、采样细节和 wire format 全部留在 adapter 插件内部。adapter 可以在一次
 逻辑调用内对同一模型执行私有、有界的等价端点尝试；端点配置、选择和物理尝试次数不进入协议，
 也不能借此改变模型或增加主体生成步骤。主体只依赖本协议。
+
+`generate/continue` 始终等待供应商的一次完整响应，再原子地返回最终文本或 ToolCallBatch。当前协议的
+adapter 不调用供应商流式生成端点、不请求或消费 SSE，也不把分块暴露给主体。模型发现保留的
+`supportedGenerationMethods` 只是供应商 opaque metadata；其中即使出现流式方法名，也不授权主体或
+adapter 调用该方法。
 
 ## 2. Adapter 形状
 

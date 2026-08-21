@@ -6,6 +6,14 @@ The plugin owns one Gemini adapter and one logical Gemini connection. An ordered
 endpoint list supplies equivalent transports for that connection; endpoints are
 not separate model sources or selectable accounts.
 
+Every `GoogleGenAI` client receives an instance-local fetch implementation backed
+by this plugin context's `ctx.http`. Gemini requests therefore follow Koishi HTTP
+configuration, context interceptors, headers, keep-alive settings, proxy hooks,
+and lifecycle without replacing `globalThis.fetch` or a process-wide dispatcher.
+The adapter has no separate proxy configuration. Generation is unary: Yokai calls
+`generateContent`, waits for the complete response, and never requests or consumes
+SSE.
+
 ```yaml
 endpoints:
   - baseUrl: https://generativelanguage.googleapis.com/
@@ -46,10 +54,8 @@ discarded, and the next endpoint restarts at page one. The active endpoint is
 updated only after every page from one endpoint succeeds, and only that complete
 snapshot is published. Malformed pages, repeated page tokens, more than 100
 pages, or more than 10,000 models are protocol failures and do not switch
-endpoints. Streaming generation may switch only before its first chunk; after
-that chunk, a failure is returned directly.
-A timed-out non-streaming request may still finish remotely, so switching to
-another endpoint can cause duplicate billing.
+endpoints. A timed-out generation request may still finish remotely, so switching
+to another endpoint can cause duplicate generation and billing.
 
 Models are identified only by their normalized provider model ID. The same
 model exposed through several endpoints remains one model and receives no

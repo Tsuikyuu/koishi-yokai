@@ -264,8 +264,8 @@ defineAdapterConformanceSuite('Gemini YokaiAdapter', geminiConformanceFactory)
 - Effect interruption 是否最终转换为该 SDK 或 HTTP 客户端实际使用的 `AbortSignal`；
 - 哪一种真实 SDK/HTTP 失败触发 setup 中的哪一个通用错误分类；
 - 供应商私有历史、thought signature 或 function response 是否无损保存在 continuation state；
-- 供应商专属重试/故障转移规则、同模型端点尝试上界、分页切换后的重启、流式首块后的切换截止、
-  超时重复计费风险、资源释放和密钥脱敏。
+- 供应商专属重试/故障转移规则、同模型端点尝试上界、分页切换后的重启、超时重复计费风险、
+  HTTP 配置继承、完整响应期间的取消与资源释放，以及密钥脱敏。
 
 确定性 fake 是通用套件和主体集成测试的参考实现，不替代真实 adapter 自己运行同一套 conformance suite。仅让 fake 通过不能证明 Gemini 或其他 adapter 合规。
 
