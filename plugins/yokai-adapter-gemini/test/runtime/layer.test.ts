@@ -3,6 +3,7 @@ import { Effect, ManagedRuntime } from 'effect'
 import { inspect } from 'node:util'
 
 import { GeminiConnection } from '../../src/connection/connection'
+import { GeminiModelDiscovery } from '../../src/discovery/discovery'
 import { GeminiRuntime } from '../../src/runtime/layer'
 import { GeminiHttpTransport } from '../../src/transport/http-transport'
 
@@ -45,7 +46,15 @@ it.effect('builds synchronously without exposing SDK clients or credentials', ()
         const connection = yield* Effect.sync(() =>
           currentRuntime.runSync(GeminiConnection.Service),
         )
-        const surfaces = [JSON.stringify(connection), inspect(connection)]
+        const discovery = yield* Effect.sync(() =>
+          currentRuntime.runSync(GeminiModelDiscovery.Service),
+        )
+        const surfaces = [
+          JSON.stringify(connection),
+          inspect(connection),
+          JSON.stringify(discovery),
+          inspect(discovery),
+        ]
 
         expect(connection.discoveryRetry).toEqual({
           maxAttempts: 3,
@@ -54,6 +63,7 @@ it.effect('builds synchronously without exposing SDK clients or credentials', ()
           backoffMultiplier: 2,
         })
         expect(connection.adapterId).toBe(ADAPTER_ID)
+        expect(discovery.adapterId).toBe(ADAPTER_ID)
         expect(surfaces.every((surface) => !surface.includes(FIRST_API_KEY))).toBe(true)
         expect(surfaces.every((surface) => !surface.includes(SECOND_API_KEY))).toBe(true)
         expect(surfaces.every((surface) => !surface.includes('GoogleGenAI'))).toBe(true)

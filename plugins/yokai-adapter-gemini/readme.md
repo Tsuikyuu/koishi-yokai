@@ -50,9 +50,10 @@ omitting `baseUrl` uses `https://generativelanguage.googleapis.com/`. The Google
 SDK appends its API version and resource path to that service root.
 `requestTimeoutMs` and `discoveryRetry` are top-level settings shared by every
 endpoint. Discovery retry settings apply only to background model discovery and
-are never installed as client-wide generation retries. An eligible discovery
-retry starts a new logical discovery call only after the prior call exhausts
-its endpoint list; each endpoint is still tried at most once per call.
+are never installed as client-wide generation retries. The current discovery
+pass does not yet install operation-level retry; that bounded policy is added by
+the later stability task. Endpoint failover remains bounded to one visit per
+configured endpoint within a discovery pass.
 
 The first endpoint is active initially. Every discovery, `generate`, or
 `continue` call starts at the current active endpoint. Authentication failures
@@ -74,9 +75,24 @@ pages, or more than 10,000 models are protocol failures and do not switch
 endpoints. A timed-out generation request may still finish remotely, so switching
 to another endpoint can cause duplicate generation and billing.
 
-Models are identified only by their normalized provider model ID. The same
-model exposed through several endpoints remains one model and receives no
-transport-source prefix.
+Building the plugin Layer starts one scoped background discovery. Reloading the
+plugin after a configuration update builds a new Layer and starts discovery for
+the new endpoint set. Internal callers and the future Yokai registry can trigger
+a manual refresh through `GeminiModelDiscovery.Service.discoverModels`; ordinary
+message handling does not trigger discovery.
+
+Discovery publishes only models whose provider method list includes
+`generateContent`. It strips the leading `models/` resource prefix, keeps the
+provider display name and explicit token limits, preserves a unique sorted copy
+of the provider method list, deduplicates by normalized model ID, and sorts the
+snapshot by that ID. Models are identified only by this normalized provider
+model ID. The same model exposed through several endpoints remains one model and
+receives no transport-source prefix.
+
+If every endpoint in a later discovery pass fails, the last published snapshot
+is retained with every model marked `stale`. A first discovery failure publishes
+no default or synthesized model. Discovery never sends generation, function
+calling, capability-probe, message, persona, or memory requests.
 
 Model selection, primary models, and fallbacks belong to the Yokai host plugin,
 not this adapter. Endpoint failover always keeps the same provider model and is

@@ -47,7 +47,9 @@ export interface ModelListing {
 export interface Interface {
   readonly adapterId: AdapterId
   readonly discoveryRetry: DiscoveryRetryPolicy
-  readonly listModels: () => Effect.Effect<ModelListing, AdapterInvocationError>
+  readonly listModels: <A>(
+    accept: (listing: ModelListing) => Effect.Effect<A, AdapterInvocationError>,
+  ) => Effect.Effect<A, AdapterInvocationError>
   readonly close: () => Effect.Effect<boolean>
 }
 
@@ -330,30 +332,35 @@ const makeConnection = Effect.fn('GeminiConnection.makeConnection')(function* (
       return Option.some(selectedIndex)
     })
 
-  const attempt: (
-    remaining: ReadonlyArray<ClientEntry>,
-  ) => Effect.Effect<ModelListing, AdapterInvocationError> = Effect.fn('GeminiConnection.attempt')(
-    function* (remaining) {
-      const entry = remaining[0]
-      if (entry === undefined) return yield* Effect.die('Expected at least one Gemini endpoint')
+  const listModels = Effect.fn('GeminiConnection.listModels')(function* <A>(
+    accept: (listing: ModelListing) => Effect.Effect<A, AdapterInvocationError>,
+  ) {
+    const attempt: (
+      remaining: ReadonlyArray<ClientEntry>,
+    ) => Effect.Effect<A, AdapterInvocationError> = Effect.fn('GeminiConnection.attempt')(
+      function* (remaining: ReadonlyArray<ClientEntry>) {
+        const entry = remaining[0]
+        if (entry === undefined) return yield* Effect.die('Expected at least one Gemini endpoint')
 
-      return yield* listAllModels(entry.client).pipe(
-        Effect.timeout(configuration.requestTimeoutMs),
-        Effect.mapError((error) =>
-          Cause.isTimeoutError(error) ? timeoutError(configuration.adapterId) : error,
-        ),
-        Effect.matchEffect({
-          onFailure: (error) => {
-            const rest = remaining.slice(1)
-            return isSwitchableError(error) && rest.length > 0 ? attempt(rest) : Effect.fail(error)
-          },
-          onSuccess: (listing) => activateIfOpen(entry.index).pipe(Effect.as(listing)),
-        }),
-      )
-    },
-  )
+        return yield* listAllModels(entry.client).pipe(
+          Effect.flatMap(accept),
+          Effect.timeout(configuration.requestTimeoutMs),
+          Effect.mapError((error) =>
+            Cause.isTimeoutError(error) ? timeoutError(configuration.adapterId) : error,
+          ),
+          Effect.matchEffect({
+            onFailure: (error) => {
+              const rest = remaining.slice(1)
+              return isSwitchableError(error) && rest.length > 0
+                ? attempt(rest)
+                : Effect.fail(error)
+            },
+            onSuccess: (value) => activateIfOpen(entry.index).pipe(Effect.as(value)),
+          }),
+        )
+      },
+    )
 
-  const listModels = Effect.fn('GeminiConnection.listModels')(function* () {
     const currentClients = yield* Ref.get(clientsRef)
     const current = yield* SynchronizedRef.get(activeEndpoint)
     if (Option.isNone(currentClients) || Option.isNone(current)) {
