@@ -4,6 +4,7 @@ import { Schema } from 'koishi'
 export const DEFAULT_ADAPTER_ID = 'gemini'
 export const DEFAULT_GEMINI_BASE_URL = 'https://generativelanguage.googleapis.com/'
 export const DEFAULT_REQUEST_TIMEOUT_MS = 60_000
+export const DEFAULT_MAX_CONCURRENCY = 4
 export const DEFAULT_DISCOVERY_MAX_ATTEMPTS = 3
 export const DEFAULT_DISCOVERY_INITIAL_DELAY_MS = 1_000
 export const DEFAULT_DISCOVERY_MAX_DELAY_MS = 10_000
@@ -61,7 +62,12 @@ export const Config = Schema.object({
     .role('ms')
     .default(DEFAULT_REQUEST_TIMEOUT_MS)
     .description('单次 HTTP 请求超时。'),
-  discoveryRetry: DiscoveryRetryConfig.description('仅用于模型发现的有界重试策略。'),
+  maxConcurrency: Schema.natural()
+    .min(1)
+    .max(64)
+    .default(DEFAULT_MAX_CONCURRENCY)
+    .description('最大并发调用数。'),
+  discoveryRetry: DiscoveryRetryConfig.description('仅用于模型发现的有界重试策略'),
 })
 
 export type Config = ReturnType<typeof Config>

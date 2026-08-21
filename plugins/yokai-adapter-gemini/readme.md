@@ -36,6 +36,7 @@ endpoints:
   - baseUrl: https://gemini-proxy.example.com/
     apiKey: <standby-secret>
 requestTimeoutMs: 60000
+maxConcurrency: 4
 discoveryRetry:
   maxAttempts: 3
   initialDelayMs: 1000
@@ -48,12 +49,14 @@ for each instance that will be registered with the same Yokai host. Each
 endpoint contains only `baseUrl` and `apiKey`. `apiKey` is required;
 omitting `baseUrl` uses `https://generativelanguage.googleapis.com/`. The Google
 SDK appends its API version and resource path to that service root.
-`requestTimeoutMs` and `discoveryRetry` are top-level settings shared by every
-endpoint. Discovery retry settings apply only to background model discovery and
-are never installed as client-wide generation retries. The current discovery
-pass does not yet install operation-level retry; that bounded policy is added by
-the later stability task. Endpoint failover remains bounded to one visit per
-configured endpoint within a discovery pass.
+`requestTimeoutMs`, `maxConcurrency`, and `discoveryRetry` are top-level settings
+shared by every endpoint. `maxConcurrency` defaults to `4`, accepts `1..64`, and
+limits complete logical `discoverModels`, `generate`, and `continue` calls for
+one adapter instance. A permit covers all endpoint attempts and response decoding.
+Waiting is cancellable and does not reach the SDK; background discovery releases
+its permit while backing off and reacquires one for each retry. Discovery retry
+settings apply only to background model discovery and are never installed as
+client-wide generation retries.
 
 The first endpoint is active initially. Every discovery or `generate` call
 starts at the current active endpoint. Authentication failures
@@ -81,8 +84,14 @@ the new endpoint set. Internal callers and the future Yokai registry can trigger
 a manual refresh through `GeminiModelDiscovery.Service.discoverModels`; ordinary
 message handling does not trigger discovery.
 
-Discovery publishes only models whose provider method list includes
-`generateContent`. It strips the leading `models/` resource prefix, keeps the
+Startup discovery completes one bounded endpoint pass before retrying. Only a
+final `429`, `500`, `502`, or `503` is retried, with exponential delays capped by
+`maxDelayMs`; `maxAttempts` includes the initial pass. Authentication, protocol,
+transport, timeout, cancellation, and other provider failures are not retried.
+
+When Gemini supplies a provider method list, discovery publishes only models whose
+list includes `generateContent`; a missing list keeps the model without inventing
+capabilities. It strips the leading `models/` resource prefix, keeps the
 provider display name and explicit token limits, preserves a unique sorted copy
 of the provider method list, deduplicates by normalized model ID, and sorts the
 snapshot by that ID. Models are identified only by this normalized provider
@@ -135,3 +144,11 @@ Model selection, primary models, and fallbacks belong to the Yokai host plugin,
 not this adapter. Endpoint failover always keeps the same provider model and is
 not the host plugin's model fallback. API keys are converted to non-encodable
 redacted values before clients are constructed.
+
+The adapter emits separate metrics for logical invocations, physical endpoint
+attempts, durations, and reported token usage. Structured logs are built from a
+safe field allowlist containing only adapter/model IDs, operation, status,
+duration, and numeric usage. Generation failover emits a constant warning because
+the abandoned request may still complete and cause duplicate generation or billing;
+keys, continuation handles, prompts, replies, SDK errors, and provider messages are
+never logged.

@@ -82,8 +82,8 @@ Gemini 客户端：Google 官方 `@google/genai` v2 API，以实例级 fetch 注
 
 交付：创建 `@yokai/koishi-plugin-yokai-adapter-gemini`，每个 Koishi 插件实例拥有一个 adapter 和一条
 逻辑连接；引入官方 `@google/genai` v2，将顶层 `adapterId`（默认 `gemini`）、一份非空、有序的
-`endpoints`（每项仅含 `baseUrl` 和 `apiKey`），以及顶层共享的 `requestTimeoutMs` 和仅用于后台发现的
-`discoveryRetry`，从 Koishi 配置转换为该实例单一逻辑连接的显式 Effect 服务。Koishi `apply` 边界把
+`endpoints`（每项仅含 `baseUrl` 和 `apiKey`），以及顶层共享的 `requestTimeoutMs`、`maxConcurrency`
+和仅用于后台发现的 `discoveryRetry`，从 Koishi 配置转换为该实例单一逻辑连接的显式 Effect 服务。Koishi `apply` 边界把
 当前插件上下文的 `ctx.http` 转换为 adapter-private HTTP transport Layer，并在构造每个 `GoogleGenAI`
 实例时注入该实例专属的 fetch implementation；最终提供可由后续注册表持有的 adapter Layer。
 
@@ -94,7 +94,7 @@ Gemini 客户端：Google 官方 `@google/genai` v2 API，以实例级 fetch 注
 - `adapterId` 非法、`endpoints` 为空、任一 endpoint 缺少 key、任一显式 base URL 非法，或顶层共享配置非法时给出角色外配置错误，
   不发出网络请求；省略 base URL 时使用 Gemini 官方服务根 URL。
 - endpoint 项严格只有 `baseUrl` 和 `apiKey`，不接受额外身份、显示文案、独立超时或独立重试字段；
-  所有 endpoint 使用相同的 `requestTimeoutMs` 和 `discoveryRetry`。
+  所有 endpoint 使用相同的 `requestTimeoutMs`、`maxConcurrency` 和 `discoveryRetry`。
 - adapter 配置中不存在 primary、fallback 或任何“当前模型”字段。
 - 所有 endpoint 客户端归同一个 adapter Layer 作用域管理；逻辑连接的活动端点初始为配置第一项，只有
   完整成功的逻辑调用才更新活动端点，并发成功调用以最后完成者为准。
@@ -127,7 +127,8 @@ Gemini 客户端：Google 官方 `@google/genai` v2 API，以实例级 fetch 注
 验收：
 
 - 单 endpoint 模拟三页结果时每页只请求一次，后续请求使用上页 token，最终无重复、无遗漏。
-- 只暴露 `supportedGenerationMethods` 包含 `generateContent` 的模型；保留供应商返回的 token 上限和方法列表。
+- 明确返回方法列表时只暴露其中包含 `generateContent` 的模型；方法列表缺失时保留模型但不臆造能力；
+  保留供应商返回的 token 上限和方法列表。
 - 规范化 `models/<id>` 前缀；adapter-local ID 只使用 `providerModelId`，按规范 ID 去重并产生稳定顺序，
   不含任何传输源前缀。
 - 同一模型可经多个 endpoint 访问时仍只形成一个候选；完整模型引用为 `<adapterId>/<providerModelId>`，
@@ -186,7 +187,8 @@ Yokai 不调用 `generateContentStream`，不发送 `alt=sse`，也不请求、�
 前置：YK-006、YK-007。
 
 交付：保持 `@google/genai` 内建 retry 和 timeout 关闭，以 Effect 实现单次逻辑调用内的有序 endpoint
-故障转移，为每个 endpoint 尝试应用顶层共享硬超时，并为后台模型发现加入顶层共享的有界退避；
+故障转移，为每个 endpoint 尝试应用顶层共享硬超时，以 `maxConcurrency` 限制实例级并发逻辑调用，
+并为后台模型发现加入顶层共享的有界退避；
 `ctx.http` 的全局网络配置独立生效。分别记录逻辑生成数、物理 endpoint 尝试数、用量、耗时和安全日志。
 
 验收：
@@ -195,11 +197,14 @@ Yokai 不调用 `generateContentStream`，不发送 `alt=sse`，也不请求、�
   在该逻辑调用内至多尝试一次；只有完整成功的逻辑调用才将其成功 endpoint 原子地设为后续调用起点，
   并发成功调用以最后完成者为准。模型发现只有完整读完所有分页才算成功，任一页失败均不更新活动 endpoint；
   全部耗尽时返回最后错误。
+- `maxConcurrency` 默认为 `4`、合法范围 `1..64`，在单个 adapter 实例内由发现、生成和 continuation 共享；
+  permit 覆盖排队后的完整逻辑调用（所有 endpoint 尝试、完整响应读取和协议解码），排队可被调用方取消且不会触达 SDK。
+  后台发现每次重试是新的逻辑调用，退避等待期间不占用 permit。
 - `401/403`、`402/429`、`408/504`、顶层 `requestTimeoutMs` 超时、传输错误和其他 `5xx` 切换下一
   endpoint；调用方取消、其余普通 `4xx`、协议解码、能力不支持以及内容/安全错误不切换。
 - Koishi `ETIMEDOUT`、其他代理/请求/body 读取失败、SDK 非 `2xx` 以及成功 status 下的畸形 payload 分别稳定映射为
   timeout、transport、对应 provider error 和 protocol decode；调用方取消与 Layer dispose 保持 Effect interruption。
-- 一次发现先完成上述有界 endpoint 尝试；只有后台发现对最终 `429` 和指定 `5xx` 按 `discoveryRetry`
+- 一次发现先完成上述有界 endpoint 尝试；只有后台发现对最终 `429` 和 `500/502/503` 按 `discoveryRetry`
   退避后发起新的逻辑发现调用。认证错误、协议错误和取消不进入后台重试，生成也不安装自动重试。
 - 生成只使用完整的 unary 响应；超时或可切换传输失败后尝试下一 endpoint 时，原请求可能已经被接受或完成，
   文档、日志指标和测试必须明确重复生成与重复计费这一不可消除的风险。

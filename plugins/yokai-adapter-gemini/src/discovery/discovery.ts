@@ -3,7 +3,17 @@ import {
   type AdapterInvocationError,
   type AdapterModelSnapshot,
 } from '@yokai/protocol'
-import { Context, DateTime, Effect, Layer, Option, Ref, Semaphore } from 'effect'
+import {
+  Context,
+  DateTime,
+  Duration,
+  Effect,
+  Layer,
+  Option,
+  Ref,
+  Schedule,
+  Semaphore,
+} from 'effect'
 
 import { GeminiConnection } from '../connection/connection'
 import { decodeListing, markStale } from './model'
@@ -17,6 +27,23 @@ export interface Interface {
 export class Service extends Context.Service<Service, Interface>()(
   '@yokai/koishi-plugin-yokai-adapter-gemini/ModelDiscovery',
 ) {}
+
+const isBackgroundRetryable = (error: AdapterInvocationError): boolean => {
+  if (error._tag === 'AdapterRateLimitError') return true
+  if (error._tag !== 'AdapterProviderResponseError') return false
+  return error.statusCode === 500 || error.statusCode === 502 || error.statusCode === 503
+}
+
+const backgroundRetrySchedule = (connection: GeminiConnection.Interface) =>
+  Schedule.exponential(
+    Duration.millis(connection.discoveryRetry.initialDelayMs),
+    connection.discoveryRetry.backoffMultiplier,
+  ).pipe(
+    Schedule.modifyDelay(({ duration }) =>
+      Effect.succeed(Duration.min(duration, Duration.millis(connection.discoveryRetry.maxDelayMs))),
+    ),
+    Schedule.upTo({ times: connection.discoveryRetry.maxAttempts - 1 }),
+  )
 
 const make = Effect.fn('GeminiModelDiscovery.make')(function* () {
   const connection = yield* GeminiConnection.Service
@@ -67,6 +94,20 @@ const make = Effect.fn('GeminiModelDiscovery.make')(function* () {
   })
 })
 
+const startBackgroundDiscovery = Effect.fn('GeminiModelDiscovery.startBackgroundDiscovery')(
+  function* (service: Interface) {
+    const connection = yield* GeminiConnection.Service
+    yield* service.discoverModels().pipe(
+      Effect.retry({
+        schedule: backgroundRetrySchedule(connection),
+        while: isBackgroundRetryable,
+      }),
+      Effect.ignore,
+      Effect.forkScoped,
+    )
+  },
+)
+
 /** Deterministic injection seam for tests that need to control the first refresh. */
 export const layerWithoutStartup = Layer.effect(Service, make())
 
@@ -74,7 +115,7 @@ export const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
     const service = yield* make()
-    yield* service.discoverModels().pipe(Effect.ignore, Effect.forkScoped)
+    yield* startBackgroundDiscovery(service)
     return service
   }),
 )

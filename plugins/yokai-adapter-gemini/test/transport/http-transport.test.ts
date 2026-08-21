@@ -356,6 +356,7 @@ it.live('aborts buffered bodies on adapter close without disposing shared ctx.ht
           adapterId: 'gemini-buffered-body-test',
           endpoints: [{ apiKey: API_KEY, baseUrl }],
           requestTimeoutMs: 60_000,
+          maxConcurrency: 4,
           discoveryRetry: {
             maxAttempts: 3,
             initialDelayMs: 1_000,

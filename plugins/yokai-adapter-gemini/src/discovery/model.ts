@@ -4,6 +4,8 @@ import {
   AdapterProtocolDecodeError,
   DiscoveredModel,
   GenerationMethodName,
+  ModelAvailability,
+  ModelDiscoveryFreshness,
   TokenLimit,
   type AdapterId,
   type AdapterModelSnapshot as AdapterModelSnapshotType,
@@ -20,6 +22,8 @@ const ProviderModel = Schema.Struct({
   outputTokenLimit: Schema.optionalKey(TokenLimit),
   /** @google/genai maps REST supportedGenerationMethods to this SDK field. */
   supportedActions: Schema.optionalKey(Schema.Array(GenerationMethodName)),
+  availability: Schema.optionalKey(ModelAvailability),
+  discoveryFreshness: Schema.optionalKey(ModelDiscoveryFreshness),
 })
 
 interface ProviderModel extends Schema.Schema.Type<typeof ProviderModel> {}
@@ -46,19 +50,21 @@ const normalizeProviderModel = Effect.fn('GeminiModelDiscovery.normalizeProvider
 ) {
   const model = yield* Schema.decodeUnknownEffect(ProviderModel)(input)
   const methods = model.supportedActions
-  if (methods === undefined || !methods.includes('generateContent')) return Option.none()
+  if (methods !== undefined && !methods.includes('generateContent')) return Option.none()
 
   const inputLimit =
     model.inputTokenLimit === undefined ? {} : { inputTokenLimit: model.inputTokenLimit }
   const outputLimit =
     model.outputTokenLimit === undefined ? {} : { outputTokenLimit: model.outputTokenLimit }
+  const supportedGenerationMethods =
+    methods === undefined ? {} : { supportedGenerationMethods: uniqueSorted(methods) }
 
   const normalized = yield* Schema.decodeUnknownEffect(DiscoveredModel)({
     id: normalizeModelId(model.name),
     displayName: model.displayName,
-    availability: 'available',
-    discoveryFreshness: 'fresh',
-    supportedGenerationMethods: uniqueSorted(methods),
+    availability: model.availability === undefined ? 'available' : model.availability,
+    discoveryFreshness: model.discoveryFreshness === undefined ? 'fresh' : model.discoveryFreshness,
+    ...supportedGenerationMethods,
     ...inputLimit,
     ...outputLimit,
   })

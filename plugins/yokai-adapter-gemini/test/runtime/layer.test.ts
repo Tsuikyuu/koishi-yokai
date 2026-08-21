@@ -26,6 +26,7 @@ const configuration = {
     makeEndpoint(SECOND_API_KEY, 'https://secondary.example.com/'),
   ],
   requestTimeoutMs: 60_000,
+  maxConcurrency: 4,
   discoveryRetry: {
     maxAttempts: 3,
     initialDelayMs: 1_000,

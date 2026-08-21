@@ -88,6 +88,7 @@ const makeConfiguration = (
   adapterId: ADAPTER_ID,
   endpoints: [...configuredEndpoints],
   requestTimeoutMs: REQUEST_TIMEOUT_MS,
+  maxConcurrency: 4,
   discoveryRetry,
 })
 
@@ -165,6 +166,7 @@ it.effect('rejects empty endpoints before constructing clients', () =>
       adapterId: ADAPTER_ID,
       endpoints: [],
       requestTimeoutMs: REQUEST_TIMEOUT_MS,
+      maxConcurrency: 4,
       discoveryRetry,
     }
 

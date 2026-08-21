@@ -17,6 +17,7 @@ import {
   DEFAULT_DISCOVERY_MAX_ATTEMPTS,
   DEFAULT_DISCOVERY_MAX_DELAY_MS,
   DEFAULT_GEMINI_BASE_URL,
+  DEFAULT_MAX_CONCURRENCY,
   DEFAULT_REQUEST_TIMEOUT_MS,
 } from '../../src/config/plugin-config'
 
@@ -34,6 +35,7 @@ const makeConfiguration = () => ({
   adapterId: DEFAULT_ADAPTER_ID,
   endpoints: [makeEndpoint()],
   requestTimeoutMs: DEFAULT_REQUEST_TIMEOUT_MS,
+  maxConcurrency: DEFAULT_MAX_CONCURRENCY,
   discoveryRetry: {
     maxAttempts: DEFAULT_DISCOVERY_MAX_ATTEMPTS,
     initialDelayMs: DEFAULT_DISCOVERY_INITIAL_DELAY_MS,
@@ -70,6 +72,7 @@ it.effect('applies shared Koishi defaults and decodes endpoint API keys as redac
     expect(fallbackPluginEndpoint.baseUrl).toBe(FALLBACK_BASE_URL)
     expect(pluginConfig.adapterId).toBe(DEFAULT_ADAPTER_ID)
     expect(pluginConfig.requestTimeoutMs).toBe(DEFAULT_REQUEST_TIMEOUT_MS)
+    expect(pluginConfig.maxConcurrency).toBe(DEFAULT_MAX_CONCURRENCY)
     expect(pluginConfig.discoveryRetry).toEqual({
       maxAttempts: DEFAULT_DISCOVERY_MAX_ATTEMPTS,
       initialDelayMs: DEFAULT_DISCOVERY_INITIAL_DELAY_MS,
@@ -100,6 +103,7 @@ it.effect('applies shared Koishi defaults and decodes endpoint API keys as redac
     expect(Redacted.value(fallbackEndpoint.apiKey)).toBe(FALLBACK_API_KEY_CANARY)
     expect(configuration.adapterId).toBe(DEFAULT_ADAPTER_ID)
     expect(configuration.requestTimeoutMs).toBe(DEFAULT_REQUEST_TIMEOUT_MS)
+    expect(configuration.maxConcurrency).toBe(DEFAULT_MAX_CONCURRENCY)
     expect(configuration.discoveryRetry).toEqual(pluginConfig.discoveryRetry)
   }),
 )
@@ -113,11 +117,13 @@ it.effect('marks endpoint, secret, URL, and shared timeout fields with Koishi UI
     const endpointsSchema = rootFields.endpoints
     const adapterIdSchema = rootFields.adapterId
     const requestTimeoutSchema = rootFields.requestTimeoutMs
+    const maxConcurrencySchema = rootFields.maxConcurrency
     const discoveryRetrySchema = rootFields.discoveryRetry
     if (
       adapterIdSchema === undefined ||
       endpointsSchema === undefined ||
       requestTimeoutSchema === undefined ||
+      maxConcurrencySchema === undefined ||
       discoveryRetrySchema === undefined
     ) {
       return yield* Effect.die('Expected endpoint and shared configuration schemas')
@@ -153,6 +159,7 @@ it.effect('marks endpoint, secret, URL, and shared timeout fields with Koishi UI
     expect(baseUrlSchema.meta.default).toBe(DEFAULT_GEMINI_BASE_URL)
     expect(requestTimeoutSchema.meta.role).toBe('ms')
     expect(requestTimeoutSchema.meta.default).toBe(DEFAULT_REQUEST_TIMEOUT_MS)
+    expect(maxConcurrencySchema.meta.default).toBe(DEFAULT_MAX_CONCURRENCY)
     expect(initialDelaySchema.meta.role).toBe('ms')
     expect(maxDelaySchema.meta.role).toBe('ms')
   }),
@@ -189,6 +196,17 @@ it.effect(
           ],
         }),
         expectInvalid({ ...valid, requestTimeoutMs: 999 }),
+        expectInvalid({ ...valid, maxConcurrency: 0 }),
+        expectInvalid({ ...valid, maxConcurrency: 65 }),
+        expectInvalid({
+          ...valid,
+          endpoints: [
+            {
+              ...makeEndpoint(),
+              maxConcurrency: valid.maxConcurrency,
+            },
+          ],
+        }),
         expectInvalid({
           ...valid,
           discoveryRetry: {
@@ -201,6 +219,7 @@ it.effect(
           adapterId: valid.adapterId,
           connections: [makeEndpoint()],
           requestTimeoutMs: valid.requestTimeoutMs,
+          maxConcurrency: valid.maxConcurrency,
           discoveryRetry: valid.discoveryRetry,
         }),
       ])

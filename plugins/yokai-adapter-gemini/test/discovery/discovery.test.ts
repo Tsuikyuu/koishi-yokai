@@ -1,6 +1,12 @@
 import type { Model } from '@google/genai'
 import { expect, it } from '@effect/vitest'
-import { AdapterId, AdapterTransportError, type AdapterInvocationError } from '@yokai/protocol'
+import {
+  AdapterId,
+  AdapterProviderResponseError,
+  AdapterRateLimitError,
+  AdapterTransportError,
+  type AdapterInvocationError,
+} from '@yokai/protocol'
 import { Deferred, Effect, Layer, Option, Ref } from 'effect'
 import { TestClock } from 'effect/testing'
 
@@ -29,20 +35,36 @@ const transportError = () =>
     message: 'Unable to reach the Gemini model service',
   })
 
+const rateLimitError = () =>
+  new AdapterRateLimitError({
+    adapterId: ADAPTER_ID,
+    operation: 'discoverModels',
+    message: 'Gemini model discovery was rate limited',
+  })
+
+const providerUnavailableError = () =>
+  new AdapterProviderResponseError({
+    adapterId: ADAPTER_ID,
+    operation: 'discoverModels',
+    message: 'Gemini rejected the model discovery request',
+    statusCode: 503,
+  })
+
 const makeScriptedConnection = Effect.fn('GeminiModelDiscoveryTest.makeScriptedConnection')(
   function* (
     steps: ReadonlyArray<Effect.Effect<GeminiConnection.ModelListing, AdapterInvocationError>>,
   ) {
     const remaining = yield* Ref.make(steps)
     const callCount = yield* Ref.make(0)
-    const listModels = Effect.fn('GeminiModelDiscoveryTest.Connection.listModels')(function* <A>(
+    const listModels = <A>(
       accept: (listing: GeminiConnection.ModelListing) => Effect.Effect<A, AdapterInvocationError>,
-    ) {
-      yield* Ref.update(callCount, (count) => count + 1)
-      const step = yield* Ref.modify(remaining, (current) => [current[0], current.slice(1)])
-      if (step === undefined) return yield* Effect.die('Discovery script exhausted')
-      return yield* step.pipe(Effect.flatMap(accept))
-    })
+    ): Effect.Effect<A, AdapterInvocationError> =>
+      Effect.gen(function* () {
+        yield* Ref.update(callCount, (count) => count + 1)
+        const step = yield* Ref.modify(remaining, (current) => [current[0], current.slice(1)])
+        if (step === undefined) return yield* Effect.die('Discovery script exhausted')
+        return yield* step.pipe(Effect.flatMap(accept))
+      })
 
     return {
       connection: GeminiConnection.Service.of({
@@ -126,17 +148,14 @@ it.effect('starts one background discovery when the runtime layer is acquired', 
   Effect.gen(function* () {
     const started = yield* Deferred.make<void>()
     const callCount = yield* Ref.make(0)
-    const listModels = Effect.fn('GeminiModelDiscoveryTest.StartupConnection.listModels')(
-      function* <A>(
-        accept: (
-          listing: GeminiConnection.ModelListing,
-        ) => Effect.Effect<A, AdapterInvocationError>,
-      ) {
+    const listModels = <A>(
+      accept: (listing: GeminiConnection.ModelListing) => Effect.Effect<A, AdapterInvocationError>,
+    ): Effect.Effect<A, AdapterInvocationError> =>
+      Effect.gen(function* () {
         yield* Ref.update(callCount, (count) => count + 1)
         yield* Deferred.succeed(started, undefined)
         return yield* accept({ models: [model('startup', 'Startup model')] })
-      },
-    )
+      })
     const connection = GeminiConnection.Service.of({
       adapterId: ADAPTER_ID,
       discoveryRetry,
@@ -152,5 +171,50 @@ it.effect('starts one background discovery when the runtime layer is acquired', 
       yield* Deferred.await(started)
       expect(yield* Ref.get(callCount)).toBe(1)
     }).pipe(Effect.provide(makeDiscoveryLayer(connection, true)))
+  }),
+)
+
+it.effect('retries only retryable startup discovery failures with bounded exponential delays', () =>
+  Effect.gen(function* () {
+    const scripted = yield* makeScriptedConnection([
+      Effect.fail(rateLimitError()),
+      Effect.fail(providerUnavailableError()),
+      Effect.succeed({ models: [model('recovered', 'Recovered model')] }),
+    ])
+
+    yield* Effect.gen(function* () {
+      const discovery = yield* GeminiModelDiscovery.Service
+      yield* Effect.yieldNow
+      expect(yield* scripted.callCount()).toBe(1)
+
+      yield* TestClock.adjust('999 millis')
+      expect(yield* scripted.callCount()).toBe(1)
+      yield* TestClock.adjust('1 millis')
+      expect(yield* scripted.callCount()).toBe(2)
+
+      yield* TestClock.adjust('1999 millis')
+      expect(yield* scripted.callCount()).toBe(2)
+      yield* TestClock.adjust('1 millis')
+      expect(yield* scripted.callCount()).toBe(3)
+
+      const snapshot = yield* discovery.currentSnapshot()
+      expect(Option.isSome(snapshot)).toBe(true)
+      if (Option.isSome(snapshot)) {
+        expect(snapshot.value.models.map((entry) => entry.id)).toEqual(['recovered'])
+      }
+    }).pipe(Effect.provide(makeDiscoveryLayer(scripted.connection, true)))
+  }),
+)
+
+it.effect('does not retry a non-retryable startup discovery failure', () =>
+  Effect.gen(function* () {
+    const scripted = yield* makeScriptedConnection([Effect.fail(transportError())])
+
+    yield* Effect.gen(function* () {
+      yield* GeminiModelDiscovery.Service
+      yield* Effect.yieldNow
+      yield* TestClock.adjust('1 minute')
+      expect(yield* scripted.callCount()).toBe(1)
+    }).pipe(Effect.provide(makeDiscoveryLayer(scripted.connection, true)))
   }),
 )

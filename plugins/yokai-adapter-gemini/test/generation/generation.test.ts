@@ -48,18 +48,16 @@ const makeLayer = (calls: Ref.Ref<number>) => {
       backoffMultiplier: 2,
     },
     listModels: () => Effect.die('Unexpected model discovery request'),
-    generateContent: Effect.fn('GeminiTextGenerationTest.Connection.generateContent')(function* <
-      A,
-      R,
-    >(
+    generateContent: <A, R>(
       _operation: Parameters<GeminiConnection.Interface['generateContent']>[0],
       _modelId: (typeof GenerateRequest.Type)['modelId'],
       _params: Parameters<GeminiConnection.Interface['generateContent']>[2],
       accept: (value: GenerateContentResponse) => Effect.Effect<A, AdapterInvocationError, R>,
-    ) {
-      yield* Ref.update(calls, (count) => count + 1)
-      return yield* accept(response)
-    }),
+    ): Effect.Effect<A, AdapterInvocationError, R> =>
+      Effect.gen(function* () {
+        yield* Ref.update(calls, (count) => count + 1)
+        return yield* accept(response)
+      }),
     close: () => Effect.succeed(true),
   })
   const connectionLayer = Layer.succeed(GeminiConnection.Service, connection)
