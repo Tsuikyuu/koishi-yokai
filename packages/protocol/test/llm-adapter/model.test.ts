@@ -11,13 +11,13 @@ it.effect('round-trips immutable discovery data while preserving absent metadata
       discoveredAt,
       models: [
         {
-          id: 'connection-a/models/flash',
+          id: 'models/flash',
           displayName: 'Flash',
           availability: 'available',
           discoveryFreshness: 'stale',
         },
         {
-          id: 'connection-a/models/pro',
+          id: 'models/pro',
           displayName: 'Pro',
           availability: 'available',
           discoveryFreshness: 'fresh',
@@ -41,7 +41,7 @@ it.effect('round-trips immutable discovery data while preserving absent metadata
 it.effect('rejects duplicate, unstable, or invalid discovered models', () =>
   Effect.gen(function* () {
     const model = {
-      id: 'connection-a/models/flash',
+      id: 'models/flash',
       displayName: 'Flash',
       availability: 'available',
       discoveryFreshness: 'fresh',

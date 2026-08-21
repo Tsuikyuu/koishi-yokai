@@ -7,7 +7,7 @@ import {
 } from '@google/genai'
 import { Context, Effect, Layer, Redacted, Schema, Scope } from 'effect'
 
-import type { Connection, ConnectionId } from '../config/configuration'
+import type { Configuration, Endpoint } from '../config/configuration'
 
 export interface Client {
   readonly listModels: (params: ListModelsParameters, signal: AbortSignal) => Promise<Pager<Model>>
@@ -19,19 +19,19 @@ export interface SdkClient {
 }
 
 export interface SdkClientFactory {
-  readonly create: (connection: Connection) => SdkClient
+  readonly create: (endpoint: Endpoint, requestTimeoutMs: number) => SdkClient
 }
 
 export class InitializationError extends Schema.TaggedError<InitializationError>(
   '@yokai/koishi-plugin-yokai-adapter-gemini/ClientInitializationError',
 )('GeminiClientInitializationError', {
-  connectionId: Schema.String,
   message: Schema.Literal('Unable to initialize Gemini client'),
 }) {}
 
 export interface Interface {
   readonly create: (
-    connection: Connection,
+    endpoint: Endpoint,
+    requestTimeoutMs: Configuration['requestTimeoutMs'],
   ) => Effect.Effect<Client, InitializationError, Scope.Scope>
 }
 
@@ -44,30 +44,26 @@ const withAbortSignal = (
   signal: AbortSignal,
 ): ListModelsConfig => {
   if (config === undefined) return { abortSignal: signal }
-  if (config.httpOptions === undefined) return { ...config, abortSignal: signal }
-
-  const { retryOptions: _retryOptions, ...httpOptions } = config.httpOptions
+  const { abortSignal: _abortSignal, httpOptions: _httpOptions, ...safeConfig } = config
   return {
-    ...config,
-    httpOptions,
+    ...safeConfig,
     abortSignal: signal,
   }
 }
 
-const makeInitializationError = (connectionId: ConnectionId) =>
+const makeInitializationError = () =>
   new InitializationError({
-    connectionId,
     message: 'Unable to initialize Gemini client',
   })
 
 const liveSdkClientFactory: SdkClientFactory = {
-  create: (connection) => {
+  create: (endpoint, requestTimeoutMs) => {
     const client = new GoogleGenAI({
       vertexai: false,
-      apiKey: Redacted.value(connection.apiKey),
+      apiKey: Redacted.value(endpoint.apiKey),
       httpOptions: {
-        baseUrl: connection.baseUrl.toString(),
-        timeout: connection.requestTimeoutMs,
+        baseUrl: endpoint.baseUrl.toString(),
+        timeout: requestTimeoutMs,
       },
     })
 
@@ -78,12 +74,15 @@ const liveSdkClientFactory: SdkClientFactory = {
 }
 
 const makeCreate = (sdkClientFactory: SdkClientFactory) =>
-  Effect.fn('GeminiClientFactory.create')(function* (connection: Connection) {
+  Effect.fn('GeminiClientFactory.create')(function* (
+    endpoint: Endpoint,
+    requestTimeoutMs: Configuration['requestTimeoutMs'],
+  ) {
     yield* Scope.Scope
 
     return yield* Effect.try({
       try: () => {
-        const sdkClient = sdkClientFactory.create(connection)
+        const sdkClient = sdkClientFactory.create(endpoint, requestTimeoutMs)
 
         return {
           listModels: (params, signal) =>
@@ -93,7 +92,7 @@ const makeCreate = (sdkClientFactory: SdkClientFactory) =>
             }),
         } satisfies Client
       },
-      catch: () => makeInitializationError(connection.connectionId),
+      catch: makeInitializationError,
     })
   })
 

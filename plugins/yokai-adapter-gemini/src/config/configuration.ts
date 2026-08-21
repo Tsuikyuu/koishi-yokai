@@ -2,16 +2,6 @@ import { Context, Effect, Layer, Schema } from 'effect'
 
 import type { Config } from './plugin-config'
 
-const ConnectionId = Schema.Trimmed.check(
-  Schema.isNonEmpty(),
-  Schema.isMaxLength(128),
-  Schema.isPattern(/^[^\p{C}/]+$/u),
-)
-
-export type ConnectionId = typeof ConnectionId.Type
-
-const DisplayName = Schema.Trimmed.check(Schema.isNonEmpty(), Schema.isMaxLength(256))
-
 const ApiKey = Schema.RedactedFromValue(Schema.Trimmed.check(Schema.isNonEmpty()), {
   label: 'GeminiApiKey',
   disallowEncode: true,
@@ -38,33 +28,26 @@ export const DiscoveryRetryPolicy = Schema.Struct({
 
 export interface DiscoveryRetryPolicy extends Schema.Schema.Type<typeof DiscoveryRetryPolicy> {}
 
-export const Connection = Schema.Struct({
-  connectionId: ConnectionId,
-  displayName: DisplayName,
+export const Endpoint = Schema.Struct({
   apiKey: ApiKey,
   baseUrl: ServiceUrl,
+})
+
+export interface Endpoint extends Schema.Schema.Type<typeof Endpoint> {}
+
+const Endpoints = Schema.NonEmptyArray(Endpoint)
+
+export const Configuration = Schema.Struct({
+  endpoints: Endpoints,
   requestTimeoutMs: Schema.Int.check(Schema.isBetween({ minimum: 1_000, maximum: 600_000 })),
   discoveryRetry: DiscoveryRetryPolicy,
 }).check(
-  Schema.makeFilter((connection) =>
-    connection.discoveryRetry.initialDelayMs <= connection.discoveryRetry.maxDelayMs
+  Schema.makeFilter((configuration) =>
+    configuration.discoveryRetry.initialDelayMs <= configuration.discoveryRetry.maxDelayMs
       ? true
       : 'Expected discovery initial delay not to exceed its maximum delay',
   ),
 )
-
-export interface Connection extends Schema.Schema.Type<typeof Connection> {}
-
-const Connections = Schema.NonEmptyArray(Connection).check(
-  Schema.makeFilter((connections: ReadonlyArray<Connection>) => {
-    const ids = connections.map((connection) => connection.connectionId)
-    return new Set(ids).size === ids.length ? true : 'Expected unique Gemini connection IDs'
-  }),
-)
-
-export const Configuration = Schema.Struct({
-  connections: Connections,
-})
 
 export interface Configuration extends Schema.Schema.Type<typeof Configuration> {}
 
@@ -75,7 +58,9 @@ export class ConfigurationError extends Schema.TaggedError<ConfigurationError>(
 }) {}
 
 export interface Interface {
-  readonly connections: Configuration['connections']
+  readonly endpoints: Configuration['endpoints']
+  readonly requestTimeoutMs: Configuration['requestTimeoutMs']
+  readonly discoveryRetry: Configuration['discoveryRetry']
 }
 
 export class Service extends Context.Service<Service, Interface>()(

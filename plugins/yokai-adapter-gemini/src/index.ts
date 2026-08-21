@@ -2,7 +2,7 @@ import { Effect, ManagedRuntime } from 'effect'
 import type { Context } from 'koishi'
 
 import { Config as ConfigSchema, type Config as GeminiPluginConfig } from './config/plugin-config'
-import { GeminiConnectionPool } from './connection/pool'
+import { GeminiConnection } from './connection/connection'
 import { GeminiRuntime } from './runtime/layer'
 
 export const name = 'yokai-adapter-gemini'
@@ -16,5 +16,5 @@ export function apply(ctx: Context, config: Config): void {
   const runtime = ManagedRuntime.make(GeminiRuntime.makeLayer(config))
 
   ctx.on('dispose', runtime.dispose)
-  runtime.runSync(GeminiConnectionPool.Service.pipe(Effect.asVoid))
+  runtime.runSync(GeminiConnection.Service.pipe(Effect.asVoid))
 }

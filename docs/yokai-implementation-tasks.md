@@ -18,7 +18,8 @@ Gemini 客户端：Google 官方 `@google/genai` v2
 - `@google/genai` 只存在于 Gemini adapter 工作区，锁定稳定 2.x 精确版本；所有 SDK Promise、流和错误都在 adapter 边界转换为 Effect 和 `@yokai/protocol` 类型。
 - 模型选择只存在主插件配置；adapter 仅发布模型快照，不保存 primary 或 fallback。
 - 模型自动发现不承担能力探测；MVP 的 `feedbackToolsEnabled` 由使用者在主插件显式配置。
-- Yokai 是角色扮演仿生人群友，不实现通用 Agent 规划—工具—观察循环；single-pass 回合一次生成，bounded-feedback 回合最多两次生成。
+- Yokai 是角色扮演仿生人群友，不实现通用 Agent 规划—工具—观察循环；single-pass 回合一次逻辑生成，
+  bounded-feedback 回合最多两次逻辑生成。
 - ActionTool 以版本化 XML 模板暴露且不回灌结果；FeedbackTool 使用通用函数调用，结果只回传一轮。
 - 在当前协议主版本内，新增 LLM adapter 只能新增该 adapter 插件包，不得修改 protocol、主体、内部包或其他 adapter。
 
@@ -68,24 +69,31 @@ Gemini 客户端：Google 官方 `@google/genai` v2
 - 契约测试验证 ID 唯一、结果排序稳定、不可变快照、逐模型 freshness、取消传播和错误分类；快照内容等价比较排除 `discoveredAt`。
 - 契约测试分别覆盖 single-pass 文本结果，以及 ToolCallBatch → 单次 continue → 最终文本结果。
 - continuation 必须绑定原 adapter/model/回合、单次消费并随作用域失效；重复或跨 adapter 消费失败。
-- `generate` 或 `continue` 每次调用只允许 adapter 发起一次供应商生成请求；再次 ToolCall 作为协议失败。
+- `generate` 或 `continue` 每次调用只表示一次同模型逻辑生成；adapter 可按私有策略执行有界的等价端点尝试，
+  但不得改变模型或形成新的编排步骤；再次 ToolCall 作为协议失败。
 - 模型快照不包含主动探测或推断出的逐模型能力；供应商未返回的元数据保持缺失。
 - fake adapter 分别覆盖实现和未实现 FeedbackTool 传输契约的注册形态。
 - 发现接口不包含消息、人格、记忆或发送权限。
 - fake adapter 不包含 Gemini 或其他真实厂商语义，供主体集成测试验证其只依赖通用协议。
 
-### YK-004 Gemini adapter 单例与多连接配置
+### YK-004 Gemini adapter 单例、单逻辑连接与端点配置
 
 前置：YK-002。
 
-交付：创建单例 `@yokai/koishi-plugin-yokai-adapter-gemini`，引入官方 `@google/genai` v2，将一组或多组带稳定 `connectionId` 的 API key、base URL、显示名、超时和仅用于后台发现的重试策略从 Koishi 配置转换为显式 Effect 服务，并提供可由后续注册表持有的 adapter Layer。
+交付：创建单例 `@yokai/koishi-plugin-yokai-adapter-gemini`，引入官方 `@google/genai` v2，将一份非空、
+有序的 `endpoints`（每项仅含 `baseUrl` 和 `apiKey`），以及顶层共享的 `requestTimeoutMs` 和仅用于后台
+发现的 `discoveryRetry`，从 Koishi 配置转换为单一逻辑连接的显式 Effect 服务，并提供可由后续注册表持有的 adapter Layer。
 
 验收：
 
 - 不允许注册第二个 Gemini adapter 实例；同一 Koishi 上下文中重复 adapter ID 明确失败。
-- 连接列表为空、任一连接无 key、`connectionId` 包含 `/` 或 ID 重复时给出角色外配置错误，不发出网络请求。
+- `endpoints` 为空、任一 endpoint 缺少 key、任一显式 base URL 非法，或顶层共享配置非法时给出角色外配置错误，
+  不发出网络请求；省略 base URL 时使用 Gemini 官方服务根 URL。
+- endpoint 项严格只有 `baseUrl` 和 `apiKey`，不接受额外身份、显示文案、独立超时或独立重试字段；
+  所有 endpoint 使用相同的 `requestTimeoutMs` 和 `discoveryRetry`。
 - adapter 配置中不存在 primary、fallback 或任何“当前模型”字段。
-- 每组连接独立构造 `GoogleGenAI` 客户端和作用域；一组连接关闭不影响其他连接。
+- 所有 endpoint 客户端归同一个 adapter Layer 作用域管理；逻辑连接的活动端点初始为配置第一项，只有
+  完整成功的逻辑调用才更新活动端点，并发成功调用以最后完成者为准。
 - API key 在 Schema、错误、日志和测试快照中均不以明文出现。
 - `GoogleGenAI` 客户端只在 Layer 作用域内构造，SDK 类型不出现于 `@yokai/protocol` 公开声明。
 - SDK Promise 通过 `Effect.tryPromise` 调用，SDK 异常在服务边界翻译为类型化 adapter 错误。
@@ -95,34 +103,47 @@ Gemini 客户端：Google 官方 `@google/genai` v2
 
 前置：YK-003、YK-004。
 
-交付：对单例 adapter 的每组连接分别通过 `ai.models.list` 调用 Gemini Developer API，发现当前凭据可用的模型，读完 SDK 分页器的所有页，并汇总为一个通用模型快照。
+交付：单例 adapter 从逻辑连接的当前活动端点开始，通过 `ai.models.list` 调用 Gemini Developer API，
+读完 SDK 分页器的所有页，并发布首个完整成功端点的一份通用模型快照；不同 endpoint 的发现结果不合并。
 
 验收：
 
-- 单连接模拟三页结果时每页只请求一次，后续请求使用上页 token，最终无重复、无遗漏。
+- 单 endpoint 模拟三页结果时每页只请求一次，后续请求使用上页 token，最终无重复、无遗漏。
 - 只暴露 `supportedGenerationMethods` 包含 `generateContent` 的模型；保留供应商返回的 token 上限和方法列表。
-- 规范化 `models/<id>` 前缀；adapter-local ID 为 `<connectionId>/<providerModelId>`，只在同一连接内按规范 ID 去重并产生稳定顺序。
-- 两组连接返回同名模型时保留为两个候选，显示文案包含连接显示名；完整模型引用可被主体按第一个 `/` 正确拆分。
+- 规范化 `models/<id>` 前缀；adapter-local ID 只使用 `providerModelId`，按规范 ID 去重并产生稳定顺序，
+  不含任何传输源前缀。
+- 同一模型可经多个 endpoint 访问时仍只形成一个候选；完整模型引用为 `<adapterId>/<providerModelId>`，
+  endpoint 不贡献模型身份或显示文案。
+- 分页中途遇到可切换错误时丢弃当前 endpoint 的所有已读页面，在下一 endpoint 从第一页重新开始；
+  任一页失败均不更新活动 endpoint，只有读完全部页面才更新并发布该 endpoint 的完整快照，绝不拼接
+  部分页面或多个 endpoint 的模型。
+- 畸形分页、重复 page token、超过 100 页或累计超过 10,000 个模型时返回不可切换的协议解码错误，
+  不允许单个兼容 endpoint 通过循环 token 或持续成功的小分页绕过逻辑调用上界。
 - 启动、配置更新和手动刷新可触发发现；处理普通群消息时发现请求数为 `0`。
-- 单个连接刷新失败时保留该连接上次成功快照并标记 stale，不影响其他连接；首次发现失败不伪造默认模型。
+- 一次发现的全部 endpoint 耗尽时保留逻辑连接上次成功的整份快照并标记 stale；首次发现失败不伪造默认模型。
 - 发现流程不发起函数调用或其他模型能力探测请求。
-- 配置的模型不可用时不静默切换，除非主体明确配置了 fallback。
-- fallback 只用于请求前选择第一个可用模型；一次生成开始后失败不得在同一角色回合切换模型。
+- 配置的模型未出现在成功快照时不由 adapter 合成或改选模型；只有主体明确配置的 fallback 可在请求前选择其他模型。
+- endpoint 故障转移始终保持相同 `providerModelId`；它不是主插件 fallback。一次逻辑生成开始后，主体不得因
+  endpoint 耗尽或其他失败在同一角色回合切换模型。
 
 ### YK-006 Gemini 文本生成闭环
 
 前置：YK-002、YK-004、YK-005。
 
-交付：将统一 system/对话请求、生成参数和中止信号转换为一次 `ai.models.generateContent` 或 `generateContentStream` 调用，将候选文本、停止原因和 token 用量转回通用结果。流式输出只用于传输与统计，主体收到完整 XML 文本后才解析和发送。
+交付：将统一 system/对话请求、生成参数和中止信号转换为一次同模型逻辑生成；每个 endpoint 尝试调用
+`ai.models.generateContent` 或 `generateContentStream`，将首个成功端点的候选文本、停止原因和 token 用量
+转回通用结果。流式输出只用于传输与统计，主体收到完整 XML 文本后才解析和发送。
 
 验收：
 
 - HTTP 黄金测试覆盖 system instruction、多轮角色映射、参数和模型 ID。
-- 流式分块可按顺序合并为与非流式一致的最终结果，不会边生成边向群聊发送。
+- 流式分块可按顺序合并为与非流式一致的最终结果，不会边生成边向群聊发送；只有首个 chunk 到达前
+  才允许因可切换错误尝试下一 endpoint，首个 chunk 后失败直接结束且不重放请求。
 - 空 candidate、安全拦截、非 2xx 和畸形 JSON 都转换为类型化失败。
 - 取消 `AbortSignal` 会中断底层 HTTP 请求，不留下后台 fiber。
 - 未经主体调用时，adapter 不读写任何人格、历史、记忆或 Koishi Session。
-- 一次 `generate` 服务调用按 adapter-local model ID 精确路由到一个连接和模型，并且只发起一次供应商生成请求。
+- 一次 `generate` 服务调用按 adapter-local `providerModelId` 在活动 endpoint 起始的有序列表上保持同一模型，
+  只形成一次逻辑生成；物理 HTTP 尝试数由有界 endpoint 故障转移决定。
 
 ### YK-007 Gemini FeedbackTool 函数调用边界
 
@@ -146,13 +167,25 @@ Gemini 客户端：Google 官方 `@google/genai` v2
 
 前置：YK-006、YK-007。
 
-交付：关闭 `@google/genai` 内建重试，为模型发现加入 Effect 控制的有界退避，为普通角色生成加入单次尝试的硬超时，并记录标准用量、物理请求数、耗时和安全日志。
+交付：关闭 `@google/genai` 内建重试，以 Effect 实现单次逻辑调用内的有序 endpoint 故障转移，为每个
+endpoint 尝试应用顶层共享硬超时，并为后台模型发现加入顶层共享的有界退避；分别记录逻辑生成数、
+物理 endpoint 尝试数、用量、耗时和安全日志。
 
 验收：
 
-- 模型发现的 429 和指定 5xx 按上限重试；401/403、协议解码失败和取消不重试。
-- 角色生成遇到 429、5xx、超时或畸形响应都不重试，不切换 fallback，并保持群聊沉默。
-- 断言每次 adapter generate/continue 调用的底层 HTTP 请求数为 `1`；single-pass 回合总数为 `1`，bounded-feedback 回合总数为 `2`。
+- 每次 `discoverModels/generate/continue` 从当前活动 endpoint 开始，之后按配置顺序循环，每个 endpoint
+  在该逻辑调用内至多尝试一次；只有完整成功的逻辑调用才将其成功 endpoint 原子地设为后续调用起点，
+  并发成功调用以最后完成者为准。模型发现只有完整读完所有分页才算成功，任一页失败均不更新活动 endpoint；
+  全部耗尽时返回最后错误。
+- `401/403`、`402/429`、`408/504`、顶层 `requestTimeoutMs` 超时、传输错误和其他 `5xx` 切换下一
+  endpoint；调用方取消、其余普通 `4xx`、协议解码、能力不支持以及内容/安全错误不切换。
+- 一次发现先完成上述有界 endpoint 尝试；只有后台发现对最终 `429` 和指定 `5xx` 按 `discoveryRetry`
+  退避后发起新的逻辑发现调用。认证错误、协议错误和取消不进入后台重试，生成也不安装自动重试。
+- 流式生成收到首个 chunk 后不再切换；非流式生成超时切换可能使原请求与后续请求都被计费，文档、
+  日志指标和测试均明确这一不可消除的风险。
+- 断言每次 adapter `generate/continue` 只有一次同模型逻辑生成，底层 HTTP 尝试数不超过 endpoint 数；
+  single-pass 回合逻辑生成总数为 `1`，bounded-feedback 为 `2`，永不产生第三次逻辑生成。
+- endpoint 耗尽后不级联到主插件 model fallback，并保持群聊沉默。
 - 用 `TestClock` 验证发现退避和生成硬超时，无真实 sleep。
 - 日志只含 adapter/model ID、状态、用量和耗时，不含 key、continuation handle、完整提示或完整回复。
 - Gemini adapter 通过 YK-003 的全部契约测试。
@@ -283,7 +316,8 @@ Gemini 客户端：Google 官方 `@google/genai` v2
 
 验收：
 
-- single-pass 回合恰好一次供应商生成请求；bounded-feedback 回合恰好两次，永不产生第三次。
+- single-pass 回合恰好一次逻辑生成；bounded-feedback 回合恰好两次，永不产生第三次逻辑生成；
+  adapter 私有的同模型有界 endpoint 尝试不算新的主体编排步骤。
 - ContextProvider 并行执行且共享总截止时间；单个失败只省略其片段，不阻塞首次生成请求。
 - `feedbackToolsEnabled` 关闭或 adapter 未实现 FeedbackTool 传输契约时不暴露 FeedbackTool；开启时不探测逐模型能力。
 - 同一输入分别验证开关关闭时只产生 single-pass，以及开启且模型选择工具时只产生一次 bounded-feedback。
@@ -381,9 +415,14 @@ Gemini 客户端：Google 官方 `@google/genai` v2
 
 前置：YK-018、YK-021、YK-029。
 
-交付：记录活跃度分布、触发原因、合并数、供应商物理请求数、single-pass/bounded-feedback 路径、FeedbackTool 批次与结果 token、ContextProvider 查询、XML 解析、ActionTool 阶段、费用、模型耗时、编排耗时和人为等待，提供离线回放。
+交付：分别记录活跃度分布、触发原因、合并数、逻辑生成数和供应商物理 endpoint 尝试数，以及
+single-pass/bounded-feedback 路径、FeedbackTool 批次与结果 token、ContextProvider 查询、XML 解析、
+ActionTool 阶段、费用、模型耗时、编排耗时和人为等待，提供离线回放。
 
-验收：同一录制输入在固定 Clock/随机服务下得到同一门控结果；可断言 single-pass 请求数为 1、bounded-feedback 为 2 且无第三次请求，汇总单次路径比例、反馈工具率、XML 有效率、唤醒到请求发出 p95、XML 编排 p95、模型耗时、人为等待、每 100 条消息回合数和每千条成本；调试输出脱敏且不发送到群聊。
+验收：同一录制输入在固定 Clock/随机服务下得到同一门控结果；可断言 single-pass 逻辑生成数为 1、
+bounded-feedback 为 2 且无第三次逻辑生成，同时单独观察每次逻辑生成的 endpoint 尝试数与超时后重复计费
+风险；汇总单次路径比例、反馈工具率、XML 有效率、唤醒到请求发出 p95、XML 编排 p95、模型耗时、
+人为等待、每 100 条消息回合数和每千条成本；调试输出脱敏且不发送到群聊。
 
 ### YK-032 匿名盲测数据集
 
@@ -414,14 +453,14 @@ Gemini 客户端：Google 官方 `@google/genai` v2
 
 ## 7. 推荐交付批次
 
-| 批次 | 任务           | 可演示结果                                                   |
-| ---- | -------------- | ------------------------------------------------------------ |
-| A    | YK-001～YK-005 | Gemini adapter 单例能从多组 URL/key 自动列出全部可用文本模型 |
-| B    | YK-006～YK-008 | Gemini adapter 通过文本、函数调用、单次反馈、用量和容错契约  |
-| C    | YK-009～YK-012 | 主插件配置实时展示 adapter 模型，@ Yokai 后使用选中模型回复  |
-| D    | YK-013～YK-021 | 存档、门控、上下文、双 Tool 协议和有界反馈管线完整运行       |
-| E    | YK-022～YK-028 | 话题、状态、关系、记事本、讨论租约、定时与主动行为逐项可用   |
-| F    | YK-029～YK-033 | 可运维、可回放、可盲测且能零修改接入新 adapter 的 MVP        |
+| 批次 | 任务           | 可演示结果                                                           |
+| ---- | -------------- | -------------------------------------------------------------------- |
+| A    | YK-001～YK-005 | Gemini adapter 单例通过单逻辑连接的有序 URL/key 端点发布一份模型目录 |
+| B    | YK-006～YK-008 | Gemini adapter 通过文本、函数调用、单次反馈、用量和容错契约          |
+| C    | YK-009～YK-012 | 主插件配置实时展示 adapter 模型，@ Yokai 后使用选中模型回复          |
+| D    | YK-013～YK-021 | 存档、门控、上下文、双 Tool 协议和有界反馈管线完整运行               |
+| E    | YK-022～YK-028 | 话题、状态、关系、记事本、讨论租约、定时与主动行为逐项可用           |
+| F    | YK-029～YK-033 | 可运维、可回放、可盲测且能零修改接入新 adapter 的 MVP                |
 
 Gemini `models.list` 的分页、`supportedGenerationMethods` 和 token 上限字段以
 [Gemini Developer API 官方模型参考](https://ai.google.dev/api/models)为验收基准，不在代码中维护固定模型名单。

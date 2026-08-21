@@ -14,10 +14,12 @@
 
 - 任意 `providerOptions`、厂商枚举、SDK 类型、HTTP 请求或响应对象；
 - 流式事件、多模态内容、结构化 JSON 输出、内建工具执行器；
-- 自动重试、模型 fallback、凭据轮转或开放式工具循环；
+- 主体级自动重试、模型 fallback、跨 adapter/跨模型凭据轮转或开放式工具循环；
 - Koishi `Context`、`Session`、`Disposable` 或配置类型。
 
-厂商认证、客户端、连接池、采样细节和 wire format 全部留在 adapter 插件内部。主体只依赖本协议。
+厂商认证、客户端、连接池、采样细节和 wire format 全部留在 adapter 插件内部。adapter 可以在一次
+逻辑调用内对同一模型执行私有、有界的等价端点尝试；端点配置、选择和物理尝试次数不进入协议，
+也不能借此改变模型或增加主体生成步骤。主体只依赖本协议。
 
 ## 2. Adapter 形状
 
@@ -44,7 +46,7 @@ interface YokaiAdapter {
 
 - `AdapterId` 使用 `[A-Za-z][A-Za-z0-9._-]*`，最长 128 个 UTF-16 code units。
 - `AdapterModelId` 是最长 512 个 code units 的非空、首尾无空白 opaque string，允许包含任意 `/`，但不允许 Unicode `Other`（C）类别字符；主体不解析或归一化。
-- `ModelReference` 的编码固定为 `<adapterId>/<modelId>`。解码只查找第一个 `/`；例如 `gemini/account-a/models/flash` 解码为 adapter `gemini` 和 model `account-a/models/flash`。
+- `ModelReference` 的编码固定为 `<adapterId>/<modelId>`。解码只查找第一个 `/`；例如 `gemini/models/flash` 解码为 adapter `gemini` 和 model `models/flash`。
 - `FeedbackToolId` 使用可跨供应商传输的 `[A-Za-z_][A-Za-z0-9._-]*`，最长 128；这保留 `history.search` 和 `<server>.<tool>` 命名。
 - `ToolCallId` 是最长 256、首尾无空白且不含 Unicode C 类字符的非空 opaque string。供应商未给 ID 时，adapter 在当前 continuation 内生成稳定 ID。
 
@@ -89,7 +91,7 @@ FeedbackTool description 最长 2048。同一请求中的 FeedbackTool ID 必须
 
 `generate` 只能返回两个互斥变体：
 
-1. `FinalTextResult`：非空最终文本、统一停止原因和本次物理请求的 usage；空 candidate 或不含安全可用文本的拦截必须转换为类型化 adapter 错误；
+1. `FinalTextResult`：非空最终文本、统一停止原因和本次逻辑生成成功响应的 usage；空 candidate 或不含安全可用文本的拦截必须转换为类型化 adapter 错误；
 2. `ToolCallBatch`：一批有序、非空且 call ID 唯一的通用调用、一次 usage 和一个 opaque continuation。
 
 供应商在工具调用旁返回的临时文本不进入 `ToolCallBatch`，主体不能把它作为 XML 发送或执行。完整原始部件只保存在 adapter 的 continuation state 中。
@@ -141,9 +143,14 @@ pending --原子 claim--> claimed --成功/失败/超时/取消--> removed
     └-- Scope 或 adapter 关闭 -----------------------> removed
 ```
 
-claim 必须发生在第二次供应商请求前；一旦 claim，无论结果如何都不能恢复。重复、并发、跨 adapter 或过期消费都在供应商调用前统一返回 `AdapterContinuationError(reason = "invalid")`，不通过细粒度原因泄漏 handle 状态，也不要求 adapter 维护 tombstone。两个并发 `continue` 最多一个可以进入供应商边界。
+claim 必须发生在 `continue` 的最终逻辑生成进入首个供应商端点之前；一旦 claim，无论结果如何都不能恢复。
+重复、并发、跨 adapter 或过期消费都在供应商调用前统一返回
+`AdapterContinuationError(reason = "invalid")`，不通过细粒度原因泄漏 handle 状态，也不要求 adapter
+维护 tombstone。两个并发 `continue` 最多一个可以进入供应商边界。
 
-`continue` 最多执行一次物理供应商请求，返回类型只能是 `FinalTextResult`。供应商再次请求 Tool 时返回 `AdapterProtocolViolationError`，协议不提供第三次生成入口。
+`continue` 只表示一次同模型逻辑生成，返回类型只能是 `FinalTextResult`。adapter 可以在这次调用内按
+私有策略有界尝试等价端点，但不得改变模型或把端点尝试暴露为新的生成步骤。供应商再次请求 Tool 时返回
+`AdapterProtocolViolationError`，协议不提供第三次逻辑生成入口。
 
 ## 8. Continuation 的不透明与不可持久化
 
@@ -162,7 +169,9 @@ lookup key 最长 256；它只是 adapter 状态表的随机键，不是供应�
 
 ## 9. Usage 和停止原因
 
-usage 表示当前一次物理供应商请求的增量，`continue` 不得返回累计 usage。主体负责把 bounded-feedback 的两次 usage 聚合。
+usage 表示当前一次逻辑生成中成功供应商响应报告的增量，不聚合失败或超时的端点尝试；这些尝试可能
+已经产生但无法取得用量。`continue` 不得累计首次生成的 usage，主体负责把 bounded-feedback 的两次
+成功响应 usage 聚合。
 
 `GenerationUsage` 是：
 
@@ -192,7 +201,8 @@ YK-002 必须拥有 `AdapterModelSnapshot` 的公共 Schema，否则 `discoverMo
 
 - 所有 adapter 复用的 conformance suite；
 - 确定性 fake adapter；
-- 单次请求数、取消、快照不可变、continuation 绑定/竞争/失效、结果集合和错误归一化测试。
+- 逻辑生成次数、取消、快照不可变、continuation 绑定/竞争/失效、结果集合和错误归一化通用测试，
+  以及由各 adapter 专属测试验证的同模型物理尝试上界。
 
 Gemini adapter 必须在 YK-008 结束前通过该完整套件。
 
