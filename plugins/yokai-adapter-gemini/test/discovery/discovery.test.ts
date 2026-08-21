@@ -49,6 +49,7 @@ const makeScriptedConnection = Effect.fn('GeminiModelDiscoveryTest.makeScriptedC
         adapterId: ADAPTER_ID,
         discoveryRetry,
         listModels,
+        generateContent: () => Effect.die('Unexpected generation request in model discovery test'),
         close: Effect.fn('GeminiModelDiscoveryTest.Connection.close')(() => Effect.succeed(true)),
       }),
       callCount: Effect.fn('GeminiModelDiscoveryTest.callCount')(function* () {
@@ -140,6 +141,7 @@ it.effect('starts one background discovery when the runtime layer is acquired', 
       adapterId: ADAPTER_ID,
       discoveryRetry,
       listModels,
+      generateContent: () => Effect.die('Unexpected generation request in startup discovery test'),
       close: Effect.fn('GeminiModelDiscoveryTest.StartupConnection.close')(() =>
         Effect.succeed(true),
       ),

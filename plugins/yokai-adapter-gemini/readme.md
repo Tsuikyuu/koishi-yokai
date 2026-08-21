@@ -55,8 +55,8 @@ pass does not yet install operation-level retry; that bounded policy is added by
 the later stability task. Endpoint failover remains bounded to one visit per
 configured endpoint within a discovery pass.
 
-The first endpoint is active initially. Every discovery, `generate`, or
-`continue` call starts at the current active endpoint. Authentication failures
+The first endpoint is active initially. Every discovery or `generate` call
+starts at the current active endpoint. Authentication failures
 (`401`/`403`), balance or rate failures (`402`/`429`), request timeouts
 (`408`/`504` or the configured timeout), transport errors, and any other `5xx`
 response move the same logical call to the next configured endpoint. Ordering
@@ -93,6 +93,28 @@ If every endpoint in a later discovery pass fails, the last published snapshot
 is retained with every model marked `stale`. A first discovery failure publishes
 no default or synthesized model. Discovery never sends generation, function
 calling, capability-probe, message, persona, or memory requests.
+
+The runtime Layer also exposes one provider-neutral `GeminiAdapter.Service`.
+Its descriptor uses the configured adapter ID and currently declares
+`feedbackTools: false`. Text generation validates the common request before any
+provider call, maps the optional system instruction and each user/assistant turn
+to Gemini content (`assistant` becomes `model`), preserves the adapter-local
+model ID, and applies the requested maximum output-token limit. Sampling and
+provider-only options are intentionally absent.
+
+Each physical generation attempt calls only unary `models.generateContent` with
+one requested candidate and SDK automatic function calling disabled. The adapter
+waits for the complete body, returns the first candidate's non-thinking text,
+maps the finish reason, and reports prompt, candidate, total, cached-input, and
+reasoning token counts when Gemini supplies them. It never calls
+`generateContentStream`, adds `alt=sse`, or consumes SSE. Empty candidates,
+safety blocks, malformed payloads, non-2xx responses, timeouts, transport
+failures, and provider-reported cancellation cross the public boundary only as
+typed, sanitized adapter failures.
+
+Non-empty feedback-tool declarations are rejected before a provider request.
+Continuation handles are likewise rejected until the bounded FeedbackTool
+transport is implemented by YK-007.
 
 Model selection, primary models, and fallbacks belong to the Yokai host plugin,
 not this adapter. Endpoint failover always keeps the same provider model and is

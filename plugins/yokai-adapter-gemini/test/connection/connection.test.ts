@@ -65,6 +65,10 @@ interface PendingRequest {
 type CreationLog = Ref.Ref<ReadonlyArray<Creation>>
 type FinalizationLog = Ref.Ref<ReadonlyArray<string>>
 
+interface DiscoveryClient {
+  readonly listModels: GeminiClientFactory.Client['listModels']
+}
+
 const discoveryRetry = {
   maxAttempts: 4,
   initialDelayMs: 2_000,
@@ -103,7 +107,7 @@ const makePager = (pageToken: string | undefined, models: ReadonlyArray<Model> =
 const makeTrackedClientFactory = (
   created: CreationLog,
   finalized: FinalizationLog,
-  clientFor: (baseUrl: string) => GeminiClientFactory.Client,
+  clientFor: (baseUrl: string) => DiscoveryClient,
 ): GeminiClientFactory.Interface =>
   GeminiClientFactory.Service.of({
     create: Effect.fn('GeminiConnectionTest.ClientFactory.create')(function* (
@@ -112,7 +116,10 @@ const makeTrackedClientFactory = (
       const baseUrl = endpoint.baseUrl.toString()
       yield* Ref.update(created, (current) => [...current, { baseUrl }])
       yield* Effect.addFinalizer(() => Ref.update(finalized, (current) => [...current, baseUrl]))
-      return clientFor(baseUrl)
+      return {
+        ...clientFor(baseUrl),
+        generateContent: () => Promise.reject(new Error('Unexpected Gemini generation request')),
+      }
     }),
   })
 
@@ -812,6 +819,7 @@ it.effect('finishes one shared cleanup when the first concurrent closer is inter
         )
         return {
           listModels: () => Promise.resolve(makePager(undefined)),
+          generateContent: () => Promise.reject(new Error('Unexpected Gemini generation request')),
         }
       }),
     })
