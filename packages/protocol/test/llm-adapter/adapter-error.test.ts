@@ -13,7 +13,7 @@ it.effect('round-trips a typed adapter error without retaining provider internal
     const encoded = {
       _tag: 'AdapterRateLimitError',
       adapterId: 'gemini',
-      modelId: 'connection-a/models/flash',
+      modelId: 'models/flash',
       operation: 'generate',
       message: 'Provider rate limit reached',
       retryAfterMs: 1_000,
@@ -25,7 +25,7 @@ it.effect('round-trips a typed adapter error without retaining provider internal
     expect(yield* Schema.encodeEffect(AdapterError)(error)).toEqual({
       _tag: 'AdapterRateLimitError',
       adapterId: 'gemini',
-      modelId: 'connection-a/models/flash',
+      modelId: 'models/flash',
       operation: 'generate',
       message: 'Provider rate limit reached',
       retryAfterMs: 1_000,

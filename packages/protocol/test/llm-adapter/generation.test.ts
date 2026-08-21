@@ -30,7 +30,7 @@ it.effect('round-trips final text with bounded provider-neutral usage', () =>
 it.effect('drops unknown minor fields and never forwards providerOptions', () =>
   Effect.gen(function* () {
     const encoded = {
-      modelId: 'connection-a/models/flash',
+      modelId: 'models/flash',
       messages: [{ role: 'user', content: 'hello' }],
       limits: { maxOutputTokens: 512 },
       feedbackTools: [],
@@ -41,7 +41,7 @@ it.effect('drops unknown minor fields and never forwards providerOptions', () =>
     const request = yield* Schema.decodeUnknownEffect(GenerateRequest)(encoded)
     expect(request.systemInstruction).toBeUndefined()
     expect(yield* Schema.encodeEffect(GenerateRequest)(request)).toEqual({
-      modelId: 'connection-a/models/flash',
+      modelId: 'models/flash',
       messages: [{ role: 'user', content: 'hello' }],
       limits: { maxOutputTokens: 512 },
       feedbackTools: [],
@@ -97,7 +97,7 @@ it.effect('rejects duplicate FeedbackTool declarations before an adapter can map
       },
     }
     const error = yield* Schema.decodeUnknownEffect(GenerateRequest)({
-      modelId: 'connection-a/models/flash',
+      modelId: 'models/flash',
       messages: [{ role: 'user', content: 'hello' }],
       limits: { maxOutputTokens: 512 },
       feedbackTools: [tool, tool],

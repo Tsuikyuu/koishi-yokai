@@ -373,9 +373,10 @@ Schema 解码失败都会使整个信封失效。主体必须先验证全部 dec
 | ActionTool      | 最终 XML     | `<actions>` 模板          | 永不回灌         | 反应、记忆写入、本地定时任务 |
 | FeedbackTool    | 首次函数调用 | adapter 通用 FunctionCall | 仅回传一次       | 历史检索、网络搜索、计算查询 |
 
-主体先在本地判定消息路径：未达到唤醒条件是 `local-only`，供应商请求数为 0；首次请求直接返回
-XML 是 `single-pass`，供应商请求数为 1；首次请求返回 FeedbackTool 是 `bounded-feedback`，执行
-一批工具后再请求最终 XML，供应商请求数为 2。不存在第三次生成请求。
+主体先在本地判定消息路径：未达到唤醒条件是 `local-only`，逻辑生成次数为 0；首次生成直接返回
+XML 是 `single-pass`，逻辑生成次数为 1；首次生成返回 FeedbackTool 是 `bounded-feedback`，执行
+一批工具后再进行最终生成，逻辑生成次数为 2。不存在第三次逻辑生成。adapter 可以在一次逻辑生成内
+对同一模型执行有界的等价端点尝试；这种传输级尝试不增加主体编排步骤。
 
 选中的 ContextProvider 并行运行并共享一个很短的总截止时间。单个 Provider 失败或超时只省略
 对应片段，不重试、不阻塞其他片段或 LLM 请求；必需的焦点消息、人格和角色状态由主体直接提供，
@@ -470,9 +471,9 @@ Yokai 内置工具不提供高危写操作。第三方工具的授权、副作�
 首个模型适配器，只负责：
 
 - 把统一生成请求转换为 Gemini Developer API 请求；
-- 使用当前凭据自动发现可用模型，并暴露统一模型描述；
+- 通过单一逻辑连接的活动端点自动发现可用模型，并暴露统一模型描述；
 - 声明 adapter 是否实现通用 FeedbackTool 传输契约；
-- 处理流式输出、超时、取消和限流；只对非消息后台请求执行有界重试；
+- 处理完整响应、超时、取消、限流和同模型端点故障转移；只对非消息后台发现执行有界重试；
 - 返回统一结果、用量和错误类型；
 - 对日志中的密钥和内容脱敏。
 
@@ -483,8 +484,39 @@ Gemini adapter 以 Google 官方 [`@google/genai`](https://googleapis.github.io/
 出现在 adapter 包内；其异步接口在边界转换为 Effect，所有返回数据解码为通用协议，不得把 SDK 类型泄漏到
 `@yokai/protocol`。MVP 不使用已停止维护的 `@google/generativeai`。
 
+Gemini 的唯一网络出口是当前插件 Koishi Context 上的 `ctx.http`。adapter 内部定义一个只暴露 fetch
+implementation 的窄 Effect service；`apply(ctx, config)` 只把 `ctx.http` 转成该 service 的 Live Layer，
+不把完整 Koishi `Context` 传入连接或协议层。每个 `GoogleGenAI` 在 Layer 作用域内构造时接收该插件实例专属的
+fetch implementation。不得替换 `globalThis.fetch`、设置进程级 Undici dispatcher、自建另一套代理配置，
+或创建任何绕过 `ctx.http` 的 Gemini HTTP client。
+
+注入 fetch 把 SDK 的 method、headers、body、signal、redirect 和 keepalive 映射到 `ctx.http`，使请求经过
+`http/config`、context intercept、默认 headers、keep-alive、`http/fetch-init` 和 proxy-agent。SDK 生成的
+Headers 先规范化为普通 entries；绝对 endpoint、认证、Content-Type 等单次请求字段在冲突时优先。bridge 对所有 HTTP status 使用通过策略，
+并在 `ctx.http` response decoder 内完整读完 body、重建标准 `Response` 后再交给 SDK；这样非 `2xx` 仍由 SDK
+解码为 `ApiError`，同时 Koishi 的 timeout、取消和 dispose 覆盖整个响应体读取，而不是只覆盖响应头。
+
+SDK 的内建 timeout 和 retry 均关闭。顶层 `requestTimeoutMs` 由 Effect 对每个 endpoint 尝试施加硬截止，
+并通过 `AbortSignal` 贯穿 SDK、注入 fetch 与 `ctx.http`；Koishi HTTP 自身的全局 timeout 同时保留，较早到达的
+截止时间终止请求。SDK 或 Koishi transport 失败在 adapter 边界翻译为类型化错误，caller interruption 与 Layer
+关闭保持 Effect interruption。adapter scope 只清理自己的 fiber、client 引用和密钥，不 dispose 共享的
+`ctx.http` 服务。
+
+Koishi `ETIMEDOUT` 映射为 adapter timeout，其他代理、请求或完整 body 读取失败映射为 transport error；
+非 `2xx` 继续走 SDK status/error 解码，成功 status 下的畸形供应商 payload 映射为 protocol decode error。
+任何映射后的错误都不能携带原始 URL、headers、body、API key 或底层 cause。
+
+当前上游精确版本尚未暴露实例级 fetch 注入口，因此仓库采用最小本地 Yarn patch 作为已接受的开发期偏差，
+并在使用该补丁期间保持 Gemini adapter 工作区 `private: true`。这项偏差不阻塞后续内部实现任务，但正式发布
+门禁延后：公开发布前必须改用包含该能力的上游 `@google/genai` v2 精确版本，或保持 SDK wire/解析语义不变的
+最小、可审计 scoped fork/npm alias；不能要求插件使用者继承仓库根级补丁。
+
 adapter 不依赖 SDK 的高层自动工具循环，而是显式关闭 automatic function calling，读取原始函数调用部件，
 由 Yokai 主体执行工具并且只续接一次。
+
+Yokai 的生成传输固定为 non-streaming unary：Gemini adapter 只调用 `ai.models.generateContent`，等待完整响应，
+不调用 `generateContentStream`、不发送 `alt=sse`，也不请求、解析或消费 SSE。公共协议不暴露 chunk，主体只会
+收到完整的 FinalTextResult 或 ToolCallBatch。
 
 首次生成可以接收通用 FeedbackTool 声明，adapter 把它们编译为 v2 的原生 function declarations，再把厂商调用解码为
 通用调用数据和短生命周期、不透明的 continuation handle。主体只能把 handle 与一批通用 ToolResult 交回创建它的同一 adapter；
@@ -494,24 +526,43 @@ adapter 恢复完整供应商响应，使用同一模型发起唯一最终生成
 continuation handle 单次消费、不可持久化，随角色回合完成、超时、取消或 adapter 作用域关闭而释放。Gemini adapter 必须
 保留首次响应的全部供应商部件，包括供应商要求原样回传的 thought signature；主体只处理通用 call ID 和 ToolResult。
 
-adapter 在启动、连接配置更新或手动刷新时调用 Gemini
+adapter 在启动、端点配置更新或手动刷新时调用 Gemini
 [`models.list`](https://ai.google.dev/api/models)，读完所有分页，只将声明 `generateContent` 的模型暴露为文本候选。
-自动发现只回答“有哪些模型”，不探测模型是否支持函数调用、流式传输或其他可选能力。
+一次发现只发布首个完整成功端点的一份快照，不合并多个端点的结果；分页中途切换端点时必须丢弃
+已经读取的页面并从第一页重新开始。自动发现只回答“有哪些模型”，不探测模型是否支持函数调用、
+多模态或其他可选能力。供应商返回的 generation methods 只是 opaque metadata；即使包含流式方法名，Yokai
+也不会调用它。
 
 能力是否启用由使用者显式配置，不由 Yokai 猜测。主插件为当前协议会改变编排行为的能力提供开关；
 MVP 只有 `feedbackToolsEnabled`，默认关闭。关闭时主体不向任何模型暴露 FeedbackTool，只运行
 single-pass；开启时仅在 adapter 声明实现了通用 FeedbackTool 传输契约后暴露工具。该开关表示
 “允许尝试”，不保证所选供应商模型实际支持函数调用。模型在运行时拒绝时，adapter 返回类型化
-unsupported 错误，本回合保持沉默，不探测、不重试、不切换 fallback。以后新增会改变主体编排的
+unsupported 错误，本回合保持沉默，不探测、不重试、不切换端点或主插件 fallback。以后新增会改变主体编排的
 能力必须先进入通用协议和主插件配置；adapter 私有传输特性不进入主体能力配置。
 
-模型选择只存在于主插件 `@yokai/koishi-plugin-yokai` 的配置中；adapter 只配置连接与传输参数，不保存“当前模型”。
-每种 adapter 在一个 Koishi 上下文中是单例，同一 adapter ID 重复注册必须拒绝。该单例可配置多组连接；每组连接有稳定且唯一的
-`connectionId`、显示名、base URL、API key 和传输参数。`connectionId` 不允许包含 `/`；重复 ID 使整份 adapter 配置失效，不允许静默覆盖。
+模型选择只存在于主插件 `@yokai/koishi-plugin-yokai` 的配置中；adapter 只配置单一逻辑连接与传输参数，
+不保存“当前模型”。每个 Gemini Koishi 插件实例拥有一个 adapter 和一条逻辑连接；插件不声明 Koishi
+`reusable` 策略。顶层 `adapterId` 默认为 `gemini`，同时注册到同一 Yokai 主体的实例必须使用不同的合法
+`adapterId`，注册表仍拒绝后注册的同 ID adapter。每个实例配置一份非空、有序的 `endpoints`；每项严格只有 `baseUrl` 和 `apiKey`，
+没有额外身份、显示文案或独立传输配置。`requestTimeoutMs` 和仅用于后台发现的 `discoveryRetry` 位于顶层，
+对该实例所有端点使用相同值。`apiKey` 必填；`baseUrl` 省略时由 Koishi Schema 补成 Gemini 官方服务根 URL。
+`adapterId` 非法、endpoint 列表为空、任一 key 缺失或任一显式 URL 非法时整份配置失效，不发出网络请求。
 
-adapter 汇总各连接的模型快照，并将对主体暴露的 adapter-local model ID 编码为 `<connectionId>/<providerModelId>`。
-因而主插件中的完整模型引用为 `<adapterId>/<connectionId>/<providerModelId>`，主体只在第一个 `/` 处分割，并将余下部分作为不透明 adapter model ID。
-同一供应商模型出现在不同连接时是两个独立候选，显示文案应包含连接显示名。主插件把每个 adapter 最新的发现快照合并为带版本的全局模型目录。
+第一个配置端点初始为活动端点；此后每次 `discoverModels`、`generate` 或 `continue` 都从当前活动端点开始，
+再按配置顺序循环尝试后续端点，每个端点在同一次逻辑调用内至多一次。`401/403` 认证失败、`402/429` 余额
+或限流失败、`408/504` 或配置硬超时、传输错误以及其他 `5xx` 会切到下一端点；只有完整成功的逻辑调用才
+原子地将其成功端点设为后续调用的活动端点，并发成功调用以最后完成者为准。分页模型发现必须在同一端点
+读完全部页面才更新活动端点，任一页失败均不更新。全部端点耗尽后返回最后一个错误。调用方取消、上述状态
+以外的普通 `4xx`、协议解码、能力不支持和内容/安全错误不切换端点。模型发现拒绝畸形分页、重复 page token、
+超过 100 页或累计超过 10,000 个模型的响应；这些都作为不可切换的协议解码错误结束本次逻辑调用。
+
+生成只使用完整的 unary 响应。请求在超时或可切换传输失败后尝试下一端点时，原端点可能已经接受或完成请求，
+因此仍可能造成重复生成和重复计费；控制面必须记录端点尝试数并向管理员说明这一风险。
+
+adapter-local model ID 就是规范化后的 `providerModelId`，完整模型引用为 `<adapterId>/<providerModelId>`。
+同一供应商模型经多个端点可见时仍是一个模型，不因端点重复、不带传输源前缀，也不产生端点显示名。主插件把
+adapter 最新的单份发现快照合并为带版本的全局模型目录。端点故障转移始终保持同一 `providerModelId`，只是
+adapter 内部一次逻辑调用的传输容灾；它不是主插件在 primary/fallback 之间进行的 model fallback。
 
 主插件的 primary 和 fallback 配置使用 Koishi `Schema.dynamic('yokai-model')`。模型目录的 `SubscriptionRef` 每次原子替换后，Koishi 边界根据新快照调用 `ctx.schema.set('yokai-model', ...)`，将每个模型投影为动态选项。这会让主插件的原生 Koishi 配置表单实时响应 adapter 注册、卸载、重连和模型刷新，不需要重载主插件，也不另造一份模型下拉框状态。
 
@@ -522,8 +573,8 @@ adapter 汇总各连接的模型快照，并将对主体暴露的 adapter-local 
 - 选中模型重新出现后下一回合自动恢复，不修改配置或重启主插件。
 - 发现失败时目录继续发布上次成功快照并标记为 stale，不让配置选项瞬间消失。
 - fallback 只按主插件配置的顺序参与请求前的可用模型解析，不因目录顺序、显示名或 adapter 刷新自动改变。
-- 每个角色回合在请求前只解析出一个模型；有界反馈的两次生成必须使用同一模型。任一生成失败后
-  不重试，也不级联切换 fallback。
+- 每个角色回合在请求前只解析出一个模型；有界反馈的两次逻辑生成必须使用同一模型。一次逻辑生成可在
+  adapter 内按上述规则尝试等价端点；端点耗尽或其他生成失败后，主体不重试，也不级联切换 fallback。
 
 如果实际连接的是兼容协议而不是官方服务，后续使用：
 
@@ -644,7 +695,7 @@ adapter 注册后主体立即在其作用域中请求模型清单；adapter 配�
 
 所有注册项必须具有稳定 `id` 和协议版本。注册表遵守：
 
-- adapter 为单例；同一 adapter ID 或其他同域能力 ID 冲突时拒绝后注册者，不静默覆盖。
+- adapter 注册项以 adapter ID 唯一标识；同一 adapter ID 或其他同域能力 ID 冲突时拒绝后注册者，不静默覆盖。
 - 注册返回 `Disposable`，Koishi 插件卸载时立即停止向新回合暴露能力。
 - 每个角色回合冻结一份能力快照；回合执行期间安装、卸载或更新插件不会改变该回合。
 - 新回合始终读取最新注册表版本。
@@ -714,7 +765,7 @@ Skill 不在每轮全部注入。主体先用关键词、事件类型、当前�
 
 只有主插件开启 `feedbackToolsEnabled` 且当前 adapter 声明实现通用 FeedbackTool 传输契约时
 才暴露 FeedbackTool。供应商模型在运行时拒绝函数调用时产生类型化 unsupported 错误并静默结束，
-不把 FeedbackTool 降级成 XML，也不在同一角色回合探测、重试或切换模型。
+不把 FeedbackTool 降级成 XML，也不在同一角色回合探测、重试、切换端点或切换模型。
 
 #### MCP Server
 
@@ -896,34 +947,36 @@ Yokai 将这些模式统一成 `ResponseMechanism + WakeProposal + WakeArbiter`�
 | 表达             | 最大长度；严格角色内表达是固定行为                                             |
 
 角色外调试和管理只在 Koishi Console 或管理命令中进行。primary/fallback 均属于主插件配置；未选 primary 是允许的本地存档模式，
-不使用伪造的 `none` 模型 ID。adapter 的多组 URL/key 连接只存在对应 adapter 插件配置中。
+不使用伪造的 `none` 模型 ID。Gemini adapter 的有序 URL/key 端点只存在 adapter 插件配置中，并共享
+顶层超时与发现重试设置；它们是一个逻辑连接的容灾传输，不是可选模型或主插件 fallback。
 
 ## 8. 评测
 
 ### 8.1 核心指标
 
-| 指标                             | 目标                         |
-| -------------------------------- | ---------------------------- |
-| 匿名记录来源识别率               | 接近随机猜测                 |
-| 角色外术语泄漏率                 | 0                            |
-| 不合时宜发言率                   | 持续下降                     |
-| 已有答案后的重复回复率           | 持续下降                     |
-| 人格和背景矛盾率                 | 接近 0                       |
-| 虚假记忆率                       | 接近 0                       |
-| 消息长度与节奏分布差异           | 接近目标群人类分布           |
-| 主动消息被忽略率                 | 不高于普通群友基线           |
-| 冷路径远程模型调用数             | 0                            |
-| single-pass 回合供应商生成请求数 | 恰好 1                       |
-| bounded-feedback 回合生成请求数  | 恰好 2，反馈轮数恰好 1       |
-| 单次路径占角色回合比例           | MVP 不低于 90%               |
-| 唤醒确认到供应商请求发出 p95     | 不高于上下文截止时间 + 50 ms |
-| XML 解析与本地编排额外耗时 p95   | 不高于 50 ms                 |
-| 发送前动作额外耗时               | 不超过配置的短超时           |
-| 有效 XML 输出率                  | 持续接近 100%                |
-| 每 100 条群消息的角色回合数      | 在效果不下降时尽可能低       |
-| 每个角色回合合并的消息数         | 能覆盖完整消息簇             |
-| 每千条群消息的模型成本           | 不超过实例预算               |
-| 历史上下文查询数和 token         | 持续受限且可解释             |
+| 指标                              | 目标                         |
+| --------------------------------- | ---------------------------- |
+| 匿名记录来源识别率                | 接近随机猜测                 |
+| 角色外术语泄漏率                  | 0                            |
+| 不合时宜发言率                    | 持续下降                     |
+| 已有答案后的重复回复率            | 持续下降                     |
+| 人格和背景矛盾率                  | 接近 0                       |
+| 虚假记忆率                        | 接近 0                       |
+| 消息长度与节奏分布差异            | 接近目标群人类分布           |
+| 主动消息被忽略率                  | 不高于普通群友基线           |
+| 冷路径远程模型调用数              | 0                            |
+| single-pass 回合逻辑生成次数      | 恰好 1                       |
+| bounded-feedback 回合逻辑生成次数 | 恰好 2，反馈轮数恰好 1       |
+| 单次逻辑生成端点尝试数            | 不超过已配置端点数           |
+| 单次路径占角色回合比例            | MVP 不低于 90%               |
+| 唤醒确认到供应商请求发出 p95      | 不高于上下文截止时间 + 50 ms |
+| XML 解析与本地编排额外耗时 p95    | 不高于 50 ms                 |
+| 发送前动作额外耗时                | 不超过配置的短超时           |
+| 有效 XML 输出率                   | 持续接近 100%                |
+| 每 100 条群消息的角色回合数       | 在效果不下降时尽可能低       |
+| 每个角色回合合并的消息数          | 能覆盖完整消息簇             |
+| 每千条群消息的模型成本            | 不超过实例预算               |
+| 历史上下文查询数和 token          | 持续受限且可解释             |
 
 盲测使用经过匿名化的离线群聊片段，评价者只看消息和上下文，不看账号标识。线上运行仍保留平台机器人标识。
 
@@ -938,11 +991,11 @@ Yokai 将这些模式统一成 `ResponseMechanism + WakeProposal + WakeArbiter`�
 - 模型调用 `history.search` 后收到一次有界结果并生成最终 XML，不能继续翻页；
 - 模拟 `web.search` 一次返回有界来源与摘要，最终生成不得再请求 `open` 或第二个搜索；
 - 多个 ContextProvider 并行运行；一个超时被省略且不会推迟首次 LLM 请求；
-- 一条普通回复包含 XML ActionTool 时仍只有一次供应商生成请求，动作结果不回灌模型；
+- 一条普通回复包含 XML ActionTool 时仍只有一次逻辑生成，动作结果不回灌模型；端点容灾不形成新的编排步骤；
 - 畸形 XML、未知 Tool 和超出当前作用域的参数均不执行任何动作，也不把协议文本发送进群聊；
 - `after-send` ActionTool 不延迟角色消息，`deferred` ActionTool 完成后不能续接当前请求；
 - 回复成功后可通过 `notebook.write` 写入零条或多条有界笔记，沉默或发送失败时不写入；
-- FeedbackTool 的最终请求使用禁止函数调用模式，任何第三次生成请求都应被测试判定为失败；
+- FeedbackTool 的最终请求使用禁止函数调用模式，任何第三次逻辑生成都应被测试判定为失败；
 - 新安装的 Tool、Skill 和响应机制在下一回合可见，卸载后不再被选择；
 - MCP 服务断开和重连不会影响主体或其他能力；
 - 修改有效预设后下一回合使用新版本，错误预设继续使用旧版本；
@@ -951,8 +1004,15 @@ Yokai 将这些模式统一成 `ResponseMechanism + WakeProposal + WakeArbiter`�
 - 讨论租约内用户无需重复 @，租约过期后恢复普通活跃度门控；
 - 熟人和陌生人使用不同但稳定的表达；
 - 记忆模糊时降低断言强度，不发起追问；
-- Gemini adapter 能分页发现当前凭据可用的所有文本生成模型，且发现失败不进入群聊；
-- 同一 Gemini adapter 的多组 URL/key 产生带连接前缀的独立模型项，不会相互覆盖；
+- Gemini adapter 能分页发现当前逻辑连接可用的所有文本生成模型，且发现失败不进入群聊；
+- Gemini SDK 的每个实例只使用注入的 `ctx.http` fetch；全局 HTTP headers、intercept 和 proxy hook 可观测，
+  两个 Koishi Context 并发时配置不串线，`globalThis.fetch` 与进程级 dispatcher 保持未修改；
+- 多组 URL/key 只形成一个有序端点列表；同一 `providerModelId` 只产生一个无端点前缀的模型项；
+- 分页发现切换端点时丢弃部分结果并从第一页重启，只发布首个完整成功端点的一份快照；
+- 可切换错误按活动端点起始的循环配置顺序有界尝试；只有完整成功的逻辑调用才更新粘性活动端点，
+  并发成功调用以最后完成者为准；取消、普通 `4xx` 及协议、能力、内容错误不切换，全部耗尽返回最后错误；
+- 生成只调用 unary `generateContent`，不调用 `generateContentStream`、不发送 `alt=sse`、不消费 SSE；
+  超时切换的重复生成与重复计费风险进入控制面说明；
 - adapter 模型快照变化后主插件配置的 primary/fallback 选项实时更新，无需重载主插件；
 - `feedbackToolsEnabled` 关闭时所有模型都只走 single-pass；开启后不做能力探测，运行时不支持则本回合沉默；
 - 已选模型暂时离线时配置值保留且角色回合停止，模型恢复后自动继续；
@@ -967,11 +1027,13 @@ Yokai 将这些模式统一成 `ResponseMechanism + WakeProposal + WakeArbiter`�
 
 第一阶段只实现文本群聊：
 
-1. `@yokai/koishi-plugin-yokai` 和 `adapter-gemini` 两个公开插件；Gemini adapter 使用 `@google/genai` v2，一个单例支持多组 URL/key 并自动发现模型。
+1. `@yokai/koishi-plugin-yokai` 和目标正式发布的 `adapter-gemini`；Gemini adapter 使用 `@google/genai` v2，
+   每个 SDK 实例注入由 `ctx.http` 支撑的 fetch，只调用 unary API；每个 Koishi 插件实例以有序 URL/key 端点
+   支撑自己的一条逻辑连接，并自动发现一份以其 `adapterId` 为命名空间、无端点前缀的模型目录。
 2. `ctx.yokai` 能力注册表、生命周期快照和唤醒仲裁器。
 3. 结构化人格、严格角色内表达和预设文件热更新。
 4. 默认保留 90 天且可配置的原始群聊存档、环形缓冲和无远程模型参与的活跃度门控。
-5. 达到阈值后合并最近 20～80 条消息；绝大多数回合一次生成，反馈回合最多两次生成。
+5. 达到阈值后合并最近 20～80 条消息；绝大多数回合一次逻辑生成，反馈回合最多两次逻辑生成。
 6. 带稳定游标和 token 预算的历史 ContextProvider，以及只读 `history.search` FeedbackTool。
 7. 内置 direct、activity、engagement 和 schedule 响应机制。
 8. 持久化定时任务与短期讨论租约。
@@ -981,9 +1043,10 @@ Yokai 将这些模式统一成 `ResponseMechanism + WakeProposal + WakeArbiter`�
 12. 少量由未完话题触发的主动发言。
 13. 仓库外 LLM adapter 的零修改兼容门禁，覆盖注册、模型发现、配置联动、两类生成和卸载。
 
-MVP 仍只正式发布 Gemini adapter；用于兼容门禁的确定性 adapter 是测试夹具，不作为第二个产品
-adapter 发布。MVP 暂不实现语音、图片生成、浏览器、代码工具、人格市场和主动私聊。先证明文本
-群聊中的行为不可区分，再扩展能力。
+开发期本地 Yarn patch 是已接受偏差，Gemini adapter 工作区因此暂时保持 private，正式发布门禁延后到上游
+提供实例级 fetch 注入口或项目改用已发布、可审计的 scoped fork。达到该门禁后，MVP 仍只正式发布 Gemini
+adapter；用于兼容门禁的确定性 adapter 是测试夹具，不作为第二个产品 adapter 发布。MVP 暂不实现语音、
+图片生成、浏览器、代码工具、人格市场和主动私聊。先证明文本群聊中的行为不可区分，再扩展能力。
 
 ## 10. 最终架构决策
 
@@ -1003,14 +1066,19 @@ adapter 发布。MVP 暂不实现语音、图片生成、浏览器、代码工�
 12. 定时写行为通过 XML `schedule` ActionTool 和 scheduled WakeProposal 实现；查询使用只读 FeedbackTool。
 13. 角色预设使用不可变版本快照原子热更新，不停机且不修改进行中的回合。
 14. 以匿名记录盲测中的不可区分性作为唯一顶层指标，其余指标都是诊断手段。
-15. Gemini adapter 使用官方 `@google/genai`；SDK 类型不跨边界，自动函数调用关闭，FeedbackTool
-    由主体执行，adapter 只传输通用调用与结果。
-16. 模型选择和协议能力开关属于主插件配置，通过 Koishi dynamic Schema 实时投影 adapter 模型目录；
+15. Gemini adapter 使用官方 `@google/genai` v2 API；每个 SDK 实例注入由当前 `ctx.http` 支撑的 fetch，
+    不修改全局 fetch/dispatcher，不另设代理。上游未提供注入口期间，允许以本地 Yarn patch 作为已接受的
+    开发期偏差并保持包 private；正式发布门禁延后，届时必须使用带注入口的上游精确版本或已发布、可审计的
+    最小兼容 scoped fork，不把仓库根级 patch 交给使用者。
+16. Yokai 的 LLM 生成只接受完整 unary 响应，不调用供应商 streaming API，不请求、解析或消费 SSE。
+    SDK 类型不跨边界，自动函数调用关闭，FeedbackTool 由主体执行，adapter 只传输通用调用与结果。
+    Gemini 的有序 URL/key 端点共享配置、只做同模型传输容灾，不形成独立模型身份，也不替代主插件 model fallback。
+17. 模型选择和协议能力开关属于主插件配置，通过 Koishi dynamic Schema 实时投影 adapter 模型目录；
     adapter 不持有当前模型选择，主体不探测逐模型能力。
-17. Yokai 不是通用 Agent；single-pass 回合一次生成，bounded-feedback 回合最多两次生成且只有
+18. Yokai 不是通用 Agent；single-pass 回合一次逻辑生成，bounded-feedback 回合最多两次逻辑生成且只有
     一轮工具反馈，不形成开放式观察—续轮循环。
-18. 只有 ActionTool 使用 XML 且不回显；需要结果参与回答的历史、搜索和计算使用 FeedbackTool。
-19. 实现当前协议的新增 LLM adapter 只能新增自己的插件包；主体及其他既有包零修改，兼容性由
+19. 只有 ActionTool 使用 XML 且不回显；需要结果参与回答的历史、搜索和计算使用 FeedbackTool。
+20. 实现当前协议的新增 LLM adapter 只能新增自己的插件包；主体及其他既有包零修改，兼容性由
     仓库外 adapter 门禁验证，而不是依赖第二个正式 adapter。
-20. 原始消息默认保留 90 天且可配置；不实现撤回同步、消息级删除或手动删除流程。长期记忆只由
+21. 原始消息默认保留 90 天且可配置；不实现撤回同步、消息级删除或手动删除流程。长期记忆只由
     回复成功后的 `notebook.write` ActionTool 选择性写入，写入结果不回灌模型。

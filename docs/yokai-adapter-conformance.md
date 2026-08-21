@@ -10,7 +10,8 @@
 
 `@yokai/adapter-conformance` 为所有 `YokaiAdapter` 提供同一套供应商无关的测试输入、可观测控制面、Vitest 契约套件和确定性 fake adapter。它解决两类仅靠 `YokaiAdapter` 公共返回值无法验证的问题：
 
-- 是否真的只发起了一次物理供应商请求、取消是否到达供应商边界、是否发生了隐藏的能力探测；
+- 每个 `generate/continue` 是否只形成一次同模型逻辑生成、物理端点尝试是否有界、取消是否到达
+  供应商边界、是否发生了隐藏的能力探测；
 - continuation 是否恢复原 model、首次调用顺序和 owning Scope，并在并发、失败和作用域关闭时正确失效。
 
 本包只使用 `@yokai/protocol` 的通用 DTO 和 Effect 生命周期，不定义新 adapter 协议，也不包含 Koishi、Gemini 或其他供应商 SDK 类型。真实 adapter 通过一个测试专用 factory，把通用脚本翻译为自己的 SDK 或 HTTP stub 行为，再复用同一套断言。
@@ -78,7 +79,14 @@ interface AdapterConformanceSetup {
 - `ToolCalls`：携带未做批次校验的原始调用数组、单次 usage 和 `blocked`；
 - `Failure`：携带通用失败注入和 `blocked`。
 
-原始 ToolCall 数组可以为空、包含重复 call ID 或调用未声明工具，以便测试 adapter 在供应商边界后的协议校验。bounded-feedback 的典型脚本是首个 `ToolCalls` step，紧接一个 `Text` step；禁止第三次生成。
+原始 ToolCall 数组可以为空、包含重复 call ID 或调用未声明工具，以便测试 adapter 在供应商边界后的协议校验。
+无故障转移时，bounded-feedback 的典型脚本是首个 `ToolCalls` step 紧接一个 `Text` step；专属测试可以在
+每个逻辑阶段插入失败端点 step，但禁止第三个逻辑生成阶段。
+
+通用套件的 factory 对支持多 endpoint 的 adapter 使用单 endpoint 配置，使标准错误映射用例的一个
+failure step 不会被私有故障转移吞掉；成功用例同样为每次逻辑生成提供一个立即成功的物理 step。
+具有等价 endpoint 的 adapter 可以在自己的专属 setup 中为同一 model 编排多个失败/成功 step；这些 step
+仍属于一次 `generate` 或 `continue` 逻辑调用，必须受专属测试中已配置的端点数上界约束。
 
 `AdapterConformanceFailure` 使用以下供应商无关分类：
 
@@ -186,7 +194,8 @@ fake 不发起 `capability-probe`，不根据模型名称或 methods 推断通�
 
 ### 5.3 首次生成与唯一续接
 
-每次合法 `generate` 消费一个 generation step，并最多进入一次 `generation` provider 请求：
+fake adapter 没有等价 endpoint 配置。每次合法 `generate` 消费一个 generation step，并最多进入一次
+`generation` provider 请求：
 
 - `Text` 解码为最终文本结果；
 - `ToolCalls` 先验证重复 call ID 和未声明工具，再通过公共 `ToolCalls` Schema；验证成功后才创建 continuation；
@@ -201,8 +210,8 @@ fake continuation store 以每实例私有 `HashMap` 保存 `modelId`、首次�
 1. 在单个原子状态更新中把 `pending` claim 为 `claimed`；unknown、已 claim、已消费、跨 adapter 或已过期 handle 统一返回 invalid continuation；
 2. 按 call ID 验证结果集合与首次调用集合完全相等；失败发生在 provider 前；
 3. 按首次 ToolCall 顺序重排结果，并在 `RequestStarted.resultCallIds` 中公开该安全观测；
-4. 只消费一个后续 generation step，并最多执行一次物理 `continue` provider 请求；
-5. 若供应商再次返回 ToolCalls，以 `unexpected-tool-call` 协议错误终止，不创建新 handle，也不发起第三次请求；
+4. 只消费一个后续 generation step；由于 fake 没有等价 endpoint，唯一续接只进入一次 provider 边界；
+5. 若供应商再次返回 ToolCalls，以 `unexpected-tool-call` 协议错误终止，不创建新 handle，也不发起第三次逻辑生成；
 6. 无论成功、类型化失败、取消或协议失败，都删除 claimed entry，不恢复为 pending。
 
 因此两个并发 `continue` 最多一个能进入 provider 边界；另一个在请求前得到统一 invalid continuation。原 adapter handle 交给另一个 fake 实例时不会破坏原实例的 pending entry。
@@ -236,10 +245,12 @@ defineAdapterConformanceSuite('Gemini YokaiAdapter', geminiConformanceFactory)
 - descriptor Schema 与协议握手；
 - 模型 ID 和 generation methods 去重、稳定排序、逐模型 freshness、元数据缺失保持缺失；
 - 快照内容等价比较只排除 `discoveredAt`，后续刷新不回写先前快照；
-- single-pass 文本以及 ToolCallBatch → 单次 continue → 最终文本，且每阶段 usage 为本次物理请求增量；
+- single-pass 文本以及 ToolCallBatch → 单次 continue → 最终文本，且每阶段 usage 为本次逻辑生成成功响应的增量；
 - 结果按 call ID 恢复首次调用顺序；
 - continuation 绑定原 adapter 实例、model 和 owning Scope，并在重复、并发、跨 adapter 与 Scope 关闭时失效；
-- provider 前错误请求数为零，合法 `generate` 或 `continue` 最多一次物理请求，再次 ToolCall 不产生第三次请求；
+- provider 前错误请求数为零；合法 `generate` 或 `continue` 各只形成一次同模型逻辑生成，通用立即成功
+  fixture 各消费一个物理 step；adapter 专属的等价端点尝试可以多于一次但必须有界，再次 ToolCall 不产生
+  第三次逻辑生成；
 - caller interruption保持 Effect interruption，provider-reported cancellation 与其他注入错误映射为封闭错误分类；
 - 普通发现与生成不产生 capability probe，错误和事件不泄漏不可信 provider message 或 continuation。
 
@@ -249,11 +260,12 @@ defineAdapterConformanceSuite('Gemini YokaiAdapter', geminiConformanceFactory)
 
 通过通用套件证明的是 YK-002 协议在给定 adapter 实现上的供应商无关行为。以下内容仍由各 adapter 的专属测试负责：
 
-- SDK/HTTP wire mapping、分页 token、连接路由、认证配置和供应商响应解码；
+- SDK/HTTP wire mapping、分页 token、连接或 endpoint 路由、认证配置和供应商响应解码；
 - Effect interruption 是否最终转换为该 SDK 或 HTTP 客户端实际使用的 `AbortSignal`；
 - 哪一种真实 SDK/HTTP 失败触发 setup 中的哪一个通用错误分类；
 - 供应商私有历史、thought signature 或 function response 是否无损保存在 continuation state；
-- 供应商专属重试规则、超时、资源释放和密钥脱敏。
+- 供应商专属重试/故障转移规则、同模型端点尝试上界、分页切换后的重启、超时重复计费风险、
+  HTTP 配置继承、完整响应期间的取消与资源释放，以及密钥脱敏。
 
 确定性 fake 是通用套件和主体集成测试的参考实现，不替代真实 adapter 自己运行同一套 conformance suite。仅让 fake 通过不能证明 Gemini 或其他 adapter 合规。
 

@@ -5,11 +5,11 @@ import { AdapterId, ModelReference } from '../../src/llm-adapter/identity'
 
 it.effect('round-trips a model reference by splitting only the first slash', () =>
   Effect.gen(function* () {
-    const encoded = 'gemini/connection-a/models/gemini-2.5-flash'
+    const encoded = 'gemini/models/gemini-2.5-flash'
     const reference = yield* Schema.decodeUnknownEffect(ModelReference)(encoded)
 
     expect(reference.adapterId).toBe('gemini')
-    expect(reference.modelId).toBe('connection-a/models/gemini-2.5-flash')
+    expect(reference.modelId).toBe('models/gemini-2.5-flash')
     expect(yield* Schema.encodeEffect(ModelReference)(reference)).toBe(encoded)
   }),
 )
