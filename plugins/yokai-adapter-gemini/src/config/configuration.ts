@@ -42,6 +42,7 @@ export const Configuration = Schema.Struct({
   adapterId: AdapterId,
   endpoints: Endpoints,
   requestTimeoutMs: Schema.Int.check(Schema.isBetween({ minimum: 1_000, maximum: 600_000 })),
+  maxConcurrency: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 64 })),
   discoveryRetry: DiscoveryRetryPolicy,
 }).check(
   Schema.makeFilter((configuration) =>
@@ -63,6 +64,7 @@ export interface Interface {
   readonly adapterId: Configuration['adapterId']
   readonly endpoints: Configuration['endpoints']
   readonly requestTimeoutMs: Configuration['requestTimeoutMs']
+  readonly maxConcurrency: Configuration['maxConcurrency']
   readonly discoveryRetry: Configuration['discoveryRetry']
 }
 

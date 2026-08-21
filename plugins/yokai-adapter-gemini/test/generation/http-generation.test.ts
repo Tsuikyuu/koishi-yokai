@@ -117,6 +117,7 @@ const makeConfig = (baseUrl: string) => ({
   adapterId: 'gemini-http-generation-test',
   endpoints: [{ apiKey: API_KEY, baseUrl }],
   requestTimeoutMs: 60_000,
+  maxConcurrency: 4,
   discoveryRetry: {
     maxAttempts: 3,
     initialDelayMs: 1_000,

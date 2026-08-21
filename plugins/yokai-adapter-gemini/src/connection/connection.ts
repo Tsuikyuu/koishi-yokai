@@ -10,7 +10,7 @@ import {
   AdapterCancelledError,
   AdapterConfigurationError,
   type AdapterId,
-  type AdapterInvocationError,
+  AdapterInvocationError,
   type AdapterModelId,
   AdapterInternalError,
   AdapterProtocolDecodeError,
@@ -18,6 +18,7 @@ import {
   AdapterRateLimitError,
   AdapterTimeoutError,
   AdapterTransportError,
+  AdapterUnsupportedError,
 } from '@yokai/protocol'
 import {
   Cause,
@@ -34,6 +35,8 @@ import {
   Redacted,
   Ref,
   Scope,
+  Schema,
+  Semaphore,
   Stream,
   SynchronizedRef,
 } from 'effect'
@@ -41,6 +44,7 @@ import {
 import { GeminiClientFactory } from '../client/client-factory'
 import { GeminiConfiguration } from '../config/configuration'
 import type { Configuration, DiscoveryRetryPolicy } from '../config/configuration'
+import { trackLogicalInvocation, trackPhysicalAttempt } from '../observability/observability'
 import { GeminiHttpTransport } from '../transport/http-transport'
 
 const DISCOVERY_OPERATION = 'discoverModels'
@@ -172,12 +176,14 @@ const generationRateLimitError = (
   adapterId: AdapterId,
   modelId: AdapterModelId,
   operation: GenerationOperation,
+  retryAfterMs?: number,
 ) =>
   new AdapterRateLimitError({
     adapterId,
     modelId,
     operation,
     message: 'Gemini text generation was rate limited',
+    ...(retryAfterMs === undefined ? {} : { retryAfterMs }),
   })
 
 const generationTimeoutError = (
@@ -265,6 +271,68 @@ const generationClosedConnectionError = (
     operation,
     message: 'Gemini connection is closed',
   })
+
+const generationConfigurationError = (
+  adapterId: AdapterId,
+  modelId: AdapterModelId,
+  operation: GenerationOperation,
+) =>
+  new AdapterConfigurationError({
+    adapterId,
+    modelId,
+    operation,
+    message: 'Gemini generation is not configured',
+  })
+
+const generationUnsupportedError = (
+  adapterId: AdapterId,
+  modelId: AdapterModelId,
+  operation: GenerationOperation,
+) =>
+  new AdapterUnsupportedError({
+    adapterId,
+    modelId,
+    operation,
+    message: 'Gemini does not support the requested generation feature',
+    feature: 'feedback-tools',
+  })
+
+const sanitizeInjectedGenerationError = (
+  adapterId: AdapterId,
+  modelId: AdapterModelId,
+  operation: GenerationOperation,
+  error: AdapterInvocationError,
+): AdapterInvocationError => {
+  switch (error._tag) {
+    case 'AdapterConfigurationError':
+      return generationConfigurationError(adapterId, modelId, operation)
+    case 'AdapterAuthenticationError':
+      return generationAuthenticationError(adapterId, modelId, operation)
+    case 'AdapterRateLimitError':
+      return generationRateLimitError(adapterId, modelId, operation, error.retryAfterMs)
+    case 'AdapterTimeoutError':
+      return generationTimeoutError(adapterId, modelId, operation)
+    case 'AdapterCancelledError':
+      return generationCancelledError(adapterId, modelId, operation)
+    case 'AdapterTransportError':
+      return generationTransportError(adapterId, modelId, operation)
+    case 'AdapterProviderResponseError':
+      return generationProviderResponseError(
+        adapterId,
+        modelId,
+        operation,
+        error.statusCode === undefined ? 500 : error.statusCode,
+      )
+    case 'AdapterProtocolDecodeError':
+      return generationProtocolDecodeError(adapterId, modelId, operation)
+    case 'AdapterInternalError':
+    case 'AdapterContinuationError':
+    case 'AdapterProtocolViolationError':
+      return generationInternalError(adapterId, modelId, operation)
+    case 'AdapterUnsupportedError':
+      return generationUnsupportedError(adapterId, modelId, operation)
+  }
+}
 
 const hasNetworkErrorCode = (cause: Error['cause']): boolean => {
   if (typeof cause !== 'object' || cause === null || !('code' in cause)) return false
@@ -368,6 +436,7 @@ const makeConnection = Effect.fn('GeminiConnection.makeConnection')(function* (
   const activeEndpoint = yield* SynchronizedRef.make(Option.some(0))
   yield* Effect.addFinalizer(() => SynchronizedRef.set(activeEndpoint, Option.none()))
   const requests = yield* FiberSet.make()
+  const invocationGate = yield* Semaphore.make(configuration.maxConcurrency)
 
   const invokePage = Effect.fn('GeminiConnection.invokePage')(function* (
     client: GeminiClientFactory.Client,
@@ -482,6 +551,9 @@ const makeConnection = Effect.fn('GeminiConnection.makeConnection')(function* (
     const request = Effect.tryPromise({
       try: (signal) => client.generateContent(params, signal),
       catch: (cause) => {
+        if (Schema.is(AdapterInvocationError)(cause)) {
+          return sanitizeInjectedGenerationError(configuration.adapterId, modelId, operation, cause)
+        }
         if (cause instanceof ApiError) {
           return classifyGenerationApiError(configuration.adapterId, modelId, operation, cause)
         }
@@ -533,12 +605,21 @@ const makeConnection = Effect.fn('GeminiConnection.makeConnection')(function* (
         const entry = remaining[0]
         if (entry === undefined) return yield* Effect.die('Expected at least one Gemini endpoint')
 
-        return yield* listAllModels(entry.client).pipe(
+        const invocation = listAllModels(entry.client).pipe(
           Effect.flatMap(accept),
           Effect.timeout(configuration.requestTimeoutMs),
           Effect.mapError((error) =>
             Cause.isTimeoutError(error) ? timeoutError(configuration.adapterId) : error,
           ),
+        )
+        return yield* trackPhysicalAttempt(
+          {
+            adapterId: configuration.adapterId,
+            operation: DISCOVERY_OPERATION,
+            modelId: Option.none(),
+          },
+          invocation,
+        ).pipe(
           Effect.matchEffect({
             onFailure: (error) => {
               const rest = remaining.slice(1)
@@ -552,12 +633,24 @@ const makeConnection = Effect.fn('GeminiConnection.makeConnection')(function* (
       },
     )
 
-    const currentClients = yield* Ref.get(clientsRef)
-    const current = yield* SynchronizedRef.get(activeEndpoint)
-    if (Option.isNone(currentClients) || Option.isNone(current)) {
-      return yield* Effect.fail(closedConnectionError(configuration.adapterId))
-    }
-    return yield* attempt(orderedClients(currentClients.value, current.value))
+    const invocation = invocationGate.withPermits(1)(
+      Effect.gen(function* () {
+        const currentClients = yield* Ref.get(clientsRef)
+        const current = yield* SynchronizedRef.get(activeEndpoint)
+        if (Option.isNone(currentClients) || Option.isNone(current)) {
+          return yield* Effect.fail(closedConnectionError(configuration.adapterId))
+        }
+        return yield* attempt(orderedClients(currentClients.value, current.value))
+      }),
+    )
+    return yield* trackLogicalInvocation(
+      {
+        adapterId: configuration.adapterId,
+        operation: DISCOVERY_OPERATION,
+        modelId: Option.none(),
+      },
+      invocation,
+    )
   })
 
   const generateContent = Effect.fn('GeminiConnection.generateContent')(function* <A, R>(
@@ -574,7 +667,7 @@ const makeConnection = Effect.fn('GeminiConnection.makeConnection')(function* (
       const entry = remaining[0]
       if (entry === undefined) return yield* Effect.die('Expected at least one Gemini endpoint')
 
-      return yield* invokeGeneration(entry.client, operation, modelId, params).pipe(
+      const invocation = invokeGeneration(entry.client, operation, modelId, params).pipe(
         Effect.flatMap(accept),
         Effect.timeout(configuration.requestTimeoutMs),
         Effect.mapError((error) =>
@@ -582,24 +675,57 @@ const makeConnection = Effect.fn('GeminiConnection.makeConnection')(function* (
             ? generationTimeoutError(configuration.adapterId, modelId, operation)
             : error,
         ),
+      )
+      return yield* trackPhysicalAttempt(
+        {
+          adapterId: configuration.adapterId,
+          operation,
+          modelId: Option.some(modelId),
+        },
+        invocation,
+      ).pipe(
         Effect.matchEffect({
           onFailure: (error) => {
             const rest = remaining.slice(1)
-            return isSwitchableError(error) && rest.length > 0 ? attempt(rest) : Effect.fail(error)
+            return isSwitchableError(error) && rest.length > 0
+              ? Effect.logWarning(
+                  'Gemini generation endpoint failover may duplicate generation or billing',
+                ).pipe(
+                  Effect.annotateLogs({
+                    adapterId: configuration.adapterId,
+                    modelId,
+                    operation,
+                    status: 'endpoint-failover',
+                  }),
+                  Effect.andThen(attempt(rest)),
+                )
+              : Effect.fail(error)
           },
           onSuccess: (value) => activateIfOpen(entry.index).pipe(Effect.as(value)),
         }),
       )
     })
 
-    const currentClients = yield* Ref.get(clientsRef)
-    const current = yield* SynchronizedRef.get(activeEndpoint)
-    if (Option.isNone(currentClients) || Option.isNone(current)) {
-      return yield* Effect.fail(
-        generationClosedConnectionError(configuration.adapterId, modelId, operation),
-      )
-    }
-    return yield* attempt(orderedClients(currentClients.value, current.value))
+    const invocation = invocationGate.withPermits(1)(
+      Effect.gen(function* () {
+        const currentClients = yield* Ref.get(clientsRef)
+        const current = yield* SynchronizedRef.get(activeEndpoint)
+        if (Option.isNone(currentClients) || Option.isNone(current)) {
+          return yield* Effect.fail(
+            generationClosedConnectionError(configuration.adapterId, modelId, operation),
+          )
+        }
+        return yield* attempt(orderedClients(currentClients.value, current.value))
+      }),
+    )
+    return yield* trackLogicalInvocation(
+      {
+        adapterId: configuration.adapterId,
+        operation,
+        modelId: Option.some(modelId),
+      },
+      invocation,
+    )
   })
 
   return Service.of({

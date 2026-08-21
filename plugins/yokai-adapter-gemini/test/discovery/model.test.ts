@@ -66,7 +66,7 @@ it.effect('filters, normalizes, deduplicates, and stably sorts Gemini model meta
   }),
 )
 
-it.effect('keeps an absent method list absent by excluding the model', () =>
+it.effect('keeps an absent method list absent without inventing capabilities', () =>
   Effect.gen(function* () {
     const snapshot = yield* decodeListing(
       ADAPTER_ID,
@@ -79,7 +79,14 @@ it.effect('keeps an absent method list absent by excluding the model', () =>
       DISCOVERED_AT,
     )
 
-    expect(snapshot.models).toEqual([])
+    expect(snapshot.models).toEqual([
+      {
+        id: 'no-methods',
+        displayName: 'No methods',
+        availability: 'available',
+        discoveryFreshness: 'fresh',
+      },
+    ])
   }),
 )
 

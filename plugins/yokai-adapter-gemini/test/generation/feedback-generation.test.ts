@@ -159,24 +159,25 @@ const scriptedConnection = Effect.fn('GeminiFeedbackGenerationTest.scriptedConne
       backoffMultiplier: 2,
     },
     listModels: () => Effect.die('Unexpected model discovery request'),
-    generateContent: Effect.fn('GeminiFeedbackGenerationTest.generateContent')(function* <A, R>(
+    generateContent: <A, R>(
       operation: GeminiConnection.GenerationOperation,
       modelId: AdapterModelId,
       params: GenerateContentParameters,
       accept: (response: GenerateContentResponse) => Effect.Effect<A, AdapterInvocationError, R>,
-    ) {
-      yield* Ref.update(observed, (current) => [...current, { operation, modelId, params }])
-      const response = yield* Ref.modify(remaining, (current) => {
-        const head = current[0]
-        return head === undefined
-          ? [Option.none<GenerateContentResponse>(), current]
-          : [Option.some(head), current.slice(1)]
-      })
-      if (Option.isNone(response)) {
-        return yield* Effect.die('Gemini feedback response script exhausted')
-      }
-      return yield* accept(response.value)
-    }),
+    ): Effect.Effect<A, AdapterInvocationError, R> =>
+      Effect.gen(function* () {
+        yield* Ref.update(observed, (current) => [...current, { operation, modelId, params }])
+        const response = yield* Ref.modify(remaining, (current) => {
+          const head = current[0]
+          return head === undefined
+            ? [Option.none<GenerateContentResponse>(), current]
+            : [Option.some(head), current.slice(1)]
+        })
+        if (Option.isNone(response)) {
+          return yield* Effect.die('Gemini feedback response script exhausted')
+        }
+        return yield* accept(response.value)
+      }),
     close: () => Effect.succeed(true),
   })
 })
@@ -196,20 +197,19 @@ const blockingConnection = (
       backoffMultiplier: 2,
     },
     listModels: () => Effect.die('Unexpected model discovery request'),
-    generateContent: Effect.fn('GeminiFeedbackGenerationTest.blockingGeneration')(function* <A, R>(
+    generateContent: <A, R>(
       operation: GeminiConnection.GenerationOperation,
       modelId: AdapterModelId,
       params: GenerateContentParameters,
       accept: (response: GenerateContentResponse) => Effect.Effect<A, AdapterInvocationError, R>,
-    ) {
-      yield* Ref.update(observed, (current) => [...current, { operation, modelId, params }])
-      if (operation === 'generate') return yield* accept(toolResponse)
-      return yield* Effect.gen(function* () {
+    ): Effect.Effect<A, AdapterInvocationError, R> =>
+      Effect.gen(function* () {
+        yield* Ref.update(observed, (current) => [...current, { operation, modelId, params }])
+        if (operation === 'generate') return yield* accept(toolResponse)
         yield* Deferred.succeed(started, undefined)
         yield* Deferred.await(blocked)
         return yield* accept(finalResponse)
-      }).pipe(Effect.ensuring(Deferred.succeed(cancelled, undefined).pipe(Effect.asVoid)))
-    }),
+      }).pipe(Effect.ensuring(Deferred.succeed(cancelled, undefined).pipe(Effect.asVoid))),
     close: () => Effect.succeed(true),
   })
 
@@ -436,26 +436,24 @@ it.effect('consumes the handle after a typed continuation timeout', () =>
         backoffMultiplier: 2,
       },
       listModels: () => Effect.die('Unexpected model discovery request'),
-      generateContent: Effect.fn('GeminiFeedbackGenerationTest.timedOutGeneration')(function* <
-        A,
-        R,
-      >(
+      generateContent: <A, R>(
         operation: GeminiConnection.GenerationOperation,
         modelId: AdapterModelId,
         params: GenerateContentParameters,
         accept: (response: GenerateContentResponse) => Effect.Effect<A, AdapterInvocationError, R>,
-      ) {
-        yield* Ref.update(observed, (current) => [...current, { operation, modelId, params }])
-        if (operation === 'generate') return yield* accept(toolResponse)
-        return yield* Effect.fail(
-          new AdapterTimeoutError({
-            adapterId: ADAPTER_ID,
-            modelId,
-            operation: 'continue',
-            message: 'Gemini feedback continuation timed out',
-          }),
-        )
-      }),
+      ): Effect.Effect<A, AdapterInvocationError, R> =>
+        Effect.gen(function* () {
+          yield* Ref.update(observed, (current) => [...current, { operation, modelId, params }])
+          if (operation === 'generate') return yield* accept(toolResponse)
+          return yield* Effect.fail(
+            new AdapterTimeoutError({
+              adapterId: ADAPTER_ID,
+              modelId,
+              operation: 'continue',
+              message: 'Gemini feedback continuation timed out',
+            }),
+          )
+        }),
       close: () => Effect.succeed(true),
     })
     const generation = yield* GeminiTextGeneration.Service.pipe(

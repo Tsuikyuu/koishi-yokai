@@ -11,10 +11,11 @@ import {
   type InitialGenerationResult,
   makeAdapterContinuationError,
 } from '@yokai/protocol'
-import { Context, Effect, Fiber, Layer, Schema, Scope } from 'effect'
+import { Context, Effect, Fiber, Layer, Option, Schema, Scope } from 'effect'
 
 import { GeminiConnection } from '../connection/connection'
 import { GeminiContinuationStore } from '../continuation/store'
+import { recordGenerationUsage } from '../observability/observability'
 import { encodeContinuationRequest, encodeRequest } from './request'
 import { decodeFinalResponse, decodeInitialResponse } from './response'
 
@@ -59,32 +60,45 @@ const make = Effect.fn('GeminiTextGeneration.make')(function* () {
     )
     const encoded = encodeRequest(request)
 
-    return yield* connection.generateContent('generate', request.modelId, encoded, (response) =>
-      Effect.gen(function* () {
-        const decoded = yield* decodeInitialResponse(
-          connection.adapterId,
-          request.modelId,
-          request.feedbackTools,
-          response,
-        )
-        if (decoded._tag === 'Text') return decoded.result
+    const result = yield* connection.generateContent(
+      'generate',
+      request.modelId,
+      encoded,
+      (response) =>
+        Effect.gen(function* () {
+          const decoded = yield* decodeInitialResponse(
+            connection.adapterId,
+            request.modelId,
+            request.feedbackTools,
+            response,
+          )
+          if (decoded._tag === 'Text') return decoded.result
 
-        const continuation = yield* continuations.create({
-          modelId: request.modelId,
-          contents: encoded.contents,
-          config: encoded.config,
-          modelContent: decoded.modelContent,
-          calls: decoded.calls,
-          providerCalls: decoded.providerCalls,
-        })
-        return yield* ToolCallBatch.makeEffect({
-          _tag: 'ToolCallBatch',
-          calls: decoded.calls,
-          continuation,
-          usage: decoded.usage,
-        }).pipe(Effect.mapError(() => responseDecodeError(connection.adapterId, request.modelId)))
-      }),
+          const continuation = yield* continuations.create({
+            modelId: request.modelId,
+            contents: encoded.contents,
+            config: encoded.config,
+            modelContent: decoded.modelContent,
+            calls: decoded.calls,
+            providerCalls: decoded.providerCalls,
+          })
+          return yield* ToolCallBatch.makeEffect({
+            _tag: 'ToolCallBatch',
+            calls: decoded.calls,
+            continuation,
+            usage: decoded.usage,
+          }).pipe(Effect.mapError(() => responseDecodeError(connection.adapterId, request.modelId)))
+        }),
     )
+    yield* recordGenerationUsage(
+      {
+        adapterId: connection.adapterId,
+        operation: 'generate',
+        modelId: Option.some(request.modelId),
+      },
+      result.usage,
+    )
+    return result
   })
 
   const continueGeneration = Effect.fn('GeminiTextGeneration.continue')(function* (
@@ -99,13 +113,22 @@ const make = Effect.fn('GeminiTextGeneration.make')(function* () {
         const claimed = yield* continuations.claim(request.continuation)
         const work = Effect.gen(function* () {
           const encoded = yield* encodeContinuationRequest(claimed, request.results)
-          return yield* connection.generateContent(
+          const result = yield* connection.generateContent(
             'continue',
             claimed.modelId,
             encoded,
             (response) =>
               decodeFinalResponse(connection.adapterId, claimed.modelId, 'continue', response),
           )
+          yield* recordGenerationUsage(
+            {
+              adapterId: connection.adapterId,
+              operation: 'continue',
+              modelId: Option.some(claimed.modelId),
+            },
+            result.usage,
+          )
+          return result
         })
         const fiber = yield* Effect.forkIn(restore(work), claimed.owningScope, {
           uninterruptible: false,

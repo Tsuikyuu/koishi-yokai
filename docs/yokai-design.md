@@ -544,7 +544,7 @@ unsupported 错误，本回合保持沉默，不探测、不重试、不切换�
 不保存“当前模型”。每个 Gemini Koishi 插件实例拥有一个 adapter 和一条逻辑连接；插件不声明 Koishi
 `reusable` 策略。顶层 `adapterId` 默认为 `gemini`，同时注册到同一 Yokai 主体的实例必须使用不同的合法
 `adapterId`，注册表仍拒绝后注册的同 ID adapter。每个实例配置一份非空、有序的 `endpoints`；每项严格只有 `baseUrl` 和 `apiKey`，
-没有额外身份、显示文案或独立传输配置。`requestTimeoutMs` 和仅用于后台发现的 `discoveryRetry` 位于顶层，
+没有额外身份、显示文案或独立传输配置。`requestTimeoutMs`、`maxConcurrency` 和仅用于后台发现的 `discoveryRetry` 位于顶层，
 对该实例所有端点使用相同值。`apiKey` 必填；`baseUrl` 省略时由 Koishi Schema 补成 Gemini 官方服务根 URL。
 `adapterId` 非法、endpoint 列表为空、任一 key 缺失或任一显式 URL 非法时整份配置失效，不发出网络请求。
 
@@ -555,6 +555,10 @@ unsupported 错误，本回合保持沉默，不探测、不重试、不切换�
 读完全部页面才更新活动端点，任一页失败均不更新。全部端点耗尽后返回最后一个错误。调用方取消、上述状态
 以外的普通 `4xx`、协议解码、能力不支持和内容/安全错误不切换端点。模型发现拒绝畸形分页、重复 page token、
 超过 100 页或累计超过 10,000 个模型的响应；这些都作为不可切换的协议解码错误结束本次逻辑调用。
+
+`maxConcurrency` 默认为 `4`，合法范围为 `1..64`。它是每个 Gemini adapter 实例共享的逻辑调用上限，
+覆盖发现、生成和 continuation 的完整 endpoint 故障转移、响应读取与解码。permit 等待保持可中断；排队取消不发出
+SDK 请求。后台发现的每次重试重新获取 permit，指数退避期间释放 permit，避免重试睡眠阻塞正常生成。
 
 生成只使用完整的 unary 响应。请求在超时或可切换传输失败后尝试下一端点时，原端点可能已经接受或完成请求，
 因此仍可能造成重复生成和重复计费；控制面必须记录端点尝试数并向管理员说明这一风险。
@@ -1011,6 +1015,7 @@ Yokai 将这些模式统一成 `ResponseMechanism + WakeProposal + WakeArbiter`�
 - 分页发现切换端点时丢弃部分结果并从第一页重启，只发布首个完整成功端点的一份快照；
 - 可切换错误按活动端点起始的循环配置顺序有界尝试；只有完整成功的逻辑调用才更新粘性活动端点，
   并发成功调用以最后完成者为准；取消、普通 `4xx` 及协议、能力、内容错误不切换，全部耗尽返回最后错误；
+- 实例级 `maxConcurrency` 同时约束发现、生成和 continuation；排队取消不触达 SDK，后台发现退避不占用并发名额；
 - 生成只调用 unary `generateContent`，不调用 `generateContentStream`、不发送 `alt=sse`、不消费 SSE；
   超时切换的重复生成与重复计费风险进入控制面说明；
 - adapter 模型快照变化后主插件配置的 primary/fallback 选项实时更新，无需重载主插件；
