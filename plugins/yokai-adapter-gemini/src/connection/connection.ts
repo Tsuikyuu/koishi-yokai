@@ -441,32 +441,34 @@ const makeConnection = Effect.fn('GeminiConnection.makeConnection')(function* (
       pageCount: 0,
       modelCount: 0,
     }
-    const models = yield* Stream.paginate(initialState, (state: PaginationState) =>
-      Effect.gen(function* () {
-        const page = yield* invokePage(client, state.params)
-        const pageCount = state.pageCount + 1
-        const modelCount = state.modelCount + page.models.length
-        if (modelCount > MAX_DISCOVERED_MODELS) {
-          return yield* Effect.fail(protocolDecodeError(configuration.adapterId))
-        }
-        if (Option.isNone(page.nextPageToken)) {
-          return [page.models, Option.none<PaginationState>()] as const
-        }
+    const models = yield* Stream.paginate<PaginationState, Model, AdapterInvocationError>(
+      initialState,
+      (state: PaginationState) =>
+        Effect.gen(function* () {
+          const page = yield* invokePage(client, state.params)
+          const pageCount = state.pageCount + 1
+          const modelCount = state.modelCount + page.models.length
+          if (modelCount > MAX_DISCOVERED_MODELS) {
+            return yield* Effect.fail(protocolDecodeError(configuration.adapterId))
+          }
+          if (Option.isNone(page.nextPageToken)) {
+            return [page.models, Option.none<PaginationState>()] as const
+          }
 
-        const token = page.nextPageToken.value
-        if (pageCount >= MAX_DISCOVERY_PAGES || HashSet.has(state.seenPageTokens, token)) {
-          return yield* Effect.fail(protocolDecodeError(configuration.adapterId))
-        }
-        return [
-          page.models,
-          Option.some({
-            params: withPageToken(state.params, token),
-            seenPageTokens: HashSet.add(state.seenPageTokens, token),
-            pageCount,
-            modelCount,
-          }),
-        ] as const
-      }),
+          const token = page.nextPageToken.value
+          if (pageCount >= MAX_DISCOVERY_PAGES || HashSet.has(state.seenPageTokens, token)) {
+            return yield* Effect.fail(protocolDecodeError(configuration.adapterId))
+          }
+          return [
+            page.models,
+            Option.some({
+              params: withPageToken(state.params, token),
+              seenPageTokens: HashSet.add(state.seenPageTokens, token),
+              pageCount,
+              modelCount,
+            }),
+          ] as const
+        }),
     ).pipe(Stream.runCollect)
     return { models } satisfies ModelListing
   })
