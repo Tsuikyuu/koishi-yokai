@@ -95,12 +95,13 @@ no default or synthesized model. Discovery never sends generation, function
 calling, capability-probe, message, persona, or memory requests.
 
 The runtime Layer also exposes one provider-neutral `GeminiAdapter.Service`.
-Its descriptor uses the configured adapter ID and currently declares
-`feedbackTools: false`. Text generation validates the common request before any
-provider call, maps the optional system instruction and each user/assistant turn
-to Gemini content (`assistant` becomes `model`), preserves the adapter-local
-model ID, and applies the requested maximum output-token limit. Sampling and
-provider-only options are intentionally absent.
+Its descriptor uses the configured adapter ID and declares `feedbackTools: true`
+for the adapter-wide transport contract; this does not claim that every discovered
+model supports function calling. Text generation validates the common request
+before any provider call, maps the optional system instruction and each
+user/assistant turn to Gemini content (`assistant` becomes `model`), preserves the
+adapter-local model ID, and applies the requested maximum output-token limit.
+Sampling and provider-only options are intentionally absent.
 
 Each physical generation attempt calls only unary `models.generateContent` with
 one requested candidate and SDK automatic function calling disabled. The adapter
@@ -112,9 +113,23 @@ safety blocks, malformed payloads, non-2xx responses, timeouts, transport
 failures, and provider-reported cancellation cross the public boundary only as
 typed, sanitized adapter failures.
 
-Non-empty feedback-tool declarations are rejected before a provider request.
-Continuation handles are likewise rejected until the bounded FeedbackTool
-transport is implemented by YK-007.
+When FeedbackTools are selected, their portable closed input schemas are compiled
+to Gemini function declarations with `AUTO` function calling while SDK automatic
+execution remains disabled. A response containing one or more function calls is
+returned as one ordered provider-neutral `ToolCallBatch`; temporary response text
+is not exposed as sendable output, and the adapter never executes a tool itself.
+
+The batch carries only an opaque, redacted, in-memory continuation handle. The
+adapter keeps the original model content and every Part, including opaque thought
+signatures, inside its scoped continuation state. One matching `continue` call
+orders results by call ID, wraps arbitrary JSON success values and safe failures,
+and sends the original conversation, original model parts, and function responses
+to the same model with function calling set to `NONE`. Success, failure, timeout,
+caller cancellation, turn-scope closure, or adapter disposal consumes the handle;
+repeated, concurrent, expired, or foreign consumption fails before a provider
+request. A second provider function call is a typed protocol violation, so the
+adapter can never create a third logical generation step. Final XML is returned
+as opaque text without parsing or normalization.
 
 Model selection, primary models, and fallbacks belong to the Yokai host plugin,
 not this adapter. Endpoint failover always keeps the same provider model and is

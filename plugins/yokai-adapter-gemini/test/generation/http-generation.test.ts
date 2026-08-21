@@ -1,6 +1,6 @@
 import { HTTP } from '@cordisjs/plugin-http'
 import { expect, it } from '@effect/vitest'
-import { GenerateRequest } from '@yokai/protocol'
+import { ContinueRequest, GenerateRequest, JsonObject } from '@yokai/protocol'
 import { Context as CordisContext } from 'cordis'
 import { Cause, Effect, Exit, Fiber, Layer, Queue, Schema } from 'effect'
 import { createServer, type RequestListener, type Server } from 'node:http'
@@ -8,6 +8,8 @@ import { createServer, type RequestListener, type Server } from 'node:http'
 import { GeminiClientFactory } from '../../src/client/client-factory'
 import { GeminiConfiguration } from '../../src/config/configuration'
 import { GeminiConnection } from '../../src/connection/connection'
+import { GeminiContinuationStore } from '../../src/continuation/store'
+import { GeminiContinuationTokenGenerator } from '../../src/continuation/token-generator'
 import { GeminiTextGeneration } from '../../src/generation/generation'
 import { GeminiHttpTransport } from '../../src/transport/http-transport'
 
@@ -35,6 +37,43 @@ const WireRequest = Schema.Struct({
   generationConfig: Schema.Struct({
     candidateCount: Schema.Number,
     maxOutputTokens: Schema.Number,
+  }),
+})
+
+const WireFunctionCall = Schema.Struct({
+  id: Schema.optionalKey(Schema.String),
+  name: Schema.String,
+  args: JsonObject,
+})
+const WireFunctionResponse = Schema.Struct({
+  id: Schema.optionalKey(Schema.String),
+  name: Schema.String,
+  response: JsonObject,
+})
+const WireFeedbackPart = Schema.Struct({
+  text: Schema.optionalKey(Schema.String),
+  thoughtSignature: Schema.optionalKey(Schema.String),
+  functionCall: Schema.optionalKey(WireFunctionCall),
+  functionResponse: Schema.optionalKey(WireFunctionResponse),
+})
+const WireFeedbackContent = Schema.Struct({
+  role: Schema.String,
+  parts: Schema.Array(WireFeedbackPart),
+})
+const WireFunctionDeclaration = Schema.Struct({
+  name: Schema.String,
+  description: Schema.String,
+  parametersJsonSchema: Schema.Json,
+})
+const WireFeedbackRequest = Schema.Struct({
+  contents: Schema.Array(WireFeedbackContent),
+  tools: Schema.Array(
+    Schema.Struct({
+      functionDeclarations: Schema.Array(WireFunctionDeclaration),
+    }),
+  ),
+  toolConfig: Schema.Struct({
+    functionCallingConfig: Schema.Struct({ mode: Schema.String }),
   }),
 })
 
@@ -91,7 +130,11 @@ const makeGenerationLayer = (baseUrl: string, http: HTTP) => {
     Layer.provide(GeminiConfiguration.layer(makeConfig(baseUrl))),
     Layer.provide(GeminiClientFactory.layer.pipe(Layer.provide(GeminiHttpTransport.layer(http)))),
   )
-  return GeminiTextGeneration.layer.pipe(Layer.provideMerge(connectionLayer))
+  const continuationLayer = GeminiContinuationStore.layer.pipe(
+    Layer.provide(GeminiContinuationTokenGenerator.layer),
+    Layer.provideMerge(connectionLayer),
+  )
+  return GeminiTextGeneration.layer.pipe(Layer.provideMerge(continuationLayer))
 }
 
 const makeRequest = Schema.decodeUnknownEffect(GenerateRequest)({
@@ -187,6 +230,177 @@ it.effect('sends one unary SDK request with the expected Gemini wire mapping', (
             maxOutputTokens: 96,
           },
         })
+      }).pipe(Effect.provide(makeGenerationLayer(baseUrl, http)), Effect.ensuring(stopContext(ctx)))
+    },
+    ({ server }) => closeServer(server),
+  )
+})
+
+it.effect('sends one unary FeedbackTool request and one unary final continuation', () => {
+  const observed: Array<ObservedRequest> = []
+  let requests = 0
+  const listener: RequestListener = (request, response) => {
+    const chunks: Array<Buffer> = []
+    request.on('data', (chunk: Buffer) => chunks.push(chunk))
+    request.on('end', () => {
+      requests += 1
+      observed.push({
+        method: request.method,
+        url: request.url,
+        body: Buffer.concat(chunks).toString('utf8'),
+      })
+      response.writeHead(200, { 'content-type': 'application/json' })
+      if (requests === 1) {
+        response.end(
+          JSON.stringify({
+            candidates: [
+              {
+                content: {
+                  role: 'model',
+                  parts: [
+                    { text: 'temporary draft', thoughtSignature: 'draft-signature' },
+                    {
+                      functionCall: {
+                        id: 'provider-call-history',
+                        name: 'history.search',
+                        args: { query: 'first turn' },
+                      },
+                      thoughtSignature: 'call-signature',
+                    },
+                  ],
+                },
+                finishReason: 'STOP',
+              },
+            ],
+            usageMetadata: { promptTokenCount: 10, candidatesTokenCount: 3 },
+          }),
+        )
+        return
+      }
+      response.end(
+        JSON.stringify({
+          candidates: [
+            {
+              content: {
+                role: 'model',
+                parts: [{ text: '<yokai-response>A &amp; B</yokai-response>' }],
+              },
+              finishReason: 'STOP',
+            },
+          ],
+          usageMetadata: { promptTokenCount: 18, candidatesTokenCount: 6 },
+        }),
+      )
+    })
+  }
+
+  return Effect.acquireUseRelease(
+    startServer(listener),
+    ({ baseUrl }) => {
+      const ctx = new CordisContext()
+      const http = new HTTP(ctx)
+      return Effect.gen(function* () {
+        const generation = yield* GeminiTextGeneration.Service
+        const initialRequest = yield* Schema.decodeUnknownEffect(GenerateRequest)({
+          modelId: 'gemini-2.5-flash',
+          messages: [{ role: 'user', content: 'Use history when useful.' }],
+          limits: { maxOutputTokens: 96 },
+          feedbackTools: [
+            {
+              id: 'history.search',
+              description: 'Search conversation history',
+              inputSchema: {
+                _tag: 'Object',
+                properties: [
+                  {
+                    name: 'query',
+                    required: true,
+                    schema: { _tag: 'String' },
+                  },
+                ],
+              },
+            },
+          ],
+        })
+        const initial = yield* generation.generate(initialRequest)
+        if (initial._tag !== 'ToolCallBatch') {
+          return yield* Effect.die('Expected Gemini to request FeedbackTool execution')
+        }
+        const call = initial.calls[0]
+        if (call === undefined) return yield* Effect.die('Expected one Gemini function call')
+        const continueRequest = yield* Schema.decodeUnknownEffect(ContinueRequest)({
+          continuation: initial.continuation,
+          results: [{ _tag: 'Success', callId: call.callId, output: { found: true } }],
+        })
+        const final = yield* generation.continue(continueRequest)
+
+        expect(final.text).toBe('<yokai-response>A &amp; B</yokai-response>')
+        expect(observed).toHaveLength(2)
+        const first = observed[0]
+        const second = observed[1]
+        if (first === undefined || second === undefined) {
+          return yield* Effect.die('Expected two Gemini HTTP requests')
+        }
+        expect(first.method).toBe('POST')
+        expect(second.method).toBe('POST')
+        expect(first.url).toContain(':generateContent')
+        expect(second.url).toContain(':generateContent')
+        expect(first.url).not.toContain('alt=sse')
+        expect(second.url).not.toContain('alt=sse')
+
+        const firstWire = yield* Schema.decodeUnknownEffect(
+          Schema.fromJsonString(WireFeedbackRequest),
+        )(first.body)
+        const secondWire = yield* Schema.decodeUnknownEffect(
+          Schema.fromJsonString(WireFeedbackRequest),
+        )(second.body)
+        expect(firstWire.tools).toEqual([
+          {
+            functionDeclarations: [
+              {
+                name: 'history.search',
+                description: 'Search conversation history',
+                parametersJsonSchema: {
+                  type: 'object',
+                  properties: { query: { type: 'string' } },
+                  required: ['query'],
+                  additionalProperties: false,
+                },
+              },
+            ],
+          },
+        ])
+        expect(firstWire.toolConfig.functionCallingConfig.mode).toBe('AUTO')
+        expect(secondWire.toolConfig.functionCallingConfig.mode).toBe('NONE')
+        expect(secondWire.contents).toEqual([
+          { role: 'user', parts: [{ text: 'Use history when useful.' }] },
+          {
+            role: 'model',
+            parts: [
+              { text: 'temporary draft', thoughtSignature: 'draft-signature' },
+              {
+                functionCall: {
+                  id: 'provider-call-history',
+                  name: 'history.search',
+                  args: { query: 'first turn' },
+                },
+                thoughtSignature: 'call-signature',
+              },
+            ],
+          },
+          {
+            role: 'user',
+            parts: [
+              {
+                functionResponse: {
+                  id: 'provider-call-history',
+                  name: 'history.search',
+                  response: { ok: true, value: { found: true } },
+                },
+              },
+            ],
+          },
+        ])
       }).pipe(Effect.provide(makeGenerationLayer(baseUrl, http)), Effect.ensuring(stopContext(ctx)))
     },
     ({ server }) => closeServer(server),

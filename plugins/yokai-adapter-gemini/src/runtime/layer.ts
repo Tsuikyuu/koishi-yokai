@@ -6,6 +6,8 @@ import { GeminiClientFactory } from '../client/client-factory'
 import { GeminiConfiguration } from '../config/configuration'
 import type { Config } from '../config/plugin-config'
 import { GeminiConnection } from '../connection/connection'
+import { GeminiContinuationStore } from '../continuation/store'
+import { GeminiContinuationTokenGenerator } from '../continuation/token-generator'
 import { GeminiModelDiscovery } from '../discovery/discovery'
 import { GeminiTextGeneration } from '../generation/generation'
 import { GeminiHttpTransport } from '../transport/http-transport'
@@ -23,8 +25,12 @@ export const makeLayerWithTransport = (
     Layer.provide(GeminiConfiguration.layer(config)),
     Layer.provide(GeminiClientFactory.layer.pipe(Layer.provide(httpTransportLayer))),
   )
-  const capabilityLayer = Layer.merge(GeminiModelDiscovery.layer, GeminiTextGeneration.layer).pipe(
+  const continuationLayer = GeminiContinuationStore.layer.pipe(
+    Layer.provide(GeminiContinuationTokenGenerator.layer),
     Layer.provideMerge(connectionLayer),
+  )
+  const capabilityLayer = Layer.merge(GeminiModelDiscovery.layer, GeminiTextGeneration.layer).pipe(
+    Layer.provideMerge(continuationLayer),
   )
   return GeminiAdapter.layer.pipe(Layer.provideMerge(capabilityLayer))
 }

@@ -4,6 +4,8 @@ import { AdapterId, GenerateRequest, type AdapterInvocationError } from '@yokai/
 import { Effect, Layer, Ref, Schema } from 'effect'
 
 import { GeminiConnection } from '../../src/connection/connection'
+import { GeminiContinuationStore } from '../../src/continuation/store'
+import { GeminiContinuationTokenGenerator } from '../../src/continuation/token-generator'
 import { GeminiTextGeneration } from '../../src/generation/generation'
 
 const ADAPTER_ID = AdapterId.make('gemini-generation-test')
@@ -46,19 +48,26 @@ const makeLayer = (calls: Ref.Ref<number>) => {
       backoffMultiplier: 2,
     },
     listModels: () => Effect.die('Unexpected model discovery request'),
-    generateContent: Effect.fn('GeminiTextGenerationTest.Connection.generateContent')(function* <A>(
+    generateContent: Effect.fn('GeminiTextGenerationTest.Connection.generateContent')(function* <
+      A,
+      R,
+    >(
+      _operation: Parameters<GeminiConnection.Interface['generateContent']>[0],
       _modelId: (typeof GenerateRequest.Type)['modelId'],
-      _params: Parameters<GeminiConnection.Interface['generateContent']>[1],
-      accept: (value: GenerateContentResponse) => Effect.Effect<A, AdapterInvocationError>,
+      _params: Parameters<GeminiConnection.Interface['generateContent']>[2],
+      accept: (value: GenerateContentResponse) => Effect.Effect<A, AdapterInvocationError, R>,
     ) {
       yield* Ref.update(calls, (count) => count + 1)
       return yield* accept(response)
     }),
     close: () => Effect.succeed(true),
   })
-  return GeminiTextGeneration.layer.pipe(
-    Layer.provide(Layer.succeed(GeminiConnection.Service, connection)),
+  const connectionLayer = Layer.succeed(GeminiConnection.Service, connection)
+  const continuationLayer = GeminiContinuationStore.layer.pipe(
+    Layer.provide(GeminiContinuationTokenGenerator.layer),
+    Layer.provideMerge(connectionLayer),
   )
+  return GeminiTextGeneration.layer.pipe(Layer.provide(continuationLayer))
 }
 
 it.effect('returns a text result through the logical connection', () =>
@@ -80,21 +89,16 @@ it.effect('returns a text result through the logical connection', () =>
   }),
 )
 
-it.effect('rejects feedback tools before invoking Gemini', () =>
+it.effect('allows selected feedback tools when Gemini returns final text directly', () =>
   Effect.gen(function* () {
     const calls = yield* Ref.make(0)
     const request = yield* makeRequest(true)
-    const failure = yield* GeminiTextGeneration.Service.pipe(
+    const result = yield* GeminiTextGeneration.Service.pipe(
       Effect.flatMap((generation) => generation.generate(request)),
       Effect.provide(makeLayer(calls)),
-      Effect.flip,
     )
 
-    expect(failure._tag).toBe('AdapterUnsupportedError')
-    if (failure._tag === 'AdapterUnsupportedError') {
-      expect(failure.feature).toBe('feedback-tools')
-      expect(failure.modelId).toBe('gemini-2.5-flash')
-    }
-    expect(yield* Ref.get(calls)).toBe(0)
+    expect(result._tag).toBe('Text')
+    expect(yield* Ref.get(calls)).toBe(1)
   }),
 )

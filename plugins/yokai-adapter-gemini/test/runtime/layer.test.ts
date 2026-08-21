@@ -79,7 +79,7 @@ it.effect('builds synchronously without exposing SDK clients or credentials', ()
         expect(adapter.descriptor).toEqual({
           id: ADAPTER_ID,
           protocolVersion: CURRENT_ADAPTER_PROTOCOL_VERSION,
-          capabilities: { feedbackTools: false },
+          capabilities: { feedbackTools: true },
         })
         expect(surfaces.every((surface) => !surface.includes(FIRST_API_KEY))).toBe(true)
         expect(surfaces.every((surface) => !surface.includes(SECOND_API_KEY))).toBe(true)

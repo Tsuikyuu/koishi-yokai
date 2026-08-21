@@ -86,8 +86,8 @@ it.effect('fails over with the same model and keeps the successful endpoint acti
 
     yield* Effect.gen(function* () {
       const connection = yield* GeminiConnection.Service
-      yield* connection.generateContent(MODEL_ID, parameters, Effect.succeed)
-      yield* connection.generateContent(MODEL_ID, parameters, Effect.succeed)
+      yield* connection.generateContent('generate', MODEL_ID, parameters, Effect.succeed)
+      yield* connection.generateContent('generate', MODEL_ID, parameters, Effect.succeed)
     }).pipe(Effect.provide(makeLayer(clientFactory)))
 
     expect(yield* Ref.get(invoked)).toEqual([
@@ -127,7 +127,7 @@ it.effect('propagates caller interruption to the active SDK AbortSignal', () =>
     yield* Effect.gen(function* () {
       const connection = yield* GeminiConnection.Service
       const fiber = yield* Effect.forkChild(
-        connection.generateContent(MODEL_ID, parameters, Effect.succeed),
+        connection.generateContent('generate', MODEL_ID, parameters, Effect.succeed),
       )
       const signal = yield* Deferred.await(started)
       expect(signal.aborted).toBe(false)
@@ -139,5 +139,32 @@ it.effect('propagates caller interruption to the active SDK AbortSignal', () =>
       yield* Deferred.await(aborted)
       expect(signal.aborted).toBe(true)
     }).pipe(Effect.provide(makeLayer(clientFactory)))
+  }),
+)
+
+it.effect('labels provider failures from the final request as continuation failures', () =>
+  Effect.gen(function* () {
+    const clientFactory = GeminiClientFactory.Service.of({
+      create: Effect.fn('GeminiGenerationConnectionTest.FailingClientFactory.create')(() =>
+        Effect.succeed({
+          listModels: () => Promise.reject(new Error('Unexpected model discovery request')),
+          generateContent: () =>
+            Promise.reject(new ApiError({ status: 400, message: 'invalid continuation' })),
+        }),
+      ),
+    })
+
+    const failure = yield* Effect.gen(function* () {
+      const connection = yield* GeminiConnection.Service
+      return yield* connection
+        .generateContent('continue', MODEL_ID, parameters, Effect.succeed)
+        .pipe(Effect.flip)
+    }).pipe(Effect.provide(makeLayer(clientFactory)))
+
+    expect(failure._tag).toBe('AdapterProviderResponseError')
+    expect(failure.operation).toBe('continue')
+    if (failure._tag === 'AdapterProviderResponseError') {
+      expect(failure.modelId).toBe(MODEL_ID)
+    }
   }),
 )
