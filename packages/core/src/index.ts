@@ -1,2 +1,1 @@
-/** Yokai core capabilities are introduced by their implementation tasks. */
-export {}
+export * from './capability-registry/index'
