@@ -1,11 +1,15 @@
-import { Context, Schema } from 'koishi'
+import type { Context } from 'koishi'
+
+import { Config as ConfigSchema, type Config as YokaiConfig } from './config'
+import { Yokai } from './service'
 
 export const name = 'yokai'
 
-export interface Config {}
+export const Config = ConfigSchema
+export type Config = YokaiConfig
+export { Yokai } from './service'
 
-export const Config: Schema<Config> = Schema.object({})
-
-export function apply(_ctx: Context, _config: Config) {
-  // write your plugin here
+export function apply(ctx: Context, config: Config): void {
+  const service = new Yokai(ctx, config)
+  ctx.set('yokai', service)
 }
