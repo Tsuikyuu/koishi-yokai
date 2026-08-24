@@ -1,5 +1,6 @@
 import { CapabilityRegistry, HostConfiguration, HostSession } from '@yokai/core'
 import { Effect, ManagedRuntime } from 'effect'
+import type { Context } from 'koishi'
 
 import type { Config } from '../config'
 import { makeLayer } from './layer'
@@ -18,14 +19,14 @@ export interface Interface {
   readonly dispose: () => Promise<void>
 }
 
-export const make = (config: Config): Interface => {
-  const runtime = ManagedRuntime.make(makeLayer(config))
+export const make = (config: Config, ctx: Context): Interface => {
+  const runtime = ManagedRuntime.make(makeLayer(config, ctx))
 
   const service: Interface = {
     runPromise: (effect) => runtime.runPromise(effect),
     runSync: (effect) => runtime.runSync(effect),
     runCleanup: (effect) => {
-      runtime.runSyncExit(effect)
+      runtime.runFork(effect)
     },
     runSession: (session, effect) =>
       runtime.runPromise(effect.pipe(Effect.provide(makeSessionLayer(session)))),

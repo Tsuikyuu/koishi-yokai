@@ -14,7 +14,7 @@
 
 - 任意 `providerOptions`、厂商枚举、SDK 类型、HTTP 请求或响应对象；
 - SSE 或其他流式生成事件、多模态内容、结构化 JSON 输出、内建工具执行器；
-- 主体级自动重试、模型 fallback、跨 adapter/跨模型凭据轮转或开放式工具循环；
+- 主体级自动重试、跨模型自动切换、跨 adapter/跨模型凭据轮转或开放式工具循环；
 - Koishi `Context`、`Session`、`Disposable` 或配置类型。
 
 厂商认证、客户端、连接池、采样细节和 wire format 全部留在 adapter 插件内部。adapter 可以在一次

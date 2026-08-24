@@ -16,7 +16,7 @@ Gemini 客户端：Google 官方 `@google/genai` v2 API，以实例级 fetch 注
 - 所有任务都必须通过 `yarn build` 和 `yarn lint`；时间相关测试使用 `TestClock`，不等待真实时间。
 - 应用逻辑使用 Effect，`Effect.run*` 只能出现在 Koishi 边界和测试基础设施。
 - `@google/genai` 只存在于 Gemini adapter 工作区，锁定稳定 2.x 精确版本；所有 SDK Promise、完整响应和错误都在 adapter 边界转换为 Effect 和 `@yokai/protocol` 类型。
-- 模型选择只存在主插件配置；adapter 仅发布模型快照，不保存 primary 或 fallback。
+- 单一模型选择只存在主插件配置；adapter 仅发布模型快照，不保存当前模型。
 - 模型自动发现不承担能力探测；MVP 的 `feedbackToolsEnabled` 由使用者在主插件显式配置。
 - Yokai 是角色扮演仿生人群友，不实现通用 Agent 规划—工具—观察循环；single-pass 回合一次逻辑生成，
   bounded-feedback 回合最多两次逻辑生成。
@@ -95,7 +95,7 @@ Gemini 客户端：Google 官方 `@google/genai` v2 API，以实例级 fetch 注
   不发出网络请求；省略 base URL 时使用 Gemini 官方服务根 URL。
 - endpoint 项严格只有 `baseUrl` 和 `apiKey`，不接受额外身份、显示文案、独立超时或独立重试字段；
   所有 endpoint 使用相同的 `requestTimeoutMs`、`maxConcurrency` 和 `discoveryRetry`。
-- adapter 配置中不存在 primary、fallback 或任何“当前模型”字段。
+- adapter 配置中不存在 `model` 或任何“当前模型”字段。
 - 所有 endpoint 客户端归同一个 adapter Layer 作用域管理；逻辑连接的活动端点初始为配置第一项，只有
   完整成功的逻辑调用才更新活动端点，并发成功调用以最后完成者为准。
 - API key 在 Schema、错误、日志和测试快照中均不以明文出现。
@@ -141,8 +141,8 @@ Gemini 客户端：Google 官方 `@google/genai` v2 API，以实例级 fetch 注
 - 启动、配置更新和手动刷新可触发发现；处理普通群消息时发现请求数为 `0`。
 - 一次发现的全部 endpoint 耗尽时保留逻辑连接上次成功的整份快照并标记 stale；首次发现失败不伪造默认模型。
 - 发现流程不发起函数调用或其他模型能力探测请求。
-- 配置的模型未出现在成功快照时不由 adapter 合成或改选模型；只有主体明确配置的 fallback 可在请求前选择其他模型。
-- endpoint 故障转移始终保持相同 `providerModelId`；它不是主插件 fallback。一次逻辑生成开始后，主体不得因
+- 配置的模型未出现在成功快照时不由 adapter 合成，主体也不得改选其他模型。
+- endpoint 故障转移始终保持相同 `providerModelId`；它不改变主插件的模型选择。一次逻辑生成开始后，主体不得因
   endpoint 耗尽或其他失败在同一角色回合切换模型。
 
 ### YK-006 Gemini 文本生成闭环
@@ -210,7 +210,7 @@ Yokai 不调用 `generateContentStream`，不发送 `alt=sse`，也不请求、�
   文档、日志指标和测试必须明确重复生成与重复计费这一不可消除的风险。
 - 断言每次 adapter `generate/continue` 只有一次同模型逻辑生成，底层 HTTP 尝试数不超过 endpoint 数；
   single-pass 回合逻辑生成总数为 `1`，bounded-feedback 为 `2`，永不产生第三次逻辑生成。
-- endpoint 耗尽后不级联到主插件 model fallback，并保持群聊沉默。
+- endpoint 耗尽后不切换主插件选中的模型，并保持群聊沉默。
 - 用 `TestClock` 验证发现退避和生成硬超时，无真实 sleep。
 - 日志只含 adapter/model ID、状态、用量和耗时，不含 key、continuation handle、完整提示或完整回复。
 - Gemini adapter 通过 YK-003 的全部契约测试。
@@ -229,26 +229,26 @@ Yokai 不调用 `generateContentStream`，不发送 `alt=sse`，也不请求、�
 
 前置：YK-009。
 
-交付：由主体插件暴露 `ctx.yokai`，将 Koishi 生命周期、配置和 Session 转成内部 Effect 服务输入。在主插件 Config 中定义使用 `Schema.dynamic('yokai-model')` 的可选 primary、有序 fallback，以及默认关闭的 `feedbackToolsEnabled`。
+交付：由主体插件暴露 `ctx.yokai`，将 Koishi 生命周期、配置和 Session 转成内部 Effect 服务输入。在主插件 Config 中定义使用 `Schema.dynamic('yokai-model')` 的单个可选 `model`，以及默认关闭的 `feedbackToolsEnabled`。
 
-验收：第三方测试插件可注册并注销能力；primary/fallback 和 `feedbackToolsEnabled` 只出现在主插件 Config；无 primary 时主插件仍可启动本地存档路径；内部包无 Koishi 依赖；插件 dispose 会中断主体所有有主的 fiber。
+验收：第三方测试插件可注册并注销能力；`model` 和 `feedbackToolsEnabled` 只出现在主插件 Config；未选模型时主插件仍可启动本地存档路径；内部包无 Koishi 依赖；插件 dispose 会中断主体所有有主的 fiber。
 
 ### YK-011 实时模型目录与主插件选择
 
 前置：YK-003、YK-009、YK-010。
 
-交付：主体聚合所有 adapter 的最新模型快照，订阅目录 `SubscriptionRef`，并在每次更新时通过 `ctx.schema.set('yokai-model', Schema.union(...))` 实时更新主插件的 primary/fallback 选项。当前配置中已选但不可用的引用使用 `Schema.const(ref).disabled()` 保留。按模型引用验证选择，并向控制面提供刷新和状态查询。
+交付：主体聚合所有 adapter 的最新模型快照，订阅目录 `SubscriptionRef`，并在每次更新时通过 `ctx.schema.set('yokai-model', Schema.union(...))` 实时更新主插件的单个 `model` 选项。当前配置中已选但不可用的引用使用 `Schema.const(ref).disabled()` 保留。按模型引用验证选择，并向控制面提供刷新和状态查询。
 
 验收：
 
 - 假 adapter 注册、发布新快照、卸载和重新注册时，主插件配置选项均立即更新，不重载主插件。
 - 每次有效目录变化只发出一次 `internal/schema('yokai-model')`，内容未变时不重复发布。
-- 选项值是稳定模型引用，显示文案可变但不会改写配置。
+- 选项值是稳定模型引用；显示文案固定为全小写的 `<adapterId>/<model>`，连续空白替换为 `-`，但不改写原始配置值。
 - 已选但不可用的模型以禁用选项保留，主体返回类型化 unavailable 状态并不创建角色回合。
 - 已选模型再次可用时，下一回合自动恢复，不需要保存配置或重启。
 - 发现失败保留上次成功选项并标记 stale；从未成功时只显示当前已选的禁用项。
 - 同一 adapter 两次发现乱序完成时，旧作用域或旧请求的结果不会覆盖新快照。
-- fallback 去重、不得重复 primary，且只按主插件显式配置顺序启用。
+- 每次请求前只解析主插件显式选择的单个模型，不按目录顺序自动改选其他模型。
 - 模型目录更新不会触发逐模型能力探测；切换 `feedbackToolsEnabled` 也不会产生供应商请求。
 
 ### YK-012 直接 @ 的最小端到端回路
@@ -469,7 +469,7 @@ bounded-feedback 为 2 且无第三次逻辑生成，同时单独观察每次逻
 
 - 测试 adapter 只有自己的插件包是新增实现；`protocol/core/mind/memory`、主插件、Gemini adapter
   和其他既有包的源码与包清单均无修改。
-- 安装并启用后，adapter 自动发布模型快照，模型实时出现在主插件 primary/fallback 选项中且可被选择。
+- 安装并启用后，adapter 自动发布模型快照，模型实时出现在主插件 `model` 选项中且可被选择。
 - 同一 adapter 分别通过 single-pass 和 bounded-feedback 端到端用例；后者只 continue 一次。
 - 声明未实现 FeedbackTool 传输契约的测试 adapter 在主插件开启能力后仍不接收 FeedbackTool，但能完成 single-pass。
 - 卸载后其模型从新目录快照移除，已选值作为禁用项保留，其他 adapter 和本地存档继续工作。

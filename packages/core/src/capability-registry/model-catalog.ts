@@ -1,50 +1,14 @@
-import { Schema } from 'effect'
+import type { CatalogAdapter, CatalogModel } from '@yokai/protocol'
 
-import { DiscoveredModel, ModelReference } from '@yokai/protocol'
-
-export const ModelCatalogRevision = Schema.Natural.pipe(
-  Schema.brand('@yokai/core/ModelCatalogRevision'),
-)
-
-export type ModelCatalogRevision = typeof ModelCatalogRevision.Type
-
-export const CatalogModel = Schema.Struct({
-  reference: ModelReference,
-  displayName: DiscoveredModel.fields.displayName,
-  availability: DiscoveredModel.fields.availability,
-  discoveryFreshness: DiscoveredModel.fields.discoveryFreshness,
-  inputTokenLimit: DiscoveredModel.fields.inputTokenLimit,
-  outputTokenLimit: DiscoveredModel.fields.outputTokenLimit,
-  supportedGenerationMethods: DiscoveredModel.fields.supportedGenerationMethods,
-})
-
-export interface CatalogModel extends Schema.Schema.Type<typeof CatalogModel> {}
-
-const referenceKey = (model: CatalogModel): string =>
-  model.reference.adapterId + '/' + model.reference.modelId
-
-export const CatalogModels = Schema.Array(CatalogModel).check(
-  Schema.makeFilter((models: ReadonlyArray<CatalogModel>) => {
-    const keys = models.map(referenceKey)
-    if (new Set(keys).size !== keys.length) return 'Expected unique model references'
-    return keys.every((key, index) => {
-      if (index === 0) return true
-      const previous = keys[index - 1]
-      return previous !== undefined && previous < key
-    })
-      ? true
-      : 'Expected models sorted by model reference'
-  }),
-)
-
-export type CatalogModels = typeof CatalogModels.Type
-
-export const ModelCatalogSnapshot = Schema.Struct({
-  revision: ModelCatalogRevision,
-  models: CatalogModels,
-})
-
-export interface ModelCatalogSnapshot extends Schema.Schema.Type<typeof ModelCatalogSnapshot> {}
+export {
+  AdapterDiscoveryStatus,
+  CatalogAdapter,
+  CatalogAdapters,
+  CatalogModel,
+  CatalogModels,
+  ModelCatalogRevision,
+  ModelCatalogSnapshot,
+} from '@yokai/protocol'
 
 const optionalArrayEqual = (
   left: ReadonlyArray<string> | undefined,
@@ -54,6 +18,9 @@ const optionalArrayEqual = (
   if (right === undefined || left.length !== right.length) return false
   return left.every((value, index) => value === right[index])
 }
+
+const adapterEqual = (left: CatalogAdapter, right: CatalogAdapter): boolean =>
+  left.id === right.id && left.status === right.status
 
 const modelEqual = (left: CatalogModel, right: CatalogModel): boolean =>
   left.reference.adapterId === right.reference.adapterId &&
@@ -65,13 +32,19 @@ const modelEqual = (left: CatalogModel, right: CatalogModel): boolean =>
   left.outputTokenLimit === right.outputTokenLimit &&
   optionalArrayEqual(left.supportedGenerationMethods, right.supportedGenerationMethods)
 
-/** Discovery timestamps are intentionally absent from the merged catalog. */
 export const modelCatalogContentEqual = (
-  left: ReadonlyArray<CatalogModel>,
-  right: ReadonlyArray<CatalogModel>,
+  leftAdapters: ReadonlyArray<CatalogAdapter>,
+  leftModels: ReadonlyArray<CatalogModel>,
+  rightAdapters: ReadonlyArray<CatalogAdapter>,
+  rightModels: ReadonlyArray<CatalogModel>,
 ): boolean =>
-  left.length === right.length &&
-  left.every((model, index) => {
-    const candidate = right[index]
+  leftAdapters.length === rightAdapters.length &&
+  leftAdapters.every((adapter, index) => {
+    const candidate = rightAdapters[index]
+    return candidate !== undefined && (adapter === candidate || adapterEqual(adapter, candidate))
+  }) &&
+  leftModels.length === rightModels.length &&
+  leftModels.every((model, index) => {
+    const candidate = rightModels[index]
     return candidate !== undefined && (model === candidate || modelEqual(model, candidate))
   })

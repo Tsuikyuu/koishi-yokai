@@ -282,7 +282,7 @@ YK-003 的对象是单个 adapter 的发现快照和调用契约。本包不实�
 - adapter 注册、注销、同 ID 冲突和回合能力快照；
 - 多 adapter 模型快照合并、`SubscriptionRef` 发布和单调递增目录版本；
 - 内容无变化时抑制 revision 增长，以及迟到刷新结果的代际校验；
-- primary/fallback 选择、不可用模型保留和配置 Schema 动态更新；
+- 单模型选择、不可用模型保留和配置 Schema 动态更新；
 - adapter 级刷新中、离线、失败等主体状态。
 
 `AdapterModelSnapshot.discoveredAt`、测试事件 `requestId`、fake `tokenNamespace` 与 continuation 序号都不是 registry revision，不能被主体拿来替代全局目录版本。
