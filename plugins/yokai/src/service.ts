@@ -1,5 +1,6 @@
 import {
   CapabilityRegistry,
+  DirectMentionTurn,
   type CapabilityRegistration as CoreCapabilityRegistration,
   type AdapterRegistration as CoreAdapterRegistration,
   HostModelSelection,
@@ -26,7 +27,7 @@ import { Context, Service, type Session } from 'koishi'
 
 import type { Config } from './config'
 import { YokaiRuntime } from './runtime/runtime'
-import { fromSession } from './runtime/session'
+import { fromDirectMentionSession, fromSession } from './runtime/session'
 
 declare module 'koishi' {
   interface Context {
@@ -60,6 +61,16 @@ export class Yokai extends Service<Config> implements YokaiCapabilityHost {
 
   protected resolveConfiguredModel(): Promise<ResolvedModel> {
     return this.runEffect(HostModelSelection.resolve())
+  }
+
+  handleDirectMention(session: Session): Promise<void> {
+    return this.effectRuntime.runSession(
+      fromDirectMentionSession(session),
+      DirectMentionTurn.run().pipe(
+        Effect.scoped,
+        Effect.catch(() => Effect.void),
+      ),
+    )
   }
 
   private bindUnregister(

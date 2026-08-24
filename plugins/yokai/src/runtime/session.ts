@@ -1,6 +1,6 @@
 import { HostSession } from '@yokai/core'
 import { Effect, Layer, Option } from 'effect'
-import type { Session } from 'koishi'
+import { h, type Session } from 'koishi'
 
 export interface SessionBoundary {
   readonly type: string
@@ -16,7 +16,7 @@ export interface SessionBoundary {
   readonly send: (content: string) => Promise<string[]>
 }
 
-export const fromSession = (session: Session): SessionBoundary => ({
+const makeBoundary = (session: Session, content: string | undefined): SessionBoundary => ({
   type: session.type,
   platform: session.platform,
   selfId: session.selfId,
@@ -25,10 +25,17 @@ export const fromSession = (session: Session): SessionBoundary => ({
   channelId: session.channelId,
   guildId: session.guildId,
   messageId: session.messageId,
-  content: session.content,
+  content,
   isDirect: session.isDirect,
-  send: (content) => session.send(content),
+  send: (content) => session.send(h.text(content)),
 })
+
+export const fromSession = (session: Session): SessionBoundary =>
+  makeBoundary(session, session.content)
+
+/** Freezes the mention-stripped user text before generation starts. */
+export const fromDirectMentionSession = (session: Session): SessionBoundary =>
+  makeBoundary(session, session.stripped.content)
 
 const optional = <A>(value: A | undefined): Option.Option<A> =>
   value === undefined ? Option.none<A>() : Option.some(value)

@@ -1,6 +1,9 @@
 import { expect, it } from '@effect/vitest'
 import { HostSession } from '@yokai/core'
 import { Effect, Option } from 'effect'
+import { vi } from 'vitest'
+
+vi.mock('koishi', () => import('@koishijs/core'))
 
 import { KoishiSession, type SessionBoundary } from '../../src/runtime/session'
 

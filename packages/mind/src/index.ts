@@ -1,2 +1,1 @@
-/** Yokai mind capabilities are introduced by their implementation tasks. */
-export {}
+export * as MinimalResponseEnvelope from './response/minimal-envelope/index'
