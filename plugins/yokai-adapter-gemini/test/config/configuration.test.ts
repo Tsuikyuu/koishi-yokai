@@ -1,5 +1,5 @@
 import { expect, it } from '@effect/vitest'
-import { MAX_ADAPTER_ID_LENGTH } from '@yokai/protocol'
+import { MAX_ADAPTER_ID_LENGTH } from 'yokai-protocol'
 import { Cause, Effect, Exit, Redacted, Schema } from 'effect'
 import { vi } from 'vitest'
 

@@ -17,7 +17,7 @@ import type {
   AdapterInvocationOperation,
   AdapterModelId,
   ToolCallId,
-} from '@yokai/protocol'
+} from 'yokai-protocol'
 
 import type {
   AdapterConformanceControl,

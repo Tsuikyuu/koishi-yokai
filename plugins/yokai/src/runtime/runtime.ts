@@ -1,4 +1,4 @@
-import { CapabilityRegistry, HostConfiguration, HostSession } from '@yokai/core'
+import { CapabilityRegistry, HostConfiguration, HostSession } from '@yokai-internal/core'
 import { Effect, ManagedRuntime } from 'effect'
 import type { Context } from 'koishi'
 

@@ -1,4 +1,4 @@
-import { HostSession } from '@yokai/core'
+import { HostSession } from '@yokai-internal/core'
 import { Effect, Layer, Option } from 'effect'
 import { h, type Session } from 'koishi'
 

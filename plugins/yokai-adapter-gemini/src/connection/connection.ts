@@ -19,7 +19,7 @@ import {
   AdapterTimeoutError,
   AdapterTransportError,
   AdapterUnsupportedError,
-} from '@yokai/protocol'
+} from 'yokai-protocol'
 import {
   Cause,
   Context,

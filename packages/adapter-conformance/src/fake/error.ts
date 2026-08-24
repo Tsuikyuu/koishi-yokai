@@ -15,7 +15,7 @@ import {
   type AdapterInvocationError,
   type AdapterInvocationOperation,
   type AdapterModelId,
-} from '@yokai/protocol'
+} from 'yokai-protocol'
 
 import type { AdapterConformanceFailure } from '../index'
 

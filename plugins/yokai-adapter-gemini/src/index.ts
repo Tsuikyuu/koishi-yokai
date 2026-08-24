@@ -1,6 +1,6 @@
 import { Effect, ManagedRuntime } from 'effect'
 import type { Context } from 'koishi'
-import type { YokaiCapabilityHost } from '@yokai/protocol'
+import type { YokaiCapabilityHost } from 'yokai-protocol'
 
 import { Config as ConfigSchema, type Config as GeminiPluginConfig } from './config/plugin-config'
 import { GeminiAdapter } from './adapter/adapter'

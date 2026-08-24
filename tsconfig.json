@@ -3,11 +3,12 @@
   "compilerOptions": {
     "baseUrl": ".",
     "paths": {
-      "@yokai/koishi-plugin-*": ["plugins/*/src"],
-      "@yokai/adapter-conformance": ["packages/adapter-conformance/src"],
-      "@yokai/adapter-conformance/fake": ["packages/adapter-conformance/src/fake"],
-      "@yokai/adapter-conformance/vitest": ["packages/adapter-conformance/src/vitest"],
-      "@yokai/*": ["packages/*/src"]
+      "koishi-plugin-*": ["plugins/*/src"],
+      "yokai-adapter-conformance": ["packages/adapter-conformance/src"],
+      "yokai-adapter-conformance/fake": ["packages/adapter-conformance/src/fake"],
+      "yokai-adapter-conformance/vitest": ["packages/adapter-conformance/src/vitest"],
+      "yokai-protocol": ["packages/protocol/src"],
+      "@yokai-internal/*": ["packages/*/src"]
     }
   },
   "files": []

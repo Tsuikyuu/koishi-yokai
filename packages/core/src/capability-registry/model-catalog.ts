@@ -1,4 +1,4 @@
-import type { CatalogAdapter, CatalogModel } from '@yokai/protocol'
+import type { CatalogAdapter, CatalogModel } from 'yokai-protocol'
 
 export {
   AdapterDiscoveryStatus,
@@ -8,7 +8,7 @@ export {
   CatalogModels,
   ModelCatalogRevision,
   ModelCatalogSnapshot,
-} from '@yokai/protocol'
+} from 'yokai-protocol'
 
 const optionalArrayEqual = (
   left: ReadonlyArray<string> | undefined,

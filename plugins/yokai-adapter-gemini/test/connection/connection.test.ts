@@ -1,6 +1,6 @@
 import { ApiError, PagedItem, Pager, type ListModelsParameters, type Model } from '@google/genai'
 import { expect, it } from '@effect/vitest'
-import { AdapterProtocolDecodeError } from '@yokai/protocol'
+import { AdapterProtocolDecodeError } from 'yokai-protocol'
 import {
   Cause,
   Context,

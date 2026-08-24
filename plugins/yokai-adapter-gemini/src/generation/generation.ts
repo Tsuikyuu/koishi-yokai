@@ -10,7 +10,7 @@ import {
   type GenerateRequest as GenerateRequestType,
   type InitialGenerationResult,
   makeAdapterContinuationError,
-} from '@yokai/protocol'
+} from 'yokai-protocol'
 import { Context, Effect, Fiber, Layer, Option, Schema, Scope } from 'effect'
 
 import { GeminiConnection } from '../connection/connection'

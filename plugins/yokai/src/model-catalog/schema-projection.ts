@@ -1,5 +1,5 @@
-import { CapabilityRegistry } from '@yokai/core'
-import type { CatalogModel, ModelCatalogSnapshot } from '@yokai/protocol'
+import { CapabilityRegistry } from '@yokai-internal/core'
+import type { CatalogModel, ModelCatalogSnapshot } from 'yokai-protocol'
 import { Effect, Layer, Stream } from 'effect'
 import { Schema, type Context } from 'koishi'
 

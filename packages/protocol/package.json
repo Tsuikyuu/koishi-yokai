@@ -1,5 +1,5 @@
 {
-  "name": "@yokai/protocol",
+  "name": "yokai-protocol",
   "description": "Vendor-neutral extension contracts for Yokai",
   "version": "0.0.1",
   "main": "lib/index.js",

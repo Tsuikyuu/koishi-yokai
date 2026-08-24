@@ -1,5 +1,5 @@
 import { expect, it } from '@effect/vitest'
-import { CURRENT_ADAPTER_PROTOCOL_VERSION } from '@yokai/protocol'
+import { CURRENT_ADAPTER_PROTOCOL_VERSION } from 'yokai-protocol'
 import { Effect, ManagedRuntime } from 'effect'
 import { inspect } from 'node:util'
 

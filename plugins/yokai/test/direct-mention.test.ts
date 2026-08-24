@@ -4,15 +4,15 @@ import {
   AdapterDiscoveryStep,
   AdapterGenerationStep,
   type AdapterGenerationStep as AdapterGenerationStepType,
-} from '@yokai/adapter-conformance'
-import { makeFakeAdapter, type FakeAdapterSubject } from '@yokai/adapter-conformance/fake'
+} from 'yokai-adapter-conformance'
+import { makeFakeAdapter, type FakeAdapterSubject } from 'yokai-adapter-conformance/fake'
 import {
   AdapterId,
   AdapterModelId,
   type GenerateRequest,
   GenerationUsage,
   type YokaiAdapter,
-} from '@yokai/protocol'
+} from 'yokai-protocol'
 import { Deferred, Effect, Queue } from 'effect'
 import { Bot, Context, h, type Fragment, type Schema as KoishiSchema, Universal } from 'koishi'
 import { vi } from 'vitest'

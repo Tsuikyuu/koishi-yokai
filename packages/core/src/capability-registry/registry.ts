@@ -6,7 +6,7 @@ import {
   ModelReference,
   type YokaiAdapter,
   negotiateAdapterProtocol,
-} from '@yokai/protocol'
+} from 'yokai-protocol'
 import { Context, Effect, FiberMap, Layer, Option, Schema, Stream, SubscriptionRef } from 'effect'
 
 import {

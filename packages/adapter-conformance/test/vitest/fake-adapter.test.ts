@@ -1,4 +1,4 @@
-import { AdapterId } from '@yokai/protocol'
+import { AdapterId } from 'yokai-protocol'
 
 import { makeFakeAdapterConformanceFactory } from '../../src/fake/index'
 import { defineAdapterConformanceSuite } from '../../src/vitest/index'

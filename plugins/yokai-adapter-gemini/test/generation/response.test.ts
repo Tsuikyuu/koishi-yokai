@@ -5,7 +5,7 @@ import {
   GenerateContentResponsePromptFeedback,
 } from '@google/genai'
 import { expect, it } from '@effect/vitest'
-import { AdapterId, AdapterModelId, FeedbackToolDeclarations } from '@yokai/protocol'
+import { AdapterId, AdapterModelId, FeedbackToolDeclarations } from 'yokai-protocol'
 import { Effect, Schema } from 'effect'
 
 import {

@@ -1,6 +1,6 @@
 import { FinishReason, GenerateContentResponse } from '@google/genai'
 import { expect, it } from '@effect/vitest'
-import { AdapterId, GenerateRequest, type AdapterInvocationError } from '@yokai/protocol'
+import { AdapterId, GenerateRequest, type AdapterInvocationError } from 'yokai-protocol'
 import { Effect, Layer, Ref, Schema } from 'effect'
 
 import { GeminiConnection } from '../../src/connection/connection'

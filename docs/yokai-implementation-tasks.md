@@ -4,7 +4,7 @@
 
 依据：[`yokai-design.md`](./yokai-design.md)
 
-首发 adapter：`@yokai/koishi-plugin-yokai-adapter-gemini`
+首发 adapter：`koishi-plugin-yokai-adapter-gemini`
 
 Gemini 客户端：Google 官方 `@google/genai` v2 API，以实例级 fetch 注入接入 Koishi HTTP
 
@@ -15,7 +15,7 @@ Gemini 客户端：Google 官方 `@google/genai` v2 API，以实例级 fetch 注
 - 除端到端任务外，验收不依赖真实 Gemini 账号或真实群聊，使用可控的 Layer、HTTP 模拟和 Koishi 测试实例。
 - 所有任务都必须通过 `yarn build` 和 `yarn lint`；时间相关测试使用 `TestClock`，不等待真实时间。
 - 应用逻辑使用 Effect，`Effect.run*` 只能出现在 Koishi 边界和测试基础设施。
-- `@google/genai` 只存在于 Gemini adapter 工作区，锁定稳定 2.x 精确版本；所有 SDK Promise、完整响应和错误都在 adapter 边界转换为 Effect 和 `@yokai/protocol` 类型。
+- `@google/genai` 只存在于 Gemini adapter 工作区，锁定稳定 2.x 精确版本；所有 SDK Promise、完整响应和错误都在 adapter 边界转换为 Effect 和 `yokai-protocol` 类型。
 - 单一模型选择只存在主插件配置；adapter 仅发布模型快照，不保存当前模型。
 - 模型自动发现不承担能力探测；MVP 的 `feedbackToolsEnabled` 由使用者在主插件显式配置。
 - Yokai 是角色扮演仿生人群友，不实现通用 Agent 规划—工具—观察循环；single-pass 回合一次逻辑生成，
@@ -42,7 +42,7 @@ Gemini 客户端：Google 官方 `@google/genai` v2 API，以实例级 fetch 注
 
 前置：YK-001。
 
-交付：在 `@yokai/protocol` 定义完整 `YokaiAdapter` 接口、稳定 ID、协议版本与注册前握手、`<adapterId>/<modelId>` 模型引用、可表达逐模型 fresh/stale 的不可变 adapter 模型发现快照、`discoverModels/generate/continue`、统一文本/FeedbackTool 生成请求、文本或 ToolCallBatch 结果、ToolResultBatch、用量、adapter 级 FeedbackTool 契约声明和类型化 adapter 错误。代码级规范见 [`yokai-llm-adapter-protocol.md`](./yokai-llm-adapter-protocol.md)。
+交付：在 `yokai-protocol` 定义完整 `YokaiAdapter` 接口、稳定 ID、协议版本与注册前握手、`<adapterId>/<modelId>` 模型引用、可表达逐模型 fresh/stale 的不可变 adapter 模型发现快照、`discoverModels/generate/continue`、统一文本/FeedbackTool 生成请求、文本或 ToolCallBatch 结果、ToolResultBatch、用量、adapter 级 FeedbackTool 契约声明和类型化 adapter 错误。代码级规范见 [`yokai-llm-adapter-protocol.md`](./yokai-llm-adapter-protocol.md)。
 
 验收：
 
@@ -80,7 +80,7 @@ Gemini 客户端：Google 官方 `@google/genai` v2 API，以实例级 fetch 注
 
 前置：YK-002。
 
-交付：创建 `@yokai/koishi-plugin-yokai-adapter-gemini`，每个 Koishi 插件实例拥有一个 adapter 和一条
+交付：创建 `koishi-plugin-yokai-adapter-gemini`，每个 Koishi 插件实例拥有一个 adapter 和一条
 逻辑连接；引入官方 `@google/genai` v2，将顶层 `adapterId`（默认 `gemini`）、一份非空、有序的
 `endpoints`（每项仅含 `baseUrl` 和 `apiKey`），以及顶层共享的 `requestTimeoutMs`、`maxConcurrency`
 和仅用于后台发现的 `discoveryRetry`，从 Koishi 配置转换为该实例单一逻辑连接的显式 Effect 服务。Koishi `apply` 边界把
@@ -100,7 +100,7 @@ Gemini 客户端：Google 官方 `@google/genai` v2 API，以实例级 fetch 注
   完整成功的逻辑调用才更新活动端点，并发成功调用以最后完成者为准。
 - API key 在 Schema、错误、日志和测试快照中均不以明文出现。
 - `GoogleGenAI` 客户端只在 Layer 作用域内构造；ClientFactory 只依赖窄 HTTP transport 服务，不持有完整
-  Koishi `Context`，SDK 和 Koishi 类型均不出现于 `@yokai/protocol` 公开声明。
+  Koishi `Context`，SDK 和 Koishi 类型均不出现于 `yokai-protocol` 公开声明。
 - 每个 SDK client 只使用自己的注入 fetch；不得替换 `globalThis.fetch`、设置进程级 dispatcher、自建第二套
   代理配置或直接创建绕过 `ctx.http` 的网络客户端。两个 Koishi Context 并发时 HTTP 配置不得串线。
 - 注入 fetch 必须通过 `ctx.http` 解析 `http/config`、context intercept、默认 headers、keep-alive 和
@@ -462,7 +462,7 @@ bounded-feedback 为 2 且无第三次逻辑生成，同时单独观察每次逻
 前置：YK-003、YK-011、YK-021。
 
 交付：在仓库工作区之外构造并安装一个确定性的 Koishi LLM adapter 测试包。该包只依赖
-`@yokai/protocol`、协议锁定的精确 Effect 版本、Koishi 和自己的模拟供应商客户端，通过公开 `ctx.yokai.registerAdapter`
+`yokai-protocol`、协议锁定的精确 Effect 版本、Koishi 和自己的模拟供应商客户端，通过公开 `ctx.yokai.registerAdapter`
 注册；兼容测试不得向主体或任何既有包加入该 adapter 的导入、ID、配置或分支。
 
 验收：

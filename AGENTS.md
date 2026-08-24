@@ -5,11 +5,13 @@ All paths in this document are relative to the repository root.
 
 ## Repository structure
 
-- `plugins/`: publishable Koishi plugins. Public packages use the
-  `@yokai/koishi-plugin-*` naming scheme. The main plugin currently lives in
-  `plugins/yokai`.
-- `packages/`: internal implementation packages shared by plugins. These are not Koishi
-  plugins and use the `@yokai/*` naming scheme.
+- `plugins/`: publishable Koishi plugins. Public packages use the unscoped
+  `koishi-plugin-yokai*` naming scheme and are published from the maintainer's personal
+  npm account. The main plugin currently lives in `plugins/yokai`.
+- `packages/`: implementation and test-support packages shared by plugins. The public
+  packages are `yokai-protocol` and `yokai-adapter-conformance`; private implementation
+  packages use the `@yokai-internal/*` workspace-only scope and must remain bundled into
+  the main plugin rather than becoming install-time dependencies.
 - `docs/`: architecture and behavior design documents.
 - `yakumo.yml`: workspace build pipeline configuration.
 

@@ -2,7 +2,7 @@ import {
   type AdapterId,
   type AdapterInvocationError,
   type AdapterModelSnapshot,
-} from '@yokai/protocol'
+} from 'yokai-protocol'
 import {
   Context,
   DateTime,

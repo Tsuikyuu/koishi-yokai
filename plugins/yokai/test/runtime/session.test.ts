@@ -1,5 +1,5 @@
 import { expect, it } from '@effect/vitest'
-import { HostSession } from '@yokai/core'
+import { HostSession } from '@yokai-internal/core'
 import { Effect, Option } from 'effect'
 import { vi } from 'vitest'
 

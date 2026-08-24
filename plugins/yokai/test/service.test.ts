@@ -1,7 +1,7 @@
 import { expect, it } from '@effect/vitest'
-import { AdapterConformanceSetup } from '@yokai/adapter-conformance'
-import { makeFakeAdapter } from '@yokai/adapter-conformance/fake'
-import { HostConfiguration } from '@yokai/core'
+import { AdapterConformanceSetup } from 'yokai-adapter-conformance'
+import { makeFakeAdapter } from 'yokai-adapter-conformance/fake'
+import { HostConfiguration } from '@yokai-internal/core'
 import {
   AdapterDescriptor,
   AdapterId,
@@ -13,7 +13,7 @@ import {
   ContextProviderId,
   CURRENT_ADAPTER_PROTOCOL_VERSION,
   type YokaiAdapter,
-} from '@yokai/protocol'
+} from 'yokai-protocol'
 import { Deferred, Effect, Option, Queue, Ref, Schema } from 'effect'
 import { Context, type Schema as KoishiSchema } from 'koishi'
 import { vi } from 'vitest'

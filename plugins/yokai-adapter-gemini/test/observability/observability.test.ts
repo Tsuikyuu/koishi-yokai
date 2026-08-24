@@ -1,5 +1,5 @@
 import { expect, it } from '@effect/vitest'
-import { AdapterId, AdapterModelId, TokenCount } from '@yokai/protocol'
+import { AdapterId, AdapterModelId, TokenCount } from 'yokai-protocol'
 import { Effect, Logger, Metric, Option, Ref } from 'effect'
 
 import {

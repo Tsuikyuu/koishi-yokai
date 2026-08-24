@@ -1,11 +1,13 @@
 {
-  "name": "@yokai/koishi-plugin-yokai",
+  "name": "koishi-plugin-yokai",
   "description": "小妖怪",
   "version": "0.0.1",
   "main": "lib/index.js",
   "typings": "lib/index.d.ts",
   "files": [
-    "lib",
+    "lib/index.js",
+    "lib/index.d.ts",
+    "lib/config.d.ts",
     "dist"
   ],
   "license": "MIT",
@@ -22,14 +24,16 @@
     "koishi": "^4.18.7"
   },
   "dependencies": {
-    "@yokai/core": "workspace:^",
-    "@yokai/protocol": "workspace:^",
-    "effect": "4.0.0-rc.110"
+    "effect": "4.0.0-rc.110",
+    "yokai-protocol": "workspace:^"
   },
   "devDependencies": {
     "@effect/vitest": "4.0.0-rc.110",
-    "@yokai/adapter-conformance": "workspace:^",
+    "@yokai-internal/core": "workspace:^",
+    "@yokai-internal/memory": "workspace:^",
+    "@yokai-internal/mind": "workspace:^",
     "typescript": "^5.6.2",
-    "vitest": "4.1.11"
+    "vitest": "4.1.11",
+    "yokai-adapter-conformance": "workspace:^"
   }
 }

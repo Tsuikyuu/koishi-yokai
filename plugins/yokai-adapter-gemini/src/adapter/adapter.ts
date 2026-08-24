@@ -2,7 +2,7 @@ import {
   AdapterDescriptor,
   CURRENT_ADAPTER_PROTOCOL_VERSION,
   type YokaiAdapter,
-} from '@yokai/protocol'
+} from 'yokai-protocol'
 import { Context, Effect, Layer } from 'effect'
 
 import { GeminiModelDiscovery } from '../discovery/discovery'

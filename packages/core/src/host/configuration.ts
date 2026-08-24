@@ -1,4 +1,4 @@
-import type { ModelReference } from '@yokai/protocol'
+import type { ModelReference } from 'yokai-protocol'
 import { Context, Layer, type Option } from 'effect'
 
 export interface Interface {

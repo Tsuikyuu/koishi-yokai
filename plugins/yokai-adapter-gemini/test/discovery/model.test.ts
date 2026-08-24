@@ -1,6 +1,6 @@
 import type { Model } from '@google/genai'
 import { expect, it } from '@effect/vitest'
-import { AdapterId, AdapterModelSnapshot, ModelReference } from '@yokai/protocol'
+import { AdapterId, AdapterModelSnapshot, ModelReference } from 'yokai-protocol'
 import { DateTime, Effect, Schema } from 'effect'
 
 import { decodeListing } from '../../src/discovery/model'

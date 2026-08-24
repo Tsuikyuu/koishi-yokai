@@ -1,5 +1,5 @@
 {
-  "name": "@yokai/mind",
+  "name": "@yokai-internal/mind",
   "description": "Internal roleplay decision and expression logic for Yokai",
   "version": "0.0.1",
   "private": true,
@@ -15,8 +15,8 @@
     "typecheck:test": "tsc --project test/tsconfig.json --pretty false"
   },
   "dependencies": {
-    "@yokai/protocol": "workspace:^",
-    "effect": "4.0.0-rc.110"
+    "effect": "4.0.0-rc.110",
+    "yokai-protocol": "workspace:^"
   },
   "devDependencies": {
     "@effect/vitest": "4.0.0-rc.110",

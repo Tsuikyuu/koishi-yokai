@@ -1,4 +1,4 @@
-import { AdapterId } from '@yokai/protocol'
+import { AdapterId } from 'yokai-protocol'
 import { Context, Effect, Layer, Schema } from 'effect'
 
 import type { Config } from './plugin-config'

@@ -1,3 +1,4 @@
+import type { YokaiCapabilityHost } from 'yokai-protocol'
 import type { Context } from 'koishi'
 
 import { Config as ConfigSchema, type Config as YokaiConfig } from './config'
@@ -8,7 +9,12 @@ export const name = 'yokai'
 
 export const Config = ConfigSchema
 export type Config = YokaiConfig
-export { Yokai } from './service'
+
+declare module 'koishi' {
+  interface Context {
+    yokai: YokaiCapabilityHost
+  }
+}
 
 export function apply(ctx: Context, config: Config): void {
   const service = new Yokai(ctx, config)

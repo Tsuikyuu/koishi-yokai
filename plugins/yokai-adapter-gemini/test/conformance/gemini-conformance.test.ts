@@ -14,13 +14,13 @@ import type {
   AdapterConformanceSetup,
   AdapterDiscoveryStep,
   AdapterGenerationStep,
-} from '@yokai/adapter-conformance'
+} from 'yokai-adapter-conformance'
 import {
   makeFakeProviderHarness,
   type FakeProviderHarness,
   type FakeProviderRequest,
-} from '@yokai/adapter-conformance/fake'
-import { defineAdapterConformanceSuite } from '@yokai/adapter-conformance/vitest'
+} from 'yokai-adapter-conformance/fake'
+import { defineAdapterConformanceSuite } from 'yokai-adapter-conformance/vitest'
 import {
   AdapterAuthenticationError,
   AdapterCancelledError,
@@ -37,7 +37,7 @@ import {
   AdapterUnsupportedError,
   type ToolCallId,
   type GenerationUsage,
-} from '@yokai/protocol'
+} from 'yokai-protocol'
 import { Cause, Context, Effect, Exit, Layer, Option, Ref } from 'effect'
 
 import { GeminiAdapter } from '../../src/adapter/adapter'

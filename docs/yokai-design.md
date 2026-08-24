@@ -2,7 +2,7 @@
 
 状态：Draft 0.11
 
-包命名空间：`@yokai`
+公开 npm 包：无 scope，由维护者个人账户发布
 
 ## 1. 唯一目标
 
@@ -24,7 +24,7 @@ Yokai 的唯一产品目标是：
 - 长期人格、关系、共同经历和观点保持连续。
 - 能够像群友一样沉默、接梗、改口、忘记和重新想起。
 - 不抢话、不重复已有回答，不把所有消息都当成对自己的提问。
-- 在当前 `@yokai/protocol` 主版本支持的能力范围内，新增任意 LLM adapter 只增加该 adapter
+- 在当前 `yokai-protocol` 主版本支持的能力范围内，新增任意 LLM adapter 只增加该 adapter
   插件包，不修改 `protocol/core/mind/memory`、主插件或其他既有包。
 
 ### 1.2 角色内外分离
@@ -60,7 +60,7 @@ Koishi 消息
 直接发送或保持沉默，再执行不回灌 LLM 的后置/异步动作
 ```
 
-全部仿生逻辑由 `@yokai/koishi-plugin-yokai` 统一编排。模型适配器只负责推理，不能分别实现人格、记忆或发言策略。
+全部仿生逻辑由 `koishi-plugin-yokai` 统一编排。模型适配器只负责推理，不能分别实现人格、记忆或发言策略。
 
 这里的“角色回合”是有界的角色生成，不是 Agent 循环。绝大多数角色回合固定只请求一次 LLM；
 确需历史、网络搜索等外部结果时允许一轮 FeedbackTool 和一次最终生成，总请求数最多为 2。最终
@@ -446,9 +446,11 @@ Yokai 内置工具不提供高危写操作。第三方工具的授权、副作�
 
 ### 4.1 公开 Koishi 插件
 
+公开插件使用无 scope 的 `koishi-plugin-yokai*` 命名，并由维护者的个人 npm 账户发布。
+
 首个版本只有两个必需安装包。
 
-#### `@yokai/koishi-plugin-yokai`
+#### `koishi-plugin-yokai`
 
 主体插件，负责完整仿生闭环：
 
@@ -466,7 +468,7 @@ Yokai 内置工具不提供高危写操作。第三方工具的授权、副作�
 
 它提供 `ctx.yokai` 服务，但不直接实现任何厂商模型 API。
 
-#### `@yokai/koishi-plugin-yokai-adapter-gemini`
+#### `koishi-plugin-yokai-adapter-gemini`
 
 首个模型适配器，只负责：
 
@@ -482,7 +484,7 @@ Yokai 内置工具不提供高危写操作。第三方工具的授权、副作�
 Gemini adapter 以 Google 官方 [`@google/genai`](https://googleapis.github.io/js-genai/) v2 和 Node.js 20 为实现基线。
 实现时锁定当时选定的稳定 2.x 精确版本，不使用 `^`、`~` 或 dist-tag，也不等待或提前适配 v3。SDK 只允许
 出现在 adapter 包内；其异步接口在边界转换为 Effect，所有返回数据解码为通用协议，不得把 SDK 类型泄漏到
-`@yokai/protocol`。MVP 不使用已停止维护的 `@google/generativeai`。
+`yokai-protocol`。MVP 不使用已停止维护的 `@google/generativeai`。
 
 Gemini 的唯一网络出口是当前插件 Koishi Context 上的 `ctx.http`。adapter 内部定义一个只暴露 fetch
 implementation 的窄 Effect service；`apply(ctx, config)` 只把 `ctx.http` 转成该 service 的 Live Layer，
@@ -540,7 +542,7 @@ single-pass；开启时仅在 adapter 声明实现了通用 FeedbackTool 传输�
 unsupported 错误，本回合保持沉默，不探测、不重试、不切换端点或模型。以后新增会改变主体编排的
 能力必须先进入通用协议和主插件配置；adapter 私有传输特性不进入主体能力配置。
 
-模型选择只存在于主插件 `@yokai/koishi-plugin-yokai` 的配置中；adapter 只配置单一逻辑连接与传输参数，
+模型选择只存在于主插件 `koishi-plugin-yokai` 的配置中；adapter 只配置单一逻辑连接与传输参数，
 不保存“当前模型”。每个 Gemini Koishi 插件实例拥有一个 adapter 和一条逻辑连接；插件不声明 Koishi
 `reusable` 策略。顶层 `adapterId` 默认为 `gemini`，同时注册到同一 Yokai 主体的实例必须使用不同的合法
 `adapterId`，注册表仍拒绝后注册的同 ID adapter。每个实例配置一份非空、有序的 `endpoints`；每项严格只有 `baseUrl` 和 `apiKey`，
@@ -585,15 +587,15 @@ adapter 内部一次逻辑调用的传输容灾；它不会改变主插件选中
 如果实际连接的是兼容协议而不是官方服务，后续使用：
 
 ```text
-@yokai/koishi-plugin-yokai-adapter-openai-compatible
+koishi-plugin-yokai-adapter-openai-compatible
 ```
 
 其他后端延续相同命名：
 
 ```text
-@yokai/koishi-plugin-yokai-adapter-chatgpt
-@yokai/koishi-plugin-yokai-adapter-claude
-@yokai/koishi-plugin-yokai-adapter-ollama
+koishi-plugin-yokai-adapter-chatgpt
+koishi-plugin-yokai-adapter-claude
+koishi-plugin-yokai-adapter-ollama
 ```
 
 这些 adapter 不是主体的编译时依赖。主插件不得导入具体 adapter、维护厂商枚举、按 adapter ID
@@ -603,42 +605,45 @@ adapter 的凭据、端点和厂商参数留在自己的插件配置中，主插
 MVP 只发布主体和一个适配器，但协议预留以下第三方插件命名：
 
 ```text
-@yokai/koishi-plugin-yokai-adapter-*
-@yokai/koishi-plugin-yokai-tool-*
-@yokai/koishi-plugin-yokai-skill-*
-@yokai/koishi-plugin-yokai-mcp-*
-@yokai/koishi-plugin-yokai-response-*
-@yokai/koishi-plugin-yokai-preset-*
+koishi-plugin-yokai-adapter-*
+koishi-plugin-yokai-tool-*
+koishi-plugin-yokai-skill-*
+koishi-plugin-yokai-mcp-*
+koishi-plugin-yokai-response-*
+koishi-plugin-yokai-preset-*
 ```
 
-这些插件只依赖 `@yokai/protocol`、Koishi 和主体提供的 `ctx.yokai` 服务，不能直接依赖 `@yokai/core`、`@yokai/mind` 或 `@yokai/memory`。
+这些插件只依赖 `yokai-protocol`、Koishi 和主体提供的 `ctx.yokai` 服务，不能直接依赖 `@yokai-internal/core`、`@yokai-internal/mind` 或 `@yokai-internal/memory`。
 
-### 4.2 内部包
+### 4.2 协议、测试支持与内部包
 
-`core`、`mind`、`memory` 只作为内部普通 npm 包：
+`protocol` 和 adapter conformance 是无 scope 的公开包；`core`、`mind`、`memory`
+使用仅限工作区的 `@yokai-internal/*` scope，并保持 private：
 
-| 包                | 职责                                                                      |
-| ----------------- | ------------------------------------------------------------------------- |
-| `@yokai/protocol` | adapter、ContextProvider、ActionTool、FeedbackTool、Skill、MCP 和扩展协议 |
-| `@yokai/core`     | 注册表、唤醒仲裁、缓冲、门控、预算、单次管线和动作执行                    |
-| `@yokai/mind`     | 场景、状态、关系策略、发言决策、XML 提示和表达约束                        |
-| `@yokai/memory`   | 群聊存档、分页历史、记忆检索、冲突、遗忘和数据库端口                      |
+| 包                          | 职责                                                                      |
+| --------------------------- | ------------------------------------------------------------------------- |
+| `yokai-protocol`            | adapter、ContextProvider、ActionTool、FeedbackTool、Skill、MCP 和扩展协议 |
+| `yokai-adapter-conformance` | 公开的 adapter 契约测试、确定性 fake 和测试支持                           |
+| `@yokai-internal/core`      | 注册表、唤醒仲裁、缓冲、门控、预算、单次管线和动作执行                    |
+| `@yokai-internal/mind`      | 场景、状态、关系策略、发言决策、XML 提示和表达约束                        |
+| `@yokai-internal/memory`    | 群聊存档、分页历史、记忆检索、冲突、遗忘和数据库端口                      |
 
 依赖方向：
 
 ```text
-@yokai/protocol
+yokai-protocol
     ↑       ↑
   mind    memory
     \       /
-     @yokai/core
+     @yokai-internal/core
           ↑
 koishi-plugin-yokai
 
 adapter-* ──只依赖 protocol、Koishi 和对应厂商客户端
 ```
 
-`@yokai/protocol` 作为普通 npm 包发布，供适配器使用；其余内部包可以随主体构建产物打包，不要求最终用户安装。
+`yokai-protocol` 和 `yokai-adapter-conformance` 作为普通 npm 包发布；三个内部包随主体
+构建产物打包，不成为最终用户的安装时依赖。
 
 ### 4.3 工作区目录
 
@@ -660,7 +665,7 @@ plugins/
 
 ### 5.1 能力注册表
 
-`@yokai/protocol` 必须先固定供应商无关的 adapter 契约。契约只表达 Yokai 当前需要的模型清单发现、
+`yokai-protocol` 必须先固定供应商无关的 adapter 契约。契约只表达 Yokai 当前需要的模型清单发现、
 文本生成和一次工具反馈，不包含 Gemini、OpenAI 或其他厂商字段。
 
 YK-002 的代码级字段、边界、生命周期和版本规则见
@@ -1034,7 +1039,7 @@ Yokai 将这些模式统一成 `ResponseMechanism + WakeProposal + WakeArbiter`�
 
 第一阶段只实现文本群聊：
 
-1. `@yokai/koishi-plugin-yokai` 和目标正式发布的 `adapter-gemini`；Gemini adapter 使用 `@google/genai` v2，
+1. `koishi-plugin-yokai` 和目标正式发布的 `adapter-gemini`；Gemini adapter 使用 `@google/genai` v2，
    每个 SDK 实例注入由 `ctx.http` 支撑的 fetch，只调用 unary API；每个 Koishi 插件实例以有序 URL/key 端点
    支撑自己的一条逻辑连接，并自动发现一份以其 `adapterId` 为命名空间、无端点前缀的模型目录。
 2. `ctx.yokai` 能力注册表、生命周期快照和唤醒仲裁器。
@@ -1059,8 +1064,8 @@ adapter；用于兼容门禁的确定性 adapter 是测试夹具，不作为第�
 
 1. 平台标识负责角色外知情，普通聊天始终保持角色内表达。
 2. 仿生性的核心是场景判断、沉默、连续状态、关系和记忆，不是单一提示词。
-3. 所有仿生逻辑集中在 `@yokai/koishi-plugin-yokai`。
-4. MVP 公开包只包含主体和 adapter；后续能力按 `tool-*`、`skill-*`、`mcp-*`、`response-*`、`preset-*` 扩展，永不公开 `core`、`mind`、`memory` 插件。
+3. 所有仿生逻辑集中在 `koishi-plugin-yokai`。
+4. MVP 公开 Koishi 插件只包含主体和 adapter；后续能力按 `tool-*`、`skill-*`、`mcp-*`、`response-*`、`preset-*` 扩展，永不公开 `core`、`mind`、`memory` 插件。
 5. 最终角色输出通过统一 XML 提出行为、表达和 ActionTool；需要结果的 FeedbackTool 使用首次原生
    函数调用，主体严格处理两类结果，不做开放式模型续轮。
 6. 角色回合使用创建时的单一冻结快照，生成期间的新消息留给下一回合。

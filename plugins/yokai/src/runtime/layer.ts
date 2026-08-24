@@ -1,5 +1,5 @@
-import { CapabilityRegistry, HostConfiguration } from '@yokai/core'
-import { ModelReference } from '@yokai/protocol'
+import { CapabilityRegistry, HostConfiguration } from '@yokai-internal/core'
+import { ModelReference } from 'yokai-protocol'
 import { Effect, Layer, Option, Schema } from 'effect'
 import type { Context } from 'koishi'
 

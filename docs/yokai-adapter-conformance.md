@@ -2,29 +2,29 @@
 
 状态：YK-003 Draft 0.1
 
-实现包：`@yokai/adapter-conformance`
+实现包：`yokai-adapter-conformance`
 
 协议依据：[`yokai-llm-adapter-protocol.md`](./yokai-llm-adapter-protocol.md)
 
 ## 1. 目标与边界
 
-`@yokai/adapter-conformance` 为所有 `YokaiAdapter` 提供同一套供应商无关的测试输入、可观测控制面、Vitest 契约套件和确定性 fake adapter。它解决两类仅靠 `YokaiAdapter` 公共返回值无法验证的问题：
+`yokai-adapter-conformance` 为所有 `YokaiAdapter` 提供同一套供应商无关的测试输入、可观测控制面、Vitest 契约套件和确定性 fake adapter。它解决两类仅靠 `YokaiAdapter` 公共返回值无法验证的问题：
 
 - 每个 `generate/continue` 是否只形成一次同模型逻辑生成、物理端点尝试是否有界、取消是否到达
   供应商边界、是否发生了隐藏的能力探测；
 - continuation 是否恢复原 model、首次调用顺序和 owning Scope，并在并发、失败和作用域关闭时正确失效。
 
-本包只使用 `@yokai/protocol` 的通用 DTO 和 Effect 生命周期，不定义新 adapter 协议，也不包含 Koishi、Gemini 或其他供应商 SDK 类型。真实 adapter 通过一个测试专用 factory，把通用脚本翻译为自己的 SDK 或 HTTP stub 行为，再复用同一套断言。
+本包只使用 `yokai-protocol` 的通用 DTO 和 Effect 生命周期，不定义新 adapter 协议，也不包含 Koishi、Gemini 或其他供应商 SDK 类型。真实 adapter 通过一个测试专用 factory，把通用脚本翻译为自己的 SDK 或 HTTP stub 行为，再复用同一套断言。
 
 ## 2. 包入口
 
 包刻意拆成三个导入图：
 
-| 入口                                | 内容                                                         | 运行时依赖 Vitest |
-| ----------------------------------- | ------------------------------------------------------------ | ----------------- |
-| `@yokai/adapter-conformance`        | factory、setup、control、event 和模型快照内容等价 helper     | 否                |
-| `@yokai/adapter-conformance/fake`   | `makeFakeAdapter`、fake options、fake subject 和额外 control | 否                |
-| `@yokai/adapter-conformance/vitest` | 显式注册通用测试的 `defineAdapterConformanceSuite`           | 是                |
+| 入口                               | 内容                                                         | 运行时依赖 Vitest |
+| ---------------------------------- | ------------------------------------------------------------ | ----------------- |
+| `yokai-adapter-conformance`        | factory、setup、control、event 和模型快照内容等价 helper     | 否                |
+| `yokai-adapter-conformance/fake`   | `makeFakeAdapter`、fake options、fake subject 和额外 control | 否                |
+| `yokai-adapter-conformance/vitest` | 显式注册通用测试的 `defineAdapterConformanceSuite`           | 是                |
 
 根入口只转出 `conformance` 公共面，不隐式转出 fake 或 Vitest。主体集成测试可以只依赖 `/fake`，真实 adapter 的契约测试同时依赖根入口和 `/vitest`。
 
@@ -53,7 +53,7 @@ interface AdapterConformanceSubject {
 
 factory 是 adapter 专属的翻译层。它可以在闭包中持有连接配置或 SDK stub，但返回给通用套件的只有 `YokaiAdapter` 和统一 control，不能把供应商对象加入 setup、event 或公共 subject。
 
-setup、原始模型、原始 ToolCall、失败分类和 event 都同时导出运行时 Schema；来自 JSON 或普通测试夹具的值应先解码，再交给 factory。它们是测试协议，不会加入 `@yokai/protocol` 的生产 DTO。
+setup、原始模型、原始 ToolCall、失败分类和 event 都同时导出运行时 Schema；来自 JSON 或普通测试夹具的值应先解码，再交给 factory。它们是测试协议，不会加入 `yokai-protocol` 的生产 DTO。
 
 ### 3.2 Setup 脚本
 
@@ -235,7 +235,7 @@ fake factory 自身需要 adapter Scope。provider harness 在该 Scope 中持�
 真实 adapter 在自己的测试工作区提供 `AdapterConformanceFactory`，然后显式注册：
 
 ```ts
-import { defineAdapterConformanceSuite } from '@yokai/adapter-conformance/vitest'
+import { defineAdapterConformanceSuite } from 'yokai-adapter-conformance/vitest'
 
 defineAdapterConformanceSuite('Gemini YokaiAdapter', geminiConformanceFactory)
 ```

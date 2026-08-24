@@ -7,7 +7,7 @@ import {
   type AdapterInvocationError,
   makeAdapterContinuation,
   negotiateAdapterProtocol,
-} from '@yokai/protocol'
+} from 'yokai-protocol'
 
 import {
   type AdapterConformanceControl,

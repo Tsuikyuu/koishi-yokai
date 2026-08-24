@@ -6,7 +6,7 @@ import {
   AdapterRateLimitError,
   AdapterTransportError,
   type AdapterInvocationError,
-} from '@yokai/protocol'
+} from 'yokai-protocol'
 import { Deferred, Effect, Fiber, Layer, Option, Ref } from 'effect'
 import { TestClock } from 'effect/testing'
 

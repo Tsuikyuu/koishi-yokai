@@ -5,7 +5,7 @@ import {
   type GenerateContentParameters,
 } from '@google/genai'
 import { expect, it } from '@effect/vitest'
-import { AdapterId, AdapterModelId } from '@yokai/protocol'
+import { AdapterId, AdapterModelId } from 'yokai-protocol'
 import { Cause, Deferred, Effect, Exit, Fiber, Layer, Ref } from 'effect'
 
 import { GeminiClientFactory } from '../../src/client/client-factory'

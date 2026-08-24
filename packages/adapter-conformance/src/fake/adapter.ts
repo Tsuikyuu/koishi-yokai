@@ -21,7 +21,7 @@ import {
   type ToolResult,
   type YokaiAdapter,
   makeAdapterContinuationError,
-} from '@yokai/protocol'
+} from 'yokai-protocol'
 
 import type {
   AdapterConformanceControl,

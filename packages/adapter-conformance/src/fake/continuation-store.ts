@@ -7,7 +7,7 @@ import {
   type ToolCalls,
   makeAdapterContinuation,
   makeAdapterContinuationError,
-} from '@yokai/protocol'
+} from 'yokai-protocol'
 
 type ContinuationState = Data.TaggedEnum<{
   readonly Pending: {

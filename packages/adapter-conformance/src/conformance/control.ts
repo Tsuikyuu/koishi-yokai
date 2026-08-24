@@ -5,7 +5,7 @@ import {
   AdapterModelId,
   ToolCallId,
   type YokaiAdapter,
-} from '@yokai/protocol'
+} from 'yokai-protocol'
 
 import type { AdapterConformanceSetup } from './setup'
 

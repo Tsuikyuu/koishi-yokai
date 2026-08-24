@@ -1,6 +1,6 @@
 import { Schema } from 'effect'
 
-import { ContinueRequest, GenerateRequest, type AdapterContinuation } from '@yokai/protocol'
+import { ContinueRequest, GenerateRequest, type AdapterContinuation } from 'yokai-protocol'
 
 import { AdapterConformanceSetup } from '../conformance/index'
 

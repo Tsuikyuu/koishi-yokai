@@ -1,6 +1,6 @@
 import { Effect, Exit, Scope, type Cause } from 'effect'
 
-import { type InitialGenerationResult, type ToolCallBatch } from '@yokai/protocol'
+import { type InitialGenerationResult, type ToolCallBatch } from 'yokai-protocol'
 
 import type { AdapterConformanceControl, AdapterTestEvent } from '../conformance/index'
 

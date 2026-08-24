@@ -1,6 +1,6 @@
 import { FunctionCallingConfigMode } from '@google/genai'
 import { expect, it } from '@effect/vitest'
-import { GenerateRequest } from '@yokai/protocol'
+import { GenerateRequest } from 'yokai-protocol'
 import { Effect, Schema } from 'effect'
 
 import { encodeRequest } from '../../src/generation/request'

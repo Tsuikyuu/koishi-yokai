@@ -4,7 +4,8 @@
     pipeline:
       build:
         - tsc
-        - esbuild
+        - esbuild protocol adapter-conformance core mind memory
+        - esbuild yokai yokai-adapter-gemini
       clean:
         - tsc --clean
 - id: at6m2q

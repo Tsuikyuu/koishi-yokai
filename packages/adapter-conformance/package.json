@@ -1,5 +1,5 @@
 {
-  "name": "@yokai/adapter-conformance",
+  "name": "yokai-adapter-conformance",
   "description": "Reusable conformance tests and deterministic test doubles for Yokai adapters",
   "version": "0.0.1",
   "main": "lib/index.js",
@@ -34,8 +34,8 @@
   },
   "peerDependencies": {
     "@effect/vitest": "4.0.0-rc.110",
-    "@yokai/protocol": "workspace:^",
-    "vitest": ">=4.1.0 <5.0.0"
+    "vitest": ">=4.1.0 <5.0.0",
+    "yokai-protocol": "workspace:^"
   },
   "peerDependenciesMeta": {
     "@effect/vitest": {
@@ -47,8 +47,8 @@
   },
   "devDependencies": {
     "@effect/vitest": "4.0.0-rc.110",
-    "@yokai/protocol": "workspace:^",
     "typescript": "^5.6.2",
-    "vitest": "4.1.11"
+    "vitest": "4.1.11",
+    "yokai-protocol": "workspace:^"
   }
 }

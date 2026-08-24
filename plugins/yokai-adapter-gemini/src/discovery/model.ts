@@ -10,7 +10,7 @@ import {
   type AdapterId,
   type AdapterModelSnapshot as AdapterModelSnapshotType,
   type DiscoveredModel as DiscoveredModelType,
-} from '@yokai/protocol'
+} from 'yokai-protocol'
 import { DateTime, Effect, Option, Schema } from 'effect'
 
 const MODEL_RESOURCE_PREFIX = 'models/'

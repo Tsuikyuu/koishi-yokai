@@ -13,7 +13,7 @@ import {
   type GenerationUsage,
   type ToolCall,
   TokenCount,
-} from '@yokai/protocol'
+} from 'yokai-protocol'
 import { Data, Effect, HashSet, Schema } from 'effect'
 
 import type { PendingFunctionCall } from '../continuation/store'

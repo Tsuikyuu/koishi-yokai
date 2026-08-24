@@ -4,7 +4,7 @@
 
 协议版本：`0.1`
 
-实现包：`@yokai/protocol`
+实现包：`yokai-protocol`
 
 ## 1. 目标
 

@@ -1,4 +1,4 @@
-import type { AdapterId, AdapterModelId, GenerationUsage } from '@yokai/protocol'
+import type { AdapterId, AdapterModelId, GenerationUsage } from 'yokai-protocol'
 import { Clock, Duration, Effect, Exit, Metric, Option } from 'effect'
 
 export type InvocationOperation = 'continue' | 'discoverModels' | 'generate'

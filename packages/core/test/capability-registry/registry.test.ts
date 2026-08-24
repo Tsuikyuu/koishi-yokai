@@ -9,7 +9,7 @@ import {
   ModelReference,
   type ModelCatalogSnapshot,
   type YokaiAdapter,
-} from '@yokai/protocol'
+} from 'yokai-protocol'
 import { Deferred, Effect, Fiber, Option, Ref, Result, Schema, Stream } from 'effect'
 
 import {

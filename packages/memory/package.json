@@ -1,5 +1,5 @@
 {
-  "name": "@yokai/memory",
+  "name": "@yokai-internal/memory",
   "description": "Internal archive and memory capabilities for Yokai",
   "version": "0.0.1",
   "private": true,
@@ -14,8 +14,8 @@
     "typecheck": "tsc --project tsconfig.json --noEmit --pretty false"
   },
   "dependencies": {
-    "@yokai/protocol": "workspace:^",
-    "effect": "4.0.0-rc.110"
+    "effect": "4.0.0-rc.110",
+    "yokai-protocol": "workspace:^"
   },
   "devDependencies": {
     "typescript": "^5.6.2"

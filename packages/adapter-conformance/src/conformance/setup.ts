@@ -11,7 +11,7 @@ import {
   TokenLimit,
   ToolCallId,
   FeedbackToolId,
-} from '@yokai/protocol'
+} from 'yokai-protocol'
 
 /** Provider-neutral failure classes that every adapter test harness must be able to inject. */
 export const AdapterConformanceErrorCategory = Schema.Literals([

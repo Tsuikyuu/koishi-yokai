@@ -10,7 +10,7 @@ import {
   type ToolCalls,
   makeAdapterContinuation,
   makeAdapterContinuationError,
-} from '@yokai/protocol'
+} from 'yokai-protocol'
 import { Context, Data, Effect, HashMap, Layer, Option, Redacted, Ref, Scope } from 'effect'
 
 import { GeminiConnection } from '../connection/connection'

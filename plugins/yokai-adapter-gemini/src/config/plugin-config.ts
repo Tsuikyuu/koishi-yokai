@@ -1,4 +1,4 @@
-import { MAX_ADAPTER_ID_LENGTH } from '@yokai/protocol'
+import { MAX_ADAPTER_ID_LENGTH } from 'yokai-protocol'
 import { Schema } from 'koishi'
 
 export const DEFAULT_ADAPTER_ID = 'gemini'

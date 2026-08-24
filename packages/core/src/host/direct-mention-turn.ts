@@ -1,5 +1,5 @@
-import { MinimalResponseEnvelope } from '@yokai/mind'
-import { GenerateRequest, TokenLimit, UserMessage } from '@yokai/protocol'
+import { MinimalResponseEnvelope } from '@yokai-internal/mind'
+import { GenerateRequest, TokenLimit, UserMessage } from 'yokai-protocol'
 import { Effect, Option, Schema } from 'effect'
 
 import { HostModelSelection } from './model-selection'

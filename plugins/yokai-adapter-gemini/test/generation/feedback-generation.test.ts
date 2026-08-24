@@ -15,7 +15,7 @@ import {
   type AdapterInvocationError,
   type InitialGenerationResult,
   type ToolCallBatch,
-} from '@yokai/protocol'
+} from 'yokai-protocol'
 import {
   Cause,
   Deferred,

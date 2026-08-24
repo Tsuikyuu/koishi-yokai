@@ -13,4 +13,4 @@ export {
   ResponseMechanismId,
   Skill,
   SkillId,
-} from '@yokai/protocol'
+} from 'yokai-protocol'

@@ -13,7 +13,7 @@ import {
   type PortableValueSchema,
   type ToolResult,
   type ToolResultBatch,
-} from '@yokai/protocol'
+} from 'yokai-protocol'
 import { Effect } from 'effect'
 
 import type { ClaimedContinuation, PendingFunctionCall } from '../continuation/store'

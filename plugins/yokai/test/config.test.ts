@@ -2,7 +2,7 @@ import { expect, it, vi } from 'vitest'
 
 vi.mock('koishi', () => import('@koishijs/core'))
 
-import { ModelCatalogSnapshot } from '@yokai/protocol'
+import { ModelCatalogSnapshot } from 'yokai-protocol'
 import { Schema } from 'effect'
 
 import { Config } from '../src/config'

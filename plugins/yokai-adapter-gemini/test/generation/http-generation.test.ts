@@ -1,6 +1,6 @@
 import { HTTP } from '@cordisjs/plugin-http'
 import { expect, it } from '@effect/vitest'
-import { ContinueRequest, GenerateRequest, JsonObject } from '@yokai/protocol'
+import { ContinueRequest, GenerateRequest, JsonObject } from 'yokai-protocol'
 import { Context as CordisContext } from 'cordis'
 import { Cause, Effect, Exit, Fiber, Layer, Queue, Schema } from 'effect'
 import { createServer, type RequestListener, type Server } from 'node:http'

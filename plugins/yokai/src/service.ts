@@ -6,7 +6,7 @@ import {
   HostModelSelection,
   HostSession,
   type ResolvedModel,
-} from '@yokai/core'
+} from '@yokai-internal/core'
 import type {
   ActionTool,
   AdapterId,
@@ -21,19 +21,13 @@ import type {
   ModelCatalogSnapshot,
   YokaiAdapter,
   YokaiCapabilityHost,
-} from '@yokai/protocol'
+} from 'yokai-protocol'
 import { Effect, Option } from 'effect'
 import { Context, Service, type Session } from 'koishi'
 
 import type { Config } from './config'
 import { YokaiRuntime } from './runtime/runtime'
 import { fromDirectMentionSession, fromSession } from './runtime/session'
-
-declare module 'koishi' {
-  interface Context {
-    yokai: YokaiCapabilityHost
-  }
-}
 
 export class Yokai extends Service<Config> implements YokaiCapabilityHost {
   private readonly effectRuntime: YokaiRuntime.Interface
