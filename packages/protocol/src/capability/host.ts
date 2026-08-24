@@ -1,4 +1,4 @@
-import type { AdapterModelSnapshot, YokaiAdapter } from '../llm-adapter/index'
+import type { AdapterId, AdapterModelSnapshot, YokaiAdapter } from '../llm-adapter/index'
 import type {
   ActionTool,
   ContextProvider,
@@ -8,6 +8,7 @@ import type {
   ResponseMechanism,
   Skill,
 } from './capability'
+import type { ModelCatalogSnapshot } from './model-catalog'
 
 /** A registration remains explicitly disposable even though its owner is auto-unregistered. */
 export interface CapabilityRegistration {
@@ -31,4 +32,6 @@ export interface YokaiCapabilityHost {
   readonly registerResponseMechanism: (
     capability: ResponseMechanism,
   ) => Promise<CapabilityRegistration>
+  readonly getModelCatalog: () => Promise<ModelCatalogSnapshot>
+  readonly refreshModels: (adapterId?: AdapterId) => Promise<number>
 }

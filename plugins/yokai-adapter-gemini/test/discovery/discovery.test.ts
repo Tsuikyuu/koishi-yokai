@@ -7,7 +7,7 @@ import {
   AdapterTransportError,
   type AdapterInvocationError,
 } from '@yokai/protocol'
-import { Deferred, Effect, Layer, Option, Ref } from 'effect'
+import { Deferred, Effect, Fiber, Layer, Option, Ref } from 'effect'
 import { TestClock } from 'effect/testing'
 
 import { GeminiConnection } from '../../src/connection/connection'
@@ -171,6 +171,38 @@ it.effect('starts one background discovery when the runtime layer is acquired', 
       yield* Deferred.await(started)
       expect(yield* Ref.get(callCount)).toBe(1)
     }).pipe(Effect.provide(makeDiscoveryLayer(connection, true)))
+  }),
+)
+
+it.effect('lets the host trigger exactly one retry-enabled initial discovery', () =>
+  Effect.gen(function* () {
+    const scripted = yield* makeScriptedConnection([
+      Effect.fail(rateLimitError()),
+      Effect.fail(providerUnavailableError()),
+      Effect.succeed({ models: [model('host-recovered', 'Host recovered model')] }),
+    ])
+
+    yield* Effect.gen(function* () {
+      const discovery = yield* GeminiModelDiscovery.Service
+      expect(yield* scripted.callCount()).toBe(0)
+
+      const refresh = yield* discovery.discoverModels().pipe(Effect.forkChild)
+      yield* Effect.yieldNow
+      expect(yield* scripted.callCount()).toBe(1)
+      yield* TestClock.adjust('1 second')
+      expect(yield* scripted.callCount()).toBe(2)
+      yield* TestClock.adjust('2 seconds')
+
+      const snapshot = yield* Fiber.join(refresh)
+      expect(snapshot.models.map((entry) => entry.id)).toEqual(['host-recovered'])
+      expect(yield* scripted.callCount()).toBe(3)
+    }).pipe(
+      Effect.provide(
+        GeminiModelDiscovery.layerForHost.pipe(
+          Layer.provide(Layer.succeed(GeminiConnection.Service, scripted.connection)),
+        ),
+      ),
+    )
   }),
 )
 

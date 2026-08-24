@@ -3,17 +3,21 @@ import {
   AdapterDescriptor,
   AdapterId,
   AdapterModelSnapshot,
+  AdapterTransportError,
   CURRENT_ADAPTER_PROTOCOL_VERSION,
   FeedbackToolId,
+  ModelReference,
+  type ModelCatalogSnapshot,
   type YokaiAdapter,
 } from '@yokai/protocol'
-import { Deferred, Effect, Fiber, Result, Schema, Stream } from 'effect'
+import { Deferred, Effect, Fiber, Option, Ref, Result, Schema, Stream } from 'effect'
 
 import {
   ActionTool,
   ActionToolId,
   CapabilityProtocolVersion,
   CapabilityRegistry,
+  type CapabilityRegistryInterface,
   ContextProvider,
   ContextProviderId,
   FeedbackTool,
@@ -38,10 +42,25 @@ const makeAdapter = (
     protocolVersion,
     capabilities: { feedbackTools: true },
   }),
-  discoverModels: () => Effect.die('not called'),
+  discoverModels: () => Effect.never,
   generate: () => Effect.die('not called'),
   continue: () => Effect.die('not called'),
 })
+
+const waitForCatalog = (
+  registry: CapabilityRegistryInterface,
+  predicate: (catalog: ModelCatalogSnapshot) => boolean,
+) =>
+  registry.modelCatalogChanges.pipe(
+    Stream.filter(predicate),
+    Stream.runHead,
+    Effect.flatMap(
+      Option.match({
+        onNone: () => Effect.die('Expected the live model catalog stream to remain open'),
+        onSome: Effect.succeed,
+      }),
+    ),
+  )
 
 const makeContextProvider = (id: string, minor = 1): ContextProvider =>
   ContextProvider.make({
@@ -194,9 +213,7 @@ it.effect('publishes atomic monotonic model catalogs and ignores stale adapter g
       const alpha = yield* registry.registerAdapter(makeAdapter('alpha'))
       const ready = yield* Deferred.make<void>()
       const catalogsFiber = yield* registry.modelCatalogChanges.pipe(
-        Stream.tap((catalog) =>
-          catalog.revision === 0 ? Deferred.succeed(ready, undefined) : Effect.void,
-        ),
+        Stream.tap(() => Deferred.succeed(ready, undefined)),
         Stream.take(4),
         Stream.runCollect,
         Effect.forkScoped,
@@ -247,7 +264,7 @@ it.effect('publishes atomic monotonic model catalogs and ignores stale adapter g
       expect(yield* alpha.publishModels(replacementAlphaSnapshot)).toBe(true)
 
       const catalogs = Array.from(yield* Fiber.join(catalogsFiber))
-      expect(catalogs.map((catalog) => catalog.revision)).toEqual([0, 1, 2, 3])
+      expect(catalogs.map((catalog) => catalog.revision)).toEqual([2, 3, 4, 5])
       const mergedCatalog = catalogs[2]
       if (mergedCatalog === undefined) return yield* Effect.die('Expected merged model catalog')
       expect(
@@ -260,14 +277,190 @@ it.effect('publishes atomic monotonic model catalogs and ignores stale adapter g
       const oldTurn = yield* registry.snapshot()
       expect(yield* zeta.unregister()).toBe(true)
       const current = yield* registry.modelCatalog()
-      expect(current.revision).toBe(4)
+      expect(current.revision).toBe(6)
       expect(
         current.models.map((model) => model.reference.adapterId + '/' + model.reference.modelId),
       ).toEqual(['alpha/b-model'])
       expect(yield* zeta.publishModels(zetaSnapshot)).toBe(false)
-      expect((yield* registry.modelCatalog()).revision).toBe(4)
+      expect((yield* registry.modelCatalog()).revision).toBe(6)
       expect(oldTurn.adapters.map((adapter) => adapter.descriptor.id)).toEqual(['zeta', 'alpha'])
-      expect(oldTurn.modelCatalog.revision).toBe(3)
+      expect(oldTurn.modelCatalog.revision).toBe(5)
     }).pipe(Effect.provide(CapabilityRegistry.layer)),
   ),
+)
+
+it.effect('discovers on registration and retains the last successful snapshot as stale', () =>
+  Effect.gen(function* () {
+    const registry = yield* CapabilityRegistry.Service
+    const adapterId = AdapterId.make('live-discovery')
+    const snapshot = yield* Schema.decodeUnknownEffect(AdapterModelSnapshot)({
+      discoveredAt: '2026-08-24T00:00:00.000Z',
+      models: [
+        {
+          id: 'model-a',
+          displayName: 'Model A',
+          availability: 'available',
+          discoveryFreshness: 'fresh',
+        },
+      ],
+    })
+    const calls = yield* Ref.make(0)
+    const adapter: YokaiAdapter = {
+      ...makeAdapter(adapterId),
+      discoverModels: () =>
+        Ref.getAndUpdate(calls, (count) => count + 1).pipe(
+          Effect.flatMap((count) =>
+            count === 0
+              ? Effect.succeed(snapshot)
+              : Effect.fail(
+                  new AdapterTransportError({
+                    adapterId,
+                    operation: 'discoverModels',
+                    message: 'Discovery transport unavailable',
+                  }),
+                ),
+          ),
+        ),
+    }
+
+    yield* registry.registerAdapter(adapter)
+    const ready = yield* waitForCatalog(registry, (catalog) =>
+      catalog.adapters.some((entry) => entry.id === adapterId && entry.status === 'ready'),
+    )
+    expect(ready.models.map((model) => model.displayName)).toEqual(['Model A'])
+
+    expect(yield* registry.refreshModels(Option.some(adapterId))).toBe(1)
+    const stale = yield* waitForCatalog(registry, (catalog) =>
+      catalog.adapters.some((entry) => entry.id === adapterId && entry.status === 'stale'),
+    )
+    expect(stale.models.map((model) => model.displayName)).toEqual(['Model A'])
+    expect(yield* Ref.get(calls)).toBe(2)
+
+    const failedId = AdapterId.make('never-discovered')
+    yield* registry.registerAdapter({
+      ...makeAdapter(failedId),
+      discoverModels: () =>
+        Effect.fail(
+          new AdapterTransportError({
+            adapterId: failedId,
+            operation: 'discoverModels',
+            message: 'Initial discovery unavailable',
+          }),
+        ),
+    })
+    const failed = yield* waitForCatalog(registry, (catalog) =>
+      catalog.adapters.some((entry) => entry.id === failedId && entry.status === 'failed'),
+    )
+    expect(failed.models.some((model) => model.reference.adapterId === failedId)).toBe(false)
+  }).pipe(Effect.provide(CapabilityRegistry.layer)),
+)
+
+it.effect('replaces older discovery fibers before a newer refresh can publish', () =>
+  Effect.gen(function* () {
+    const registry = yield* CapabilityRegistry.Service
+    const adapterId = AdapterId.make('refresh-race')
+    const firstStarted = yield* Deferred.make<void>()
+    const firstInterrupted = yield* Deferred.make<void>()
+    const secondStarted = yield* Deferred.make<void>()
+    const secondInterrupted = yield* Deferred.make<void>()
+    const calls = yield* Ref.make(0)
+    const newest = yield* Schema.decodeUnknownEffect(AdapterModelSnapshot)({
+      discoveredAt: '2026-08-24T00:00:02.000Z',
+      models: [
+        {
+          id: 'newest',
+          displayName: 'Newest',
+          availability: 'available',
+          discoveryFreshness: 'fresh',
+        },
+      ],
+    })
+    const blockedDiscovery = (
+      started: Deferred.Deferred<void>,
+      interrupted: Deferred.Deferred<void>,
+    ) =>
+      Deferred.succeed(started, undefined).pipe(
+        Effect.andThen(Effect.never),
+        Effect.onInterrupt(() => Deferred.succeed(interrupted, undefined)),
+      )
+    const adapter: YokaiAdapter = {
+      ...makeAdapter(adapterId),
+      discoverModels: () =>
+        Ref.getAndUpdate(calls, (count) => count + 1).pipe(
+          Effect.flatMap((count) => {
+            if (count === 0) return blockedDiscovery(firstStarted, firstInterrupted)
+            if (count === 1) return blockedDiscovery(secondStarted, secondInterrupted)
+            return Effect.succeed(newest)
+          }),
+        ),
+    }
+
+    yield* registry.registerAdapter(adapter)
+    yield* Deferred.await(firstStarted)
+    expect(yield* registry.refreshModels(Option.some(adapterId))).toBe(1)
+    yield* Deferred.await(firstInterrupted)
+    yield* Deferred.await(secondStarted)
+    expect(yield* registry.refreshModels(Option.some(adapterId))).toBe(1)
+    yield* Deferred.await(secondInterrupted)
+
+    const ready = yield* waitForCatalog(registry, (catalog) =>
+      catalog.models.some((model) => model.displayName === 'Newest'),
+    )
+    expect(ready.models.map((model) => model.displayName)).toEqual(['Newest'])
+    expect(yield* Ref.get(calls)).toBe(3)
+  }).pipe(Effect.provide(CapabilityRegistry.layer)),
+)
+
+it.effect('resolves only the selected model and recovers when it becomes available', () =>
+  Effect.gen(function* () {
+    const registry = yield* CapabilityRegistry.Service
+    const registration = yield* registry.registerAdapter(makeAdapter('model-selection'))
+    const unavailableSnapshot = yield* Schema.decodeUnknownEffect(AdapterModelSnapshot)({
+      discoveredAt: '2026-08-24T00:00:00.000Z',
+      models: [
+        {
+          id: 'other',
+          displayName: 'Other',
+          availability: 'available',
+          discoveryFreshness: 'fresh',
+        },
+        {
+          id: 'selected',
+          displayName: 'Selected',
+          availability: 'unavailable',
+          discoveryFreshness: 'fresh',
+        },
+      ],
+    })
+    yield* registration.publishModels(unavailableSnapshot)
+
+    const selectedReference = yield* Schema.decodeUnknownEffect(ModelReference)(
+      'model-selection/selected',
+    )
+    const unavailable = yield* registry.resolveModel(selectedReference).pipe(Effect.flip)
+    expect(unavailable).toMatchObject({
+      _tag: 'ModelSelectionUnavailableError',
+      reference: selectedReference,
+    })
+
+    const recoveredSnapshot = yield* Schema.decodeUnknownEffect(AdapterModelSnapshot)({
+      discoveredAt: '2026-08-24T00:00:01.000Z',
+      models: [
+        {
+          id: 'other',
+          displayName: 'Other',
+          availability: 'available',
+          discoveryFreshness: 'fresh',
+        },
+        {
+          id: 'selected',
+          displayName: 'Selected renamed',
+          availability: 'available',
+          discoveryFreshness: 'fresh',
+        },
+      ],
+    })
+    yield* registration.publishModels(recoveredSnapshot)
+    expect((yield* registry.resolveModel(selectedReference)).reference).toEqual(selectedReference)
+  }).pipe(Effect.provide(CapabilityRegistry.layer)),
 )

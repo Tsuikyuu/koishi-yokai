@@ -537,7 +537,7 @@ adapter 在启动、端点配置更新或手动刷新时调用 Gemini
 MVP 只有 `feedbackToolsEnabled`，默认关闭。关闭时主体不向任何模型暴露 FeedbackTool，只运行
 single-pass；开启时仅在 adapter 声明实现了通用 FeedbackTool 传输契约后暴露工具。该开关表示
 “允许尝试”，不保证所选供应商模型实际支持函数调用。模型在运行时拒绝时，adapter 返回类型化
-unsupported 错误，本回合保持沉默，不探测、不重试、不切换端点或主插件 fallback。以后新增会改变主体编排的
+unsupported 错误，本回合保持沉默，不探测、不重试、不切换端点或模型。以后新增会改变主体编排的
 能力必须先进入通用协议和主插件配置；adapter 私有传输特性不进入主体能力配置。
 
 模型选择只存在于主插件 `@yokai/koishi-plugin-yokai` 的配置中；adapter 只配置单一逻辑连接与传输参数，
@@ -566,9 +566,11 @@ SDK 请求。后台发现的每次重试重新获取 permit，指数退避期间
 adapter-local model ID 就是规范化后的 `providerModelId`，完整模型引用为 `<adapterId>/<providerModelId>`。
 同一供应商模型经多个端点可见时仍是一个模型，不因端点重复、不带传输源前缀，也不产生端点显示名。主插件把
 adapter 最新的单份发现快照合并为带版本的全局模型目录。端点故障转移始终保持同一 `providerModelId`，只是
-adapter 内部一次逻辑调用的传输容灾；它不是主插件在 primary/fallback 之间进行的 model fallback。
+adapter 内部一次逻辑调用的传输容灾；它不会改变主插件选中的模型。
 
-主插件的 primary 和 fallback 配置使用 Koishi `Schema.dynamic('yokai-model')`。模型目录的 `SubscriptionRef` 每次原子替换后，Koishi 边界根据新快照调用 `ctx.schema.set('yokai-model', ...)`，将每个模型投影为动态选项。这会让主插件的原生 Koishi 配置表单实时响应 adapter 注册、卸载、重连和模型刷新，不需要重载主插件，也不另造一份模型下拉框状态。
+主插件的单个 `model` 配置使用 Koishi `Schema.dynamic('yokai-model')`。模型目录的 `SubscriptionRef` 每次原子替换后，Koishi 边界根据新快照调用 `ctx.schema.set('yokai-model', ...)`，将每个模型投影为动态选项。这会让主插件的原生 Koishi 配置表单实时响应 adapter 注册、卸载、重连和模型刷新，不需要重载主插件，也不另造一份模型下拉框状态。
+选项显示文案由稳定模型引用派生：整体转为小写，并把连续空白替换为 `-`，
+因此统一为 `<adapterId>/<model>` 形式，例如 `gemini/gemini-3.5-flash`。该显示投影不改写 adapter 发布的原始模型引用；`displayName` 仍作为目录元数据保留，不用作配置选项文案。
 
 动态配置遵守以下语义：
 
@@ -576,9 +578,9 @@ adapter 内部一次逻辑调用的传输容灾；它不是主插件在 primary/
 - 未选模型、选中模型未发现或 adapter 离线时，主插件继续本地存档和状态更新，但不创建角色回合。
 - 选中模型重新出现后下一回合自动恢复，不修改配置或重启主插件。
 - 发现失败时目录继续发布上次成功快照并标记为 stale，不让配置选项瞬间消失。
-- fallback 只按主插件配置的顺序参与请求前的可用模型解析，不因目录顺序、显示名或 adapter 刷新自动改变。
+- 每次请求前只解析主插件显式选择的单个模型，不因目录顺序、显示名或 adapter 刷新自动改选其他模型。
 - 每个角色回合在请求前只解析出一个模型；有界反馈的两次逻辑生成必须使用同一模型。一次逻辑生成可在
-  adapter 内按上述规则尝试等价端点；端点耗尽或其他生成失败后，主体不重试，也不级联切换 fallback。
+  adapter 内按上述规则尝试等价端点；端点耗尽或其他生成失败后，主体不重试，也不切换模型。
 
 如果实际连接的是兼容协议而不是官方服务，后续使用：
 
@@ -941,7 +943,7 @@ Yokai 将这些模式统一成 `ResponseMechanism + WakeProposal + WakeArbiter`�
 | 配置组           | 关键内容                                                                       |
 | ---------------- | ------------------------------------------------------------------------------ |
 | 角色             | 实例 ID、预设 ID                                                               |
-| 模型             | 可选 primary、有序 fallback；选项来自实时模型目录                              |
+| 模型             | 单个可选 `model`；选项来自实时模型目录                                         |
 | 门控与预算       | 活跃度/相关度阈值、半衰期、debounce、冷却、上下文窗口和分类调用预算            |
 | 历史             | 原始消息保留天数（默认 90）、分页上限、每回合查询数和 token 上限               |
 | 生成             | 超时、上下文截止时间、XML 上限、ActionTool/FeedbackTool 数量、耗时与结果上限   |
@@ -950,9 +952,9 @@ Yokai 将这些模式统一成 `ResponseMechanism + WakeProposal + WakeArbiter`�
 | 预设与记事本     | 文件监听、重载 debounce、召回上限、默认笔记过期时间                            |
 | 表达             | 最大长度；严格角色内表达是固定行为                                             |
 
-角色外调试和管理只在 Koishi Console 或管理命令中进行。primary/fallback 均属于主插件配置；未选 primary 是允许的本地存档模式，
+角色外调试和管理只在 Koishi Console 或管理命令中进行。单个 `model` 属于主插件配置；未选模型是允许的本地存档模式，
 不使用伪造的 `none` 模型 ID。Gemini adapter 的有序 URL/key 端点只存在 adapter 插件配置中，并共享
-顶层超时与发现重试设置；它们是一个逻辑连接的容灾传输，不是可选模型或主插件 fallback。
+顶层超时与发现重试设置；它们是一个逻辑连接的容灾传输，不是多个可选模型。
 
 ## 8. 评测
 
@@ -1018,7 +1020,7 @@ Yokai 将这些模式统一成 `ResponseMechanism + WakeProposal + WakeArbiter`�
 - 实例级 `maxConcurrency` 同时约束发现、生成和 continuation；排队取消不触达 SDK，后台发现退避不占用并发名额；
 - 生成只调用 unary `generateContent`，不调用 `generateContentStream`、不发送 `alt=sse`、不消费 SSE；
   超时切换的重复生成与重复计费风险进入控制面说明；
-- adapter 模型快照变化后主插件配置的 primary/fallback 选项实时更新，无需重载主插件；
+- adapter 模型快照变化后主插件配置的单个 `model` 选项实时更新，无需重载主插件；
 - `feedbackToolsEnabled` 关闭时所有模型都只走 single-pass；开启后不做能力探测，运行时不支持则本回合沉默；
 - 已选模型暂时离线时配置值保留且角色回合停止，模型恢复后自动继续；
 - 安装一个仓库外的契约测试 adapter 后，不修改任何既有包即可发现模型、出现在主插件配置、完成
@@ -1077,7 +1079,7 @@ adapter；用于兼容门禁的确定性 adapter 是测试夹具，不作为第�
     最小兼容 scoped fork，不把仓库根级 patch 交给使用者。
 16. Yokai 的 LLM 生成只接受完整 unary 响应，不调用供应商 streaming API，不请求、解析或消费 SSE。
     SDK 类型不跨边界，自动函数调用关闭，FeedbackTool 由主体执行，adapter 只传输通用调用与结果。
-    Gemini 的有序 URL/key 端点共享配置、只做同模型传输容灾，不形成独立模型身份，也不替代主插件 model fallback。
+    Gemini 的有序 URL/key 端点共享配置、只做同模型传输容灾，不形成独立模型身份，也不改变主插件选中的模型。
 17. 模型选择和协议能力开关属于主插件配置，通过 Koishi dynamic Schema 实时投影 adapter 模型目录；
     adapter 不持有当前模型选择，主体不探测逐模型能力。
 18. Yokai 不是通用 Agent；single-pass 回合一次逻辑生成，bounded-feedback 回合最多两次逻辑生成且只有

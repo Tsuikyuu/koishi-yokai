@@ -1,5 +1,5 @@
 import {
-  type AdapterId,
+  AdapterId,
   type AdapterModelSnapshot,
   type AdapterProtocolVersionMismatchError,
   type DiscoveredModel,
@@ -7,7 +7,7 @@ import {
   type YokaiAdapter,
   negotiateAdapterProtocol,
 } from '@yokai/protocol'
-import { Context, Effect, Layer, Option, Schema, Stream, SubscriptionRef } from 'effect'
+import { Context, Effect, FiberMap, Layer, Option, Schema, Stream, SubscriptionRef } from 'effect'
 
 import {
   type ActionTool,
@@ -19,6 +19,8 @@ import {
   type Skill,
 } from './capability'
 import {
+  type AdapterDiscoveryStatus,
+  CatalogAdapter,
   CatalogModel,
   type ModelCatalogSnapshot,
   ModelCatalogRevision,
@@ -44,6 +46,18 @@ export class CapabilityConflictError extends Schema.TaggedError<CapabilityConfli
 )('CapabilityConflictError', {
   domain: CapabilityDomain,
   id: Schema.String,
+}) {}
+
+export class AdapterNotFoundError extends Schema.TaggedError<AdapterNotFoundError>(
+  '@yokai/core/AdapterNotFoundError',
+)('AdapterNotFoundError', {
+  adapterId: Schema.optionalKey(AdapterId),
+}) {}
+
+export class ModelSelectionUnavailableError extends Schema.TaggedError<ModelSelectionUnavailableError>(
+  '@yokai/core/ModelSelectionUnavailableError',
+)('ModelSelectionUnavailableError', {
+  reference: Schema.optionalKey(ModelReference),
 }) {}
 
 export const CapabilityRegistryRevision = Schema.Natural.pipe(
@@ -72,6 +86,12 @@ export interface TurnCapabilitySnapshot {
   readonly presetSources: ReadonlyArray<PresetSource>
   readonly responseMechanisms: ReadonlyArray<ResponseMechanism>
   readonly modelCatalog: ModelCatalogSnapshot
+}
+
+export interface ResolvedModel {
+  readonly adapter: YokaiAdapter
+  readonly reference: ModelReference
+  readonly model: CatalogModel
 }
 
 export interface Interface {
@@ -105,6 +125,12 @@ export interface Interface {
   readonly snapshot: () => Effect.Effect<TurnCapabilitySnapshot>
   readonly modelCatalog: () => Effect.Effect<ModelCatalogSnapshot>
   readonly modelCatalogChanges: Stream.Stream<ModelCatalogSnapshot>
+  readonly refreshModels: (
+    adapterId: Option.Option<AdapterId>,
+  ) => Effect.Effect<number, AdapterNotFoundError>
+  readonly resolveModel: (
+    reference: ModelReference,
+  ) => Effect.Effect<ResolvedModel, ModelSelectionUnavailableError>
 }
 
 export class Service extends Context.Service<Service, Interface>()(
@@ -119,7 +145,9 @@ interface Registered<A> {
 interface RegisteredAdapterModels {
   readonly key: number
   readonly adapterId: AdapterId
-  readonly snapshot: AdapterModelSnapshot
+  readonly request: number
+  readonly status: AdapterDiscoveryStatus
+  readonly snapshot: Option.Option<AdapterModelSnapshot>
 }
 
 interface RegistryState {
@@ -151,6 +179,7 @@ const initialState = (): RegistryState => ({
   adapterModels: [],
   modelCatalog: ModelCatalogSnapshotSchema.make({
     revision: ModelCatalogRevision.make(0),
+    adapters: [],
     models: [],
   }),
 })
@@ -188,25 +217,62 @@ const compareCatalogModels = (left: CatalogModel, right: CatalogModel): number =
   return 0
 }
 
+const compareCatalogAdapters = (left: CatalogAdapter, right: CatalogAdapter): number => {
+  if (left.id < right.id) return -1
+  if (left.id > right.id) return 1
+  return 0
+}
+
+const mergeAdapterStatuses = (
+  contributions: ReadonlyArray<RegisteredAdapterModels>,
+): ReadonlyArray<CatalogAdapter> =>
+  contributions
+    .map((contribution) =>
+      CatalogAdapter.make({ id: contribution.adapterId, status: contribution.status }),
+    )
+    .sort(compareCatalogAdapters)
+
 const mergeAdapterModels = (
   contributions: ReadonlyArray<RegisteredAdapterModels>,
 ): ReadonlyArray<CatalogModel> =>
   contributions
-    .flatMap((contribution) =>
-      contribution.snapshot.models.map((model) => toCatalogModel(contribution.adapterId, model)),
+    .flatMap((contribution): ReadonlyArray<CatalogModel> =>
+      Option.match(contribution.snapshot, {
+        onNone: () => [],
+        onSome: (snapshot) =>
+          snapshot.models.map((model) => toCatalogModel(contribution.adapterId, model)),
+      }),
     )
     .sort(compareCatalogModels)
 
-const withCatalogModels = (
+const withCatalogContent = (
   current: ModelCatalogSnapshot,
+  adapters: ReadonlyArray<CatalogAdapter>,
   models: ReadonlyArray<CatalogModel>,
 ): ModelCatalogSnapshot =>
-  modelCatalogContentEqual(current.models, models)
+  modelCatalogContentEqual(current.adapters, current.models, adapters, models)
     ? current
     : ModelCatalogSnapshotSchema.make({
         revision: nextCatalogRevision(current.revision),
+        adapters,
         models,
       })
+
+const withAdapterModels = (
+  state: RegistryState,
+  adapterModels: ReadonlyArray<RegisteredAdapterModels>,
+): RegistryState => ({
+  ...state,
+  adapterModels,
+  modelCatalog: withCatalogContent(
+    state.modelCatalog,
+    mergeAdapterStatuses(adapterModels),
+    mergeAdapterModels(adapterModels),
+  ),
+})
+
+const statusForSnapshot = (snapshot: AdapterModelSnapshot): AdapterDiscoveryStatus =>
+  snapshot.models.some((model) => model.discoveryFreshness === 'stale') ? 'stale' : 'ready'
 
 const registerEntry = <A>(
   stateRef: SubscriptionRef.SubscriptionRef<RegistryState>,
@@ -265,48 +331,181 @@ const unregisterEntry = <A>(
 
 const unregisterAdapter = Effect.fn('CapabilityRegistry.unregisterAdapter')(function* (
   stateRef: SubscriptionRef.SubscriptionRef<RegistryState>,
+  refreshFibers: FiberMap.FiberMap<number>,
   key: number,
 ) {
-  return yield* SubscriptionRef.modifySome(stateRef, (state) => {
+  const removed = yield* SubscriptionRef.modifySome(stateRef, (state) => {
     if (!state.adapters.some((entry) => entry.key === key)) {
       return [false, Option.none<RegistryState>()] as const
     }
 
     const adapterModels = state.adapterModels.filter((entry) => entry.key !== key)
-    const modelCatalog = withCatalogModels(state.modelCatalog, mergeAdapterModels(adapterModels))
     return [
       true,
       Option.some({
-        ...state,
+        ...withAdapterModels(state, adapterModels),
         revision: nextRegistryRevision(state.revision),
         adapters: state.adapters.filter((entry) => entry.key !== key),
-        adapterModels,
-        modelCatalog,
       }),
     ] as const
   })
+
+  if (removed) yield* FiberMap.remove(refreshFibers, key)
+  return removed
 })
 
 const publishAdapterModels = Effect.fn('CapabilityRegistry.publishAdapterModels')(function* (
   stateRef: SubscriptionRef.SubscriptionRef<RegistryState>,
+  refreshFibers: FiberMap.FiberMap<number>,
   key: number,
   adapterId: AdapterId,
   snapshot: AdapterModelSnapshot,
 ) {
+  yield* FiberMap.remove(refreshFibers, key)
   return yield* SubscriptionRef.modifySome(stateRef, (state) => {
-    const active = state.adapters.some(
-      (entry) => entry.key === key && entry.value.descriptor.id === adapterId,
+    const contribution = state.adapterModels.find(
+      (entry) => entry.key === key && entry.adapterId === adapterId,
     )
-    if (!active) return [false, Option.none<RegistryState>()] as const
+    if (contribution === undefined) return [false, Option.none<RegistryState>()] as const
 
-    const adapterModels = [
-      ...state.adapterModels.filter((entry) => entry.key !== key),
-      { key, adapterId, snapshot },
-    ]
-    const modelCatalog = withCatalogModels(state.modelCatalog, mergeAdapterModels(adapterModels))
-    return [true, Option.some({ ...state, adapterModels, modelCatalog })] as const
+    const adapterModels = state.adapterModels.map((entry) =>
+      entry.key === key
+        ? {
+            ...entry,
+            request: entry.request + 1,
+            status: statusForSnapshot(snapshot),
+            snapshot: Option.some(snapshot),
+          }
+        : entry,
+    )
+    return [true, Option.some(withAdapterModels(state, adapterModels))] as const
   })
 })
+
+interface RefreshTarget {
+  readonly key: number
+  readonly request: number
+  readonly adapter: YokaiAdapter
+}
+
+const completeDiscoverySuccess = Effect.fn('CapabilityRegistry.completeDiscoverySuccess')(
+  function* (
+    stateRef: SubscriptionRef.SubscriptionRef<RegistryState>,
+    target: RefreshTarget,
+    snapshot: AdapterModelSnapshot,
+  ) {
+    return yield* SubscriptionRef.updateSome(stateRef, (state) => {
+      const current = state.adapterModels.find((entry) => entry.key === target.key)
+      if (current === undefined || current.request !== target.request) {
+        return Option.none<RegistryState>()
+      }
+
+      const adapterModels = state.adapterModels.map((entry) =>
+        entry.key === target.key
+          ? { ...entry, status: statusForSnapshot(snapshot), snapshot: Option.some(snapshot) }
+          : entry,
+      )
+      return Option.some(withAdapterModels(state, adapterModels))
+    })
+  },
+)
+
+const completeDiscoveryFailure = Effect.fn('CapabilityRegistry.completeDiscoveryFailure')(
+  function* (stateRef: SubscriptionRef.SubscriptionRef<RegistryState>, target: RefreshTarget) {
+    return yield* SubscriptionRef.updateSome(stateRef, (state) => {
+      const current = state.adapterModels.find((entry) => entry.key === target.key)
+      if (current === undefined || current.request !== target.request) {
+        return Option.none<RegistryState>()
+      }
+
+      const status: AdapterDiscoveryStatus = Option.isSome(current.snapshot) ? 'stale' : 'failed'
+      const adapterModels = state.adapterModels.map((entry) =>
+        entry.key === target.key ? { ...entry, status } : entry,
+      )
+      return Option.some(withAdapterModels(state, adapterModels))
+    })
+  },
+)
+
+const runDiscovery = Effect.fn('CapabilityRegistry.runDiscovery')(function* (
+  stateRef: SubscriptionRef.SubscriptionRef<RegistryState>,
+  target: RefreshTarget,
+) {
+  yield* target.adapter.discoverModels().pipe(
+    Effect.matchEffect({
+      onFailure: () => completeDiscoveryFailure(stateRef, target),
+      onSuccess: (snapshot) => completeDiscoverySuccess(stateRef, target, snapshot),
+    }),
+  )
+})
+
+const beginAdapterRefresh = Effect.fn('CapabilityRegistry.beginAdapterRefresh')(function* (
+  stateRef: SubscriptionRef.SubscriptionRef<RegistryState>,
+  key: number,
+) {
+  return yield* SubscriptionRef.modifySome(stateRef, (state) => {
+    const registration = state.adapters.find((entry) => entry.key === key)
+    const contribution = state.adapterModels.find((entry) => entry.key === key)
+    if (registration === undefined || contribution === undefined) {
+      return [Option.none<RefreshTarget>(), Option.none<RegistryState>()] as const
+    }
+
+    const request = contribution.request + 1
+    const adapterModels = state.adapterModels.map((entry) =>
+      entry.key === key ? { ...entry, request, status: 'discovering' as const } : entry,
+    )
+    return [
+      Option.some({ key, request, adapter: registration.value }),
+      Option.some(withAdapterModels(state, adapterModels)),
+    ] as const
+  })
+})
+
+const startDiscovery = Effect.fn('CapabilityRegistry.startDiscovery')(function* (
+  stateRef: SubscriptionRef.SubscriptionRef<RegistryState>,
+  refreshFibers: FiberMap.FiberMap<number>,
+  target: RefreshTarget,
+) {
+  yield* FiberMap.run(refreshFibers, target.key, runDiscovery(stateRef, target))
+})
+
+const startAdapterRefresh = Effect.fn('CapabilityRegistry.startAdapterRefresh')(function* (
+  stateRef: SubscriptionRef.SubscriptionRef<RegistryState>,
+  refreshFibers: FiberMap.FiberMap<number>,
+  key: number,
+) {
+  const target = yield* beginAdapterRefresh(stateRef, key)
+  return yield* Option.match(target, {
+    onNone: () => Effect.succeed(false),
+    onSome: (current) => startDiscovery(stateRef, refreshFibers, current).pipe(Effect.as(true)),
+  })
+})
+
+const modelReferenceEqual = (left: ModelReference, right: ModelReference): boolean =>
+  left.adapterId === right.adapterId && left.modelId === right.modelId
+
+const resolveModelFromState = (
+  state: RegistryState,
+  reference: ModelReference,
+): ResolvedModel | undefined => {
+  const registration = state.adapters.find(
+    (entry) => entry.value.descriptor.id === reference.adapterId,
+  )
+  const adapterState = state.adapterModels.find((entry) => entry.adapterId === reference.adapterId)
+  const model = state.modelCatalog.models.find((candidate) =>
+    modelReferenceEqual(candidate.reference, reference),
+  )
+  const statusAllowsUse =
+    adapterState !== undefined &&
+    adapterState.status !== 'failed' &&
+    adapterState.status !== 'offline'
+  return registration !== undefined &&
+    model !== undefined &&
+    model.availability === 'available' &&
+    statusAllowsUse
+    ? { adapter: registration.value, reference, model }
+    : undefined
+}
 
 const turnSnapshot = (state: RegistryState): TurnCapabilitySnapshot => ({
   revision: state.revision,
@@ -323,6 +522,7 @@ const turnSnapshot = (state: RegistryState): TurnCapabilitySnapshot => ({
 
 const make = Effect.fn('CapabilityRegistry.make')(function* () {
   const stateRef = yield* SubscriptionRef.make(initialState())
+  const refreshFibers = yield* FiberMap.make<number>()
 
   const registerAdapter = Effect.fn('CapabilityRegistry.registerAdapter')(function* (
     candidate: YokaiAdapter,
@@ -336,12 +536,26 @@ const make = Effect.fn('CapabilityRegistry.make')(function* () {
       adapter,
       (state) => state.adapters,
       (entry) => entry.descriptor.id,
-      (state, adapters) => ({ ...state, adapters }),
+      (state, adapters) => {
+        const adapterModels = [
+          ...state.adapterModels,
+          {
+            key: state.nextRegistrationKey,
+            adapterId,
+            request: 1,
+            status: 'discovering' as const,
+            snapshot: Option.none<AdapterModelSnapshot>(),
+          },
+        ]
+        return { ...withAdapterModels(state, adapterModels), adapters }
+      },
     )
+    yield* startDiscovery(stateRef, refreshFibers, { key, request: 1, adapter })
 
     return {
-      unregister: () => unregisterAdapter(stateRef, key),
-      publishModels: (snapshot) => publishAdapterModels(stateRef, key, adapterId, snapshot),
+      unregister: () => unregisterAdapter(stateRef, refreshFibers, key),
+      publishModels: (snapshot) =>
+        publishAdapterModels(stateRef, refreshFibers, key, adapterId, snapshot),
     } satisfies AdapterRegistration
   })
 
@@ -506,6 +720,35 @@ const make = Effect.fn('CapabilityRegistry.make')(function* () {
     },
   )
 
+  const refreshModels = Effect.fn('CapabilityRegistry.refreshModels')(function* (
+    adapterId: Option.Option<AdapterId>,
+  ) {
+    const state = yield* SubscriptionRef.get(stateRef)
+    const targets = Option.match(adapterId, {
+      onNone: () => state.adapters,
+      onSome: (id) => state.adapters.filter((entry) => entry.value.descriptor.id === id),
+    })
+    if (Option.isSome(adapterId) && targets.length === 0) {
+      return yield* Effect.fail(new AdapterNotFoundError({ adapterId: adapterId.value }))
+    }
+
+    const started = yield* Effect.forEach(
+      targets,
+      (entry) => startAdapterRefresh(stateRef, refreshFibers, entry.key),
+      { concurrency: 'unbounded' },
+    )
+    return started.filter(Boolean).length
+  })
+
+  const resolveModel = Effect.fn('CapabilityRegistry.resolveModel')(function* (
+    reference: ModelReference,
+  ) {
+    const resolved = resolveModelFromState(yield* SubscriptionRef.get(stateRef), reference)
+    return resolved === undefined
+      ? yield* Effect.fail(new ModelSelectionUnavailableError({ reference }))
+      : resolved
+  })
+
   return Service.of({
     registerAdapter,
     registerContextProvider,
@@ -525,6 +768,8 @@ const make = Effect.fn('CapabilityRegistry.make')(function* () {
       Stream.map((state) => state.modelCatalog),
       Stream.changesWith((left, right) => left.revision === right.revision),
     ),
+    refreshModels,
+    resolveModel,
   })
 })
 

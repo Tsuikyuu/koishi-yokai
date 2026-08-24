@@ -2,10 +2,13 @@ import {
   CapabilityRegistry,
   type CapabilityRegistration as CoreCapabilityRegistration,
   type AdapterRegistration as CoreAdapterRegistration,
+  HostModelSelection,
   HostSession,
+  type ResolvedModel,
 } from '@yokai/core'
 import type {
   ActionTool,
+  AdapterId,
   AdapterRegistration,
   CapabilityRegistration,
   ContextProvider,
@@ -14,10 +17,11 @@ import type {
   PresetSource,
   ResponseMechanism,
   Skill,
+  ModelCatalogSnapshot,
   YokaiAdapter,
   YokaiCapabilityHost,
 } from '@yokai/protocol'
-import { Effect } from 'effect'
+import { Effect, Option } from 'effect'
 import { Context, Service, type Session } from 'koishi'
 
 import type { Config } from './config'
@@ -36,7 +40,7 @@ export class Yokai extends Service<Config> implements YokaiCapabilityHost {
   constructor(ctx: Context, config: Config) {
     super(ctx, 'yokai', true)
     this.config = config
-    this.effectRuntime = YokaiRuntime.make(config)
+    this.effectRuntime = YokaiRuntime.make(config, ctx)
   }
 
   protected override stop(): Promise<void> {
@@ -52,6 +56,10 @@ export class Yokai extends Service<Config> implements YokaiCapabilityHost {
     effect: Effect.Effect<A, E, YokaiRuntime.Services | HostSession.Service>,
   ): Promise<A> {
     return this.effectRuntime.runSession(fromSession(session), effect)
+  }
+
+  protected resolveConfiguredModel(): Promise<ResolvedModel> {
+    return this.runEffect(HostModelSelection.resolve())
   }
 
   private bindUnregister(
@@ -172,6 +180,19 @@ export class Yokai extends Service<Config> implements YokaiCapabilityHost {
       CapabilityRegistry.Service.pipe(
         Effect.flatMap((registry) => registry.registerResponseMechanism(capability)),
       ),
+    )
+  }
+
+  getModelCatalog(): Promise<ModelCatalogSnapshot> {
+    return this.runEffect(
+      CapabilityRegistry.Service.pipe(Effect.flatMap((registry) => registry.modelCatalog())),
+    )
+  }
+
+  refreshModels(adapterId?: AdapterId): Promise<number> {
+    const target = adapterId === undefined ? Option.none<AdapterId>() : Option.some(adapterId)
+    return this.runEffect(
+      CapabilityRegistry.Service.pipe(Effect.flatMap((registry) => registry.refreshModels(target))),
     )
   }
 }

@@ -108,8 +108,32 @@ const startBackgroundDiscovery = Effect.fn('GeminiModelDiscovery.startBackground
   },
 )
 
+const makeHostManaged = Effect.fn('GeminiModelDiscovery.makeHostManaged')(function* () {
+  const service = yield* make()
+  const connection = yield* GeminiConnection.Service
+  const initialRefresh = yield* Ref.make(true)
+
+  return Service.of({
+    ...service,
+    discoverModels: Effect.fn('GeminiModelDiscovery.discoverHostManagedModels')(function* () {
+      const initial = yield* Ref.getAndSet(initialRefresh, false)
+      return yield* initial
+        ? service.discoverModels().pipe(
+            Effect.retry({
+              schedule: backgroundRetrySchedule(connection),
+              while: isBackgroundRetryable,
+            }),
+          )
+        : service.discoverModels()
+    }),
+  })
+})
+
 /** Deterministic injection seam for tests that need to control the first refresh. */
 export const layerWithoutStartup = Layer.effect(Service, make())
+
+/** The host triggers the first refresh; only that initial background refresh receives retries. */
+export const layerForHost = Layer.effect(Service, makeHostManaged())
 
 export const layer = Layer.effect(
   Service,

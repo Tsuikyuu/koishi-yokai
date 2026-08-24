@@ -1,25 +1,23 @@
 import { CapabilityRegistry, HostConfiguration } from '@yokai/core'
 import { ModelReference } from '@yokai/protocol'
 import { Effect, Layer, Option, Schema } from 'effect'
+import type { Context } from 'koishi'
 
 import type { Config } from '../config'
+import { ModelCatalogSchemaProjection } from '../model-catalog/schema-projection'
 
 const decodeModelReference = Schema.decodeUnknownEffect(ModelReference)
 
 const decodeConfiguration = Effect.fn('YokaiRuntime.decodeConfiguration')(function* (
   config: Config,
 ) {
-  const primary =
-    config.primary === undefined
+  const model =
+    config.model === undefined
       ? Option.none<ModelReference>()
-      : Option.some(yield* decodeModelReference(config.primary))
-  const fallback = yield* Effect.forEach(config.fallback, (reference) =>
-    decodeModelReference(reference),
-  )
+      : Option.some(yield* decodeModelReference(config.model))
 
   return HostConfiguration.Service.of({
-    primary,
-    fallback,
+    model,
     feedbackToolsEnabled: config.feedbackToolsEnabled,
   })
 })
@@ -27,7 +25,9 @@ const decodeConfiguration = Effect.fn('YokaiRuntime.decodeConfiguration')(functi
 const configurationLayer = (config: Config) =>
   Layer.effect(HostConfiguration.Service, decodeConfiguration(config))
 
-export const makeLayer = (config: Config) =>
-  Layer.merge(CapabilityRegistry.layer, configurationLayer(config))
+export const makeLayer = (config: Config, ctx: Context) => {
+  const services = Layer.merge(CapabilityRegistry.layer, configurationLayer(config))
+  return ModelCatalogSchemaProjection.layer(ctx, config).pipe(Layer.provideMerge(services))
+}
 
 export * as YokaiRuntimeLayer from './layer'

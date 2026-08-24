@@ -20,6 +20,12 @@ import { GeminiHttpTransport } from '../transport/http-transport'
 export const makeLayerWithTransport = (
   config: Config,
   httpTransportLayer: Layer.Layer<GeminiHttpTransport.Service>,
+) => makeLayerWithDiscovery(config, httpTransportLayer, GeminiModelDiscovery.layer)
+
+const makeLayerWithDiscovery = (
+  config: Config,
+  httpTransportLayer: Layer.Layer<GeminiHttpTransport.Service>,
+  modelDiscoveryLayer: Layer.Layer<GeminiModelDiscovery.Service, never, GeminiConnection.Service>,
 ) => {
   const connectionLayer = GeminiConnection.layer.pipe(
     Layer.provide(GeminiConfiguration.layer(config)),
@@ -29,13 +35,22 @@ export const makeLayerWithTransport = (
     Layer.provide(GeminiContinuationTokenGenerator.layer),
     Layer.provideMerge(connectionLayer),
   )
-  const capabilityLayer = Layer.merge(GeminiModelDiscovery.layer, GeminiTextGeneration.layer).pipe(
+  const capabilityLayer = Layer.merge(modelDiscoveryLayer, GeminiTextGeneration.layer).pipe(
     Layer.provideMerge(continuationLayer),
   )
   return GeminiAdapter.layer.pipe(Layer.provideMerge(capabilityLayer))
 }
 
+/** The Yokai host owns initial discovery and refresh when this adapter is registered. */
+export const makeRegisteredLayerWithTransport = (
+  config: Config,
+  httpTransportLayer: Layer.Layer<GeminiHttpTransport.Service>,
+) => makeLayerWithDiscovery(config, httpTransportLayer, GeminiModelDiscovery.layerForHost)
+
 export const makeLayer = (config: Config, http: HTTP) =>
   makeLayerWithTransport(config, GeminiHttpTransport.layer(http))
+
+export const makeRegisteredLayer = (config: Config, http: HTTP) =>
+  makeRegisteredLayerWithTransport(config, GeminiHttpTransport.layer(http))
 
 export * as GeminiRuntime from './layer'

@@ -78,11 +78,12 @@ pages, or more than 10,000 models are protocol failures and do not switch
 endpoints. A timed-out generation request may still finish remotely, so switching
 to another endpoint can cause duplicate generation and billing.
 
-Building the plugin Layer starts one scoped background discovery. Reloading the
-plugin after a configuration update builds a new Layer and starts discovery for
-the new endpoint set. Internal callers and the future Yokai registry can trigger
-a manual refresh through `GeminiModelDiscovery.Service.discoverModels`; ordinary
-message handling does not trigger discovery.
+The standalone plugin Layer starts one scoped background discovery. In normal
+Koishi use, the adapter registers through `ctx.yokai`; the host triggers that
+same single initial discovery and publishes its result into the live catalog.
+Reloading the adapter after a configuration update registers a new scoped
+instance for the new endpoint set. Manual refresh goes through the Yokai host;
+ordinary message handling does not trigger discovery.
 
 Startup discovery completes one bounded endpoint pass before retrying. Only a
 final `429`, `500`, `502`, or `503` is retried, with exponential delays capped by
@@ -140,9 +141,9 @@ request. A second provider function call is a typed protocol violation, so the
 adapter can never create a third logical generation step. Final XML is returned
 as opaque text without parsing or normalization.
 
-Model selection, primary models, and fallbacks belong to the Yokai host plugin,
-not this adapter. Endpoint failover always keeps the same provider model and is
-not the host plugin's model fallback. API keys are converted to non-encodable
+The single model selection belongs to the Yokai host plugin, not this adapter.
+Endpoint failover always keeps the same provider model and never changes the
+host's selected model. API keys are converted to non-encodable
 redacted values before clients are constructed.
 
 The adapter emits separate metrics for logical invocations, physical endpoint
