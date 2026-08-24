@@ -11,3 +11,8 @@
 
 扩展可通过 `ctx.yokai.getModelCatalog()` 读取包含 revision 与 adapter 状态的完整快照，
 并通过 `ctx.yokai.refreshModels()` 刷新全部 adapter，或传入 adapter ID 仅刷新一个实例。
+
+群聊中直接 `@` Yokai 会冻结当前消息，并只通过已选中的通用 `YokaiAdapter` 发起一次
+single-pass 生成。当前最小响应协议只接受版本 1 的 `reply` 或 `silence` XML：合法 reply
+最多发送一条纯文本角色消息；未直接 `@`、模型不可用、adapter 失败或 XML 整体无效时保持沉默。
+该路径不启用记忆、活跃度、ActionTool 或 FeedbackTool，也不会自动切换模型。
