@@ -165,6 +165,11 @@ it.effect('marks endpoint, secret, URL, and shared timeout fields with Koishi UI
   }),
 )
 
+it('rejects a missing or empty endpoint table at the Koishi configuration boundary', () => {
+  expect(() => Config({})).toThrow('expected array length >= 1')
+  expect(() => Config({ endpoints: [] })).toThrow('expected array length >= 1')
+})
+
 it.effect(
   'strictly rejects empty endpoints, unsafe keys, legacy fields, and invalid shared values',
   () =>

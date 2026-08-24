@@ -44,6 +44,9 @@ const EndpointConfig = Schema.object({
   apiKey: Schema.string().min(1).role('secret').required().description(' API key。'),
   baseUrl: Schema.string().role('link').default(DEFAULT_GEMINI_BASE_URL).description('Base URL'),
 })
+  .required()
+  // Schemastery skips an array minimum when its item schema has a non-null default.
+  .extra('default', undefined)
 
 export const Config = Schema.object({
   adapterId: Schema.string()
@@ -53,6 +56,7 @@ export const Config = Schema.object({
     .default(DEFAULT_ADAPTER_ID)
     .description('此 Gemini adapter 实例的稳定 ID；须保证唯一性。'),
   endpoints: Schema.array(EndpointConfig)
+    .min(1)
     .role('table')
     .default([])
     .description('按优先级排列的 URL/key 端点；至少需要一组。'),
