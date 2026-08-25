@@ -29,6 +29,7 @@
   },
   "devDependencies": {
     "@effect/vitest": "4.0.0-rc.110",
+    "@minatojs/driver-sqlite": "^4.7.0",
     "@yokai-internal/core": "workspace:^",
     "@yokai-internal/memory": "workspace:^",
     "@yokai-internal/mind": "workspace:^",

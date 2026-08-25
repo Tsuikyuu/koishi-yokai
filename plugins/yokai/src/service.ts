@@ -7,6 +7,7 @@ import {
   HostSession,
   type ResolvedModel,
 } from '@yokai-internal/core'
+import { MessageArchive } from '@yokai-internal/memory'
 import type {
   ActionTool,
   AdapterId,
@@ -26,6 +27,8 @@ import { Effect, Option } from 'effect'
 import { Context, Service, type Session } from 'koishi'
 
 import type { Config } from './config'
+import { DEFAULT_INSTANCE_ID } from './config'
+import { KoishiMessageNormalization, type EventKind } from './message-archive/normalization'
 import { YokaiRuntime } from './runtime/runtime'
 import { fromDirectMentionSession, fromSession } from './runtime/session'
 
@@ -65,6 +68,32 @@ export class Yokai extends Service<Config> implements YokaiCapabilityHost {
         Effect.catch(() => Effect.void),
       ),
     )
+  }
+
+  private handleMessageArchiveEvent(session: Session, eventKind: EventKind): Promise<void> {
+    const instanceId =
+      this.config.instanceId === undefined ? DEFAULT_INSTANCE_ID : this.config.instanceId
+    return this.runEffect(
+      KoishiMessageNormalization.normalize(session, instanceId, eventKind).pipe(
+        Effect.flatMap((event) =>
+          MessageArchive.Service.pipe(Effect.flatMap((archive) => archive.record(event))),
+        ),
+        Effect.asVoid,
+        Effect.catch((error) =>
+          Effect.logWarning('MessageArchive.event_ignored').pipe(
+            Effect.annotateLogs({ errorTag: error._tag, eventKind }),
+          ),
+        ),
+      ),
+    )
+  }
+
+  handleMessageCreated(session: Session): Promise<void> {
+    return this.handleMessageArchiveEvent(session, 'created')
+  }
+
+  handleMessageUpdated(session: Session): Promise<void> {
+    return this.handleMessageArchiveEvent(session, 'updated')
   }
 
   private bindUnregister(

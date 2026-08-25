@@ -3,9 +3,12 @@ import type { Context } from 'koishi'
 
 import { Config as ConfigSchema, type Config as YokaiConfig } from './config'
 import { register as registerDirectMention } from './direct-mention/middleware'
+import { register as registerMessageArchive } from './message-archive/integration'
+import { define as defineMessageArchiveModel } from './message-archive/model'
 import { Yokai } from './service'
 
 export const name = 'yokai'
+export const inject = ['database']
 
 export const Config = ConfigSchema
 export type Config = YokaiConfig
@@ -17,7 +20,9 @@ declare module 'koishi' {
 }
 
 export function apply(ctx: Context, config: Config): void {
+  defineMessageArchiveModel(ctx)
   const service = new Yokai(ctx, config)
   ctx.set('yokai', service)
+  registerMessageArchive(ctx, service)
   registerDirectMention(ctx, service)
 }
