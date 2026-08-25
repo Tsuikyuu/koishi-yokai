@@ -1,4 +1,5 @@
 import { CapabilityRegistry, HostConfiguration, HostSession } from '@yokai-internal/core'
+import { MessageArchive } from '@yokai-internal/memory'
 import { Effect, ManagedRuntime } from 'effect'
 import type { Context } from 'koishi'
 
@@ -6,7 +7,8 @@ import type { Config } from '../config'
 import { makeLayer } from './layer'
 import { makeLayer as makeSessionLayer, type SessionBoundary } from './session'
 
-export type Services = CapabilityRegistry.Service | HostConfiguration.Service
+export type Services =
+  CapabilityRegistry.Service | HostConfiguration.Service | MessageArchive.Service
 
 export interface Interface {
   readonly runPromise: <A, E>(effect: Effect.Effect<A, E, Services>) => Promise<A>

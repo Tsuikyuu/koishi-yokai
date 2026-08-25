@@ -8,21 +8,30 @@ import { Schema } from 'effect'
 import { Config } from '../src/config'
 import { schemaForCatalog } from '../src/model-catalog/schema-projection'
 
-it('keeps model selection and feedback policy in the main plugin config', () => {
+it('keeps model, feedback, instance, and retention policy in the main plugin config', () => {
   expect(
     Config({
       model: 'gemini/gemini-2.5-flash',
       feedbackToolsEnabled: true,
     }),
   ).toEqual({
+    instanceId: 'default',
     model: 'gemini/gemini-2.5-flash',
     feedbackToolsEnabled: true,
+    messageRetentionDays: 90,
   })
   const fields = Config.dict
   if (fields === undefined) throw new Error('Expected an object configuration schema')
   const model = fields.model
   const feedbackToolsEnabled = fields.feedbackToolsEnabled
-  if (model === undefined || feedbackToolsEnabled === undefined) {
+  const instanceId = fields.instanceId
+  const messageRetentionDays = fields.messageRetentionDays
+  if (
+    model === undefined ||
+    feedbackToolsEnabled === undefined ||
+    instanceId === undefined ||
+    messageRetentionDays === undefined
+  ) {
     throw new Error('Expected all main plugin configuration fields')
   }
 
@@ -32,6 +41,10 @@ it('keeps model selection and feedback policy in the main plugin config', () => 
   expect(fields).not.toHaveProperty('primary')
   expect(fields).not.toHaveProperty('fallback')
   expect(feedbackToolsEnabled.meta.default).toBe(false)
+  expect(instanceId.meta.default).toBe('default')
+  expect(messageRetentionDays.meta.default).toBe(90)
+  expect(messageRetentionDays.meta.min).toBe(1)
+  expect(messageRetentionDays.meta.max).toBe(3_650)
 })
 
 it('keeps an explicit unselected branch before discovered model choices', () => {
