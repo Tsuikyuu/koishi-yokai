@@ -15,6 +15,7 @@ import {
 import { Effect, Option, Schema } from 'effect'
 
 import { CapabilityRegistry } from '../capability-registry/index'
+import { ChannelMessageBuffer, TurnSnapshot } from '../turn-context/index'
 import { FeedbackGeneration } from './feedback-generation'
 import { HostConfiguration } from './configuration'
 import { HostModelSelection } from './model-selection'
@@ -36,7 +37,6 @@ export class UnexpectedGenerationResultError extends Schema.TaggedError<Unexpect
 interface FrozenFocus {
   readonly scope: CapabilityScope
   readonly focus: FocusMessage
-  readonly content: string
 }
 
 const required = <A>(value: Option.Option<A>): Effect.Effect<A, MissingMessageError> =>
@@ -74,7 +74,6 @@ const freezeFocus = Effect.fn('DirectMentionTurn.freezeFocus')(function* () {
       timestamp: session.timestamp,
       content,
     }),
-    content,
   } satisfies FrozenFocus
 })
 
@@ -94,15 +93,36 @@ const historyContext = Effect.fn('DirectMentionTurn.historyContext')(function* (
     .pipe(Effect.catch(() => Effect.succeed(Option.none<ContextFragment>())))
 })
 
-const requestMessages = (frozen: FrozenFocus, context: Option.Option<ContextFragment>) =>
-  Option.match(context, {
-    onNone: () => [UserMessage.make({ role: 'user', content: frozen.content })] as const,
-    onSome: (fragment) =>
-      [
-        UserMessage.make({ role: 'user', content: fragment.content }),
-        UserMessage.make({ role: 'user', content: frozen.content }),
-      ] as const,
+const requestMessages = (
+  snapshot: TurnSnapshot.Snapshot,
+  context: Option.Option<ContextFragment>,
+): readonly [UserMessage, ...UserMessage[]] => {
+  const history = Option.match(context, {
+    onNone: () => [] as const,
+    onSome: (fragment) => [UserMessage.make({ role: 'user', content: fragment.content })] as const,
   })
+  const recent = Option.match(TurnSnapshot.renderRecentMessages(snapshot), {
+    onNone: () => [] as const,
+    onSome: (content) => [UserMessage.make({ role: 'user', content })] as const,
+  })
+  const contextMessages: ReadonlyArray<UserMessage> = [...history, ...recent]
+  const focus = UserMessage.make({ role: 'user', content: snapshot.focus.content })
+  const first = contextMessages[0]
+  return first === undefined ? [focus] : [first, ...contextMessages.slice(1), focus]
+}
+
+const removeFullyBufferedHistory = (
+  context: Option.Option<ContextFragment>,
+  snapshot: TurnSnapshot.Snapshot,
+): Option.Option<ContextFragment> => {
+  const recentIds = snapshot.recentMessages.map((message) => message.messageId)
+  return Option.filter(
+    context,
+    (fragment) =>
+      fragment.sourceRefs.length === 0 ||
+      fragment.sourceRefs.some((sourceRef) => !recentIds.includes(sourceRef)),
+  )
+}
 
 const selectedFeedbackTools = (
   enabled: boolean,
@@ -117,13 +137,22 @@ export const run = Effect.fn('DirectMentionTurn.run')(function* () {
   const session = yield* HostSession.Service
   const configuration = yield* HostConfiguration.Service
   const registry = yield* CapabilityRegistry.Service
+  const channelBuffer = yield* ChannelMessageBuffer.Service
   const frozen = yield* freezeFocus()
+  const turnSnapshot = yield* channelBuffer.snapshot(
+    TurnSnapshot.Request.make({
+      scope: frozen.scope,
+      focus: frozen.focus,
+      messageCount: TurnSnapshot.defaultMessageCount(),
+      tokenBudget: TurnSnapshot.DEFAULT_TOKEN_BUDGET,
+    }),
+  )
   const capabilitySnapshot = yield* registry.snapshot()
   const provider = capabilitySnapshot.contextProviders.find(
     (candidate) => candidate.id === HISTORY_CONTEXT_PROVIDER_ID,
   )
-  const context = yield* historyContext(provider, frozen)
-  const messages = requestMessages(frozen, context)
+  const context = removeFullyBufferedHistory(yield* historyContext(provider, frozen), turnSnapshot)
+  const messages = requestMessages(turnSnapshot, context)
   const selected = yield* HostModelSelection.resolve()
   const feedbackTools = selectedFeedbackTools(
     configuration.feedbackToolsEnabled,

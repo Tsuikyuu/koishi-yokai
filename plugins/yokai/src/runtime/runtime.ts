@@ -1,4 +1,9 @@
-import { CapabilityRegistry, HostConfiguration, HostSession } from '@yokai-internal/core'
+import {
+  CapabilityRegistry,
+  ChannelMessageBuffer,
+  HostConfiguration,
+  HostSession,
+} from '@yokai-internal/core'
 import { MessageArchive, MessageHistory } from '@yokai-internal/memory'
 import { Effect, ManagedRuntime } from 'effect'
 import type { Context } from 'koishi'
@@ -9,6 +14,7 @@ import { makeLayer as makeSessionLayer, type SessionBoundary } from './session'
 
 export type Services =
   | CapabilityRegistry.Service
+  | ChannelMessageBuffer.Service
   | HostConfiguration.Service
   | MessageArchive.Service
   | MessageHistory.Service

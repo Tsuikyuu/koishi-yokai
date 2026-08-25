@@ -1,5 +1,6 @@
 import {
   CapabilityRegistry,
+  ChannelMessageBuffer,
   DirectMentionTurn,
   type CapabilityRegistration as CoreCapabilityRegistration,
   type AdapterRegistration as CoreAdapterRegistration,
@@ -76,7 +77,14 @@ export class Yokai extends Service<Config> implements YokaiCapabilityHost {
     return this.runEffect(
       KoishiMessageNormalization.normalize(session, instanceId, eventKind).pipe(
         Effect.flatMap((event) =>
-          MessageArchive.Service.pipe(Effect.flatMap((archive) => archive.record(event))),
+          MessageArchive.Service.pipe(
+            Effect.flatMap((archive) => archive.record(event)),
+            Effect.flatMap((result) =>
+              ChannelMessageBuffer.Service.pipe(
+                Effect.flatMap((buffer) => buffer.ingest(result.message)),
+              ),
+            ),
+          ),
         ),
         Effect.asVoid,
         Effect.catch((error) =>

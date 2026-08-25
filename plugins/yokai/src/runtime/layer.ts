@@ -1,4 +1,4 @@
-import { CapabilityRegistry, HostConfiguration } from '@yokai-internal/core'
+import { CapabilityRegistry, ChannelMessageBuffer, HostConfiguration } from '@yokai-internal/core'
 import { MessageArchive, MessageArchiveEvent, MessageHistory } from '@yokai-internal/memory'
 import { ModelReference } from 'yokai-protocol'
 import { Effect, Layer, Option, Schema } from 'effect'
@@ -63,7 +63,11 @@ const messageHistoryLayer = (config: Config, ctx: Context) =>
   ).pipe(Layer.provide(KoishiMessageHistoryStorage.layer(ctx)))
 
 export const makeLayer = (config: Config, ctx: Context) => {
-  const hostServices = Layer.merge(CapabilityRegistry.layer, configurationLayer(config))
+  const hostServices = Layer.mergeAll(
+    CapabilityRegistry.layer,
+    ChannelMessageBuffer.layer,
+    configurationLayer(config),
+  )
   const archiveServices = Layer.merge(
     messageArchiveLayer(config, ctx),
     messageHistoryLayer(config, ctx),

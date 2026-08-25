@@ -1,3 +1,4 @@
+import { SQLiteDriver } from '@minatojs/driver-sqlite'
 import { expect, it } from '@effect/vitest'
 import {
   AdapterConformanceSetup,
@@ -13,7 +14,7 @@ import {
   GenerationUsage,
   type YokaiAdapter,
 } from 'yokai-protocol'
-import { Deferred, Effect, Queue } from 'effect'
+import { Deferred, Effect, Fiber, Queue } from 'effect'
 import { Bot, Context, h, type Fragment, type Schema as KoishiSchema, Universal } from 'koishi'
 import { vi } from 'vitest'
 
@@ -43,7 +44,7 @@ const discovery = AdapterDiscoveryStep.cases.Success.make({
   blocked: false,
 })
 
-const textGeneration = (text: string): AdapterGenerationStepType =>
+const textGeneration = (text: string, blocked = false): AdapterGenerationStepType =>
   AdapterGenerationStep.cases.Text.make({
     result: {
       _tag: 'Text',
@@ -51,7 +52,7 @@ const textGeneration = (text: string): AdapterGenerationStepType =>
       finishReason: 'stop',
       usage: GenerationUsage.cases.Unavailable.make({}),
     },
-    blocked: false,
+    blocked,
   })
 
 const transportFailure = AdapterGenerationStep.cases.Failure.make({
@@ -111,6 +112,7 @@ const makeHarness = Effect.fn('DirectMentionTest.makeHarness')(function* (
   const ctx = yield* Effect.acquireRelease(
     Effect.sync(() => {
       const context = new Context()
+      context.plugin(SQLiteDriver, { path: ':memory:' })
       apply(context, CONFIG)
       return context
     }),
@@ -179,6 +181,17 @@ const generationStarts = (subject: FakeAdapterSubject) =>
       ),
     )
 
+const takeGenerationStart = (subject: FakeAdapterSubject): Effect.Effect<number> =>
+  subject.control
+    .takeEvent()
+    .pipe(
+      Effect.flatMap((event) =>
+        event._tag === 'RequestStarted' && event.kind === 'generation'
+          ? Effect.succeed(event.requestId)
+          : takeGenerationStart(subject),
+      ),
+    )
+
 it.effect('turns one direct mention into one generic generation and one group message', () =>
   Effect.scoped(
     Effect.gen(function* () {
@@ -229,6 +242,47 @@ it.effect('does not invoke the model for a message without a direct mention', ()
       expect(yield* Queue.size(harness.requests)).toBe(0)
       expect(yield* Queue.size(harness.sentMessages)).toBe(0)
       expect(yield* generationStarts(harness.subject)).toHaveLength(0)
+    }),
+  ),
+)
+
+it.effect('keeps messages arriving during generation out of the frozen turn snapshot', () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const harness = yield* makeHarness([
+        textGeneration(
+          '<yokai-response version="1"><decision action="reply"><message>first</message></decision></yokai-response>',
+          true,
+        ),
+        textGeneration(
+          '<yokai-response version="1"><decision action="reply"><message>second</message></decision></yokai-response>',
+        ),
+      ])
+
+      const firstDispatch = yield* dispatchMessage(
+        harness,
+        'message-first',
+        h.at('bot').toString() + ' first focus',
+      ).pipe(Effect.forkScoped)
+      const firstRequest = yield* Queue.take(harness.requests)
+      const requestId = yield* takeGenerationStart(harness.subject)
+
+      yield* dispatchMessage(harness, 'message-during', 'arrived during generation')
+      expect(firstRequest.messages.some((entry) => entry.content.includes('message-during'))).toBe(
+        false,
+      )
+
+      yield* harness.subject.control.release(requestId)
+      yield* Fiber.join(firstDispatch)
+      yield* dispatchMessage(harness, 'message-second', h.at('bot').toString() + ' second focus')
+      const secondRequest = yield* Queue.take(harness.requests)
+      const recent = secondRequest.messages.find((entry) =>
+        entry.content.includes('[Untrusted recent group messages:'),
+      )
+      if (recent === undefined) return yield* Effect.die('Expected a recent-message context')
+      expect(recent.content).toContain('message-during')
+      expect(recent.content).toContain('arrived during generation')
+      expect(secondRequest.messages.at(-1)).toEqual({ role: 'user', content: 'second focus' })
     }),
   ),
 )
