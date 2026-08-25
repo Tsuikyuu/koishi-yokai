@@ -17,7 +17,11 @@ MVP 不同步撤回或删除事件，也不提供消息级或手动删除入口�
 扩展可通过 `ctx.yokai.getModelCatalog()` 读取包含 revision 与 adapter 状态的完整快照，
 并通过 `ctx.yokai.refreshModels()` 刷新全部 adapter，或传入 adapter ID 仅刷新一个实例。
 
-群聊中直接 `@` Yokai 会冻结当前消息，并只通过已选中的通用 `YokaiAdapter` 发起一次
-single-pass 生成。当前最小响应协议只接受版本 1 的 `reply` 或 `silence` XML：合法 reply
-最多发送一条纯文本角色消息；未直接 `@`、模型不可用、adapter 失败或 XML 整体无效时保持沉默。
-该路径不启用记忆、活跃度、ActionTool 或 FeedbackTool，也不会自动切换模型。
+群聊中直接 `@` Yokai 会冻结焦点消息和当前频道的近期消息；近期缓冲最多保留 80 条，
+每回合默认携带 40 条，并同时受 token 预算约束。达到上限时优先保留焦点和最新消息；
+生成期间到达的消息只进入下一回合，不会改变已经发给通用 `YokaiAdapter` 的快照。
+
+当前最小响应协议只接受版本 1 的 `reply` 或 `silence` XML：合法 reply 最多发送一条纯文本
+角色消息；未直接 `@`、模型不可用、adapter 失败或 XML 整体无效时保持沉默。首次生成前可加入
+有界历史 ContextProvider；显式启用且 adapter 支持时，允许一批 `history.search` FeedbackTool
+调用和唯一一次最终生成。该路径仍不启用记忆、活跃度或 ActionTool，也不会自动切换模型。
