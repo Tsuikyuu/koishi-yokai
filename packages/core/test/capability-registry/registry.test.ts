@@ -7,6 +7,7 @@ import {
   CURRENT_ADAPTER_PROTOCOL_VERSION,
   FeedbackToolId,
   ModelReference,
+  TokenLimit,
   type ModelCatalogSnapshot,
   type YokaiAdapter,
 } from 'yokai-protocol'
@@ -66,6 +67,9 @@ const makeContextProvider = (id: string, minor = 1): ContextProvider =>
   ContextProvider.make({
     id: ContextProviderId.make(id),
     protocolVersion: { major: 0, minor },
+    description: 'Test context provider',
+    maxTokens: TokenLimit.make(128),
+    provide: () => Effect.succeed(Option.none()),
   })
 
 const makeActionTool = (id: string, minor = 1): ActionTool =>
@@ -75,7 +79,14 @@ const makeActionTool = (id: string, minor = 1): ActionTool =>
   })
 
 const makeFeedbackTool = (id: string): FeedbackTool =>
-  FeedbackTool.make({ id: FeedbackToolId.make(id), protocolVersion: VERSION })
+  FeedbackTool.make({
+    id: FeedbackToolId.make(id),
+    protocolVersion: VERSION,
+    description: 'Test feedback tool',
+    inputSchema: { _tag: 'Object', properties: [] },
+    maxResultTokens: TokenLimit.make(128),
+    prepare: () => Effect.succeed({ execute: () => Effect.succeed(null) }),
+  })
 
 it.effect('keeps capability IDs unique within domains and isolated across domains', () =>
   Effect.gen(function* () {

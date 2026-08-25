@@ -12,6 +12,7 @@ import {
   ContextProvider,
   ContextProviderId,
   CURRENT_ADAPTER_PROTOCOL_VERSION,
+  TokenLimit,
   type YokaiAdapter,
 } from 'yokai-protocol'
 import { Deferred, Effect, Option, Queue, Ref, Schema } from 'effect'
@@ -33,6 +34,9 @@ const makeContextProvider = (id: string): ContextProvider =>
   ContextProvider.make({
     id: ContextProviderId.make(id),
     protocolVersion: VERSION,
+    description: 'Test context provider',
+    maxTokens: TokenLimit.make(128),
+    provide: () => Effect.succeed(Option.none()),
   })
 
 const makeAdapter = (id: string): YokaiAdapter => ({
