@@ -1,10 +1,8 @@
 import { MessageArchiveEvent, MessageArchiveStorage } from '@yokai-internal/memory'
-import { Effect, Layer, Option, Schema, Semaphore } from 'effect'
+import { Effect, Layer, Option, Semaphore } from 'effect'
 import type { Context } from 'koishi'
 
-import type { YokaiMessageRow } from './model'
-
-const decodeArchivedMessage = Schema.decodeUnknownEffect(MessageArchiveEvent.ArchivedMessage)
+import { YokaiMessageRowCodec } from './row'
 
 const scopeQuery = (scope: MessageArchiveEvent.ChannelScope) => ({
   instanceId: scope.instanceId,
@@ -17,54 +15,6 @@ const messageQuery = (
   scope: MessageArchiveEvent.ChannelScope,
   messageId: MessageArchiveEvent.MessageId,
 ) => ({ ...scopeQuery(scope), messageId })
-
-const toArchivedMessage = Effect.fn('KoishiMessageArchiveStorage.decodeRow')(function* (
-  row: YokaiMessageRow,
-) {
-  return yield* decodeArchivedMessage({
-    instanceId: row.instanceId,
-    platform: row.platform,
-    guildId: row.guildId,
-    channelId: row.channelId,
-    messageId: row.messageId,
-    version: row.version,
-    sourceVersion: row.sourceVersion,
-    previousVersion: row.previousVersion,
-    kind: row.kind,
-    authorId: row.authorId,
-    selfId: row.selfId,
-    timestamp: row.timestamp.getTime(),
-    eventTimestamp: row.eventTimestamp.getTime(),
-    recordedAt: row.recordedAt.getTime(),
-    content: row.content,
-    isSelf: row.isSelf,
-  })
-})
-
-const nullableVersion = (version: Option.Option<MessageArchiveEvent.MessageVersion>) =>
-  Option.match(version, {
-    onNone: () => null,
-    onSome: (value) => value,
-  })
-
-const toRow = (message: MessageArchiveEvent.ArchivedMessage): YokaiMessageRow => ({
-  instanceId: message.instanceId,
-  platform: message.platform,
-  guildId: message.guildId,
-  channelId: message.channelId,
-  messageId: message.messageId,
-  version: message.version,
-  sourceVersion: nullableVersion(message.sourceVersion),
-  previousVersion: nullableVersion(message.previousVersion),
-  kind: message.kind,
-  authorId: message.authorId,
-  selfId: message.selfId,
-  timestamp: new Date(message.timestamp),
-  eventTimestamp: new Date(message.eventTimestamp),
-  recordedAt: new Date(message.recordedAt),
-  content: message.content,
-  isSelf: message.isSelf,
-})
 
 const storageFailure = (operation: MessageArchiveStorage.StorageOperation) =>
   Effect.mapError((cause) => new MessageArchiveStorage.StorageError({ operation, cause }))
@@ -87,7 +37,7 @@ export const layer = (ctx: Context) =>
         ).pipe(storageFailure('latest'))
         const row = rows[0]
         if (row === undefined) return Option.none<MessageArchiveEvent.ArchivedMessage>()
-        return Option.some(yield* toArchivedMessage(row).pipe(storageFailure('latest')))
+        return Option.some(yield* YokaiMessageRowCodec.decode(row).pipe(storageFailure('latest')))
       })
 
       const versions = Effect.fn('KoishiMessageArchiveStorage.versions')(function* (
@@ -100,16 +50,16 @@ export const layer = (ctx: Context) =>
           }),
         ).pipe(storageFailure('versions'))
         return yield* Effect.forEach(rows, (row) =>
-          toArchivedMessage(row).pipe(storageFailure('versions')),
+          YokaiMessageRowCodec.decode(row).pipe(storageFailure('versions')),
         )
       })
 
       const insert = Effect.fn('KoishiMessageArchiveStorage.insert')(function* (
         message: MessageArchiveEvent.ArchivedMessage,
       ) {
-        yield* Effect.tryPromise(() => ctx.database.create('yokai_message', toRow(message))).pipe(
-          storageFailure('store'),
-        )
+        yield* Effect.tryPromise(() =>
+          ctx.database.create('yokai_message', YokaiMessageRowCodec.encode(message)),
+        ).pipe(storageFailure('store'))
       })
 
       const store = Effect.fn('KoishiMessageArchiveStorage.store')(function* (

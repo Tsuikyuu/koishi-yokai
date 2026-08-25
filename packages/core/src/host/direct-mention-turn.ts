@@ -1,11 +1,29 @@
 import { MinimalResponseEnvelope } from '@yokai-internal/mind'
-import { GenerateRequest, TokenLimit, UserMessage } from 'yokai-protocol'
+import {
+  CapabilityScope,
+  ContextProviderRequest,
+  FocusMessage,
+  GenerateRequest,
+  HISTORY_CONTEXT_PROVIDER_ID,
+  HISTORY_SEARCH_FEEDBACK_TOOL_ID,
+  TokenLimit,
+  UserMessage,
+  type ContextFragment,
+  type ContextProvider,
+  type FeedbackTool,
+} from 'yokai-protocol'
 import { Effect, Option, Schema } from 'effect'
 
+import { CapabilityRegistry } from '../capability-registry/index'
+import { FeedbackGeneration } from './feedback-generation'
+import { HostConfiguration } from './configuration'
 import { HostModelSelection } from './model-selection'
 import { HostSession } from './session'
 
 const MAX_OUTPUT_TOKENS = TokenLimit.make(1024)
+const HISTORY_CONTEXT_TOKENS = TokenLimit.make(2_048)
+const MAX_FEEDBACK_CALLS = 4
+const MAX_FEEDBACK_RESULT_TOKENS = 8_192
 
 export class MissingMessageError extends Schema.TaggedError<MissingMessageError>(
   '@yokai/core/DirectMentionTurn.MissingMessageError',
@@ -15,8 +33,21 @@ export class UnexpectedGenerationResultError extends Schema.TaggedError<Unexpect
   '@yokai/core/DirectMentionTurn.UnexpectedGenerationResultError',
 )('DirectMentionTurnUnexpectedGenerationResultError', {}) {}
 
-const freezeMessages = Effect.fn('DirectMentionTurn.freezeMessages')(function* () {
+interface FrozenFocus {
+  readonly scope: CapabilityScope
+  readonly focus: FocusMessage
+  readonly content: string
+}
+
+const required = <A>(value: Option.Option<A>): Effect.Effect<A, MissingMessageError> =>
+  Option.match(value, {
+    onNone: () => Effect.fail(new MissingMessageError({})),
+    onSome: Effect.succeed,
+  })
+
+const freezeFocus = Effect.fn('DirectMentionTurn.freezeFocus')(function* () {
   const session = yield* HostSession.Service
+  const configuration = yield* HostConfiguration.Service
   const content = yield* Option.match(session.content, {
     onNone: () => Effect.fail(new MissingMessageError({})),
     onSome: (value) => {
@@ -26,24 +57,111 @@ const freezeMessages = Effect.fn('DirectMentionTurn.freezeMessages')(function* (
         : Effect.succeed(trimmed)
     },
   })
-  return [UserMessage.make({ role: 'user', content })] as const
+  const messageId = yield* required(session.messageId)
+  const authorId = yield* required(session.userId)
+  const channelId = yield* required(session.channelId)
+  const guildId = yield* required(session.guildId)
+  return {
+    scope: CapabilityScope.make({
+      instanceId: configuration.instanceId,
+      platform: session.platform,
+      guildId,
+      channelId,
+    }),
+    focus: FocusMessage.make({
+      messageId,
+      authorId,
+      timestamp: session.timestamp,
+      content,
+    }),
+    content,
+  } satisfies FrozenFocus
 })
+
+const historyContext = Effect.fn('DirectMentionTurn.historyContext')(function* (
+  provider: ContextProvider | undefined,
+  frozen: FrozenFocus,
+) {
+  if (provider === undefined) return Option.none<ContextFragment>()
+  return yield* provider
+    .provide(
+      ContextProviderRequest.make({
+        scope: frozen.scope,
+        focus: frozen.focus,
+        tokenBudget: HISTORY_CONTEXT_TOKENS,
+      }),
+    )
+    .pipe(Effect.catch(() => Effect.succeed(Option.none<ContextFragment>())))
+})
+
+const requestMessages = (frozen: FrozenFocus, context: Option.Option<ContextFragment>) =>
+  Option.match(context, {
+    onNone: () => [UserMessage.make({ role: 'user', content: frozen.content })] as const,
+    onSome: (fragment) =>
+      [
+        UserMessage.make({ role: 'user', content: fragment.content }),
+        UserMessage.make({ role: 'user', content: frozen.content }),
+      ] as const,
+  })
+
+const selectedFeedbackTools = (
+  enabled: boolean,
+  adapterSupportsTools: boolean,
+  tools: ReadonlyArray<FeedbackTool>,
+): ReadonlyArray<FeedbackTool> =>
+  enabled && adapterSupportsTools
+    ? tools.filter((tool) => tool.id === HISTORY_SEARCH_FEEDBACK_TOOL_ID)
+    : []
 
 export const run = Effect.fn('DirectMentionTurn.run')(function* () {
   const session = yield* HostSession.Service
-  const messages = yield* freezeMessages()
+  const configuration = yield* HostConfiguration.Service
+  const registry = yield* CapabilityRegistry.Service
+  const frozen = yield* freezeFocus()
+  const capabilitySnapshot = yield* registry.snapshot()
+  const provider = capabilitySnapshot.contextProviders.find(
+    (candidate) => candidate.id === HISTORY_CONTEXT_PROVIDER_ID,
+  )
+  const context = yield* historyContext(provider, frozen)
+  const messages = requestMessages(frozen, context)
   const selected = yield* HostModelSelection.resolve()
+  const feedbackTools = selectedFeedbackTools(
+    configuration.feedbackToolsEnabled,
+    selected.adapter.descriptor.capabilities.feedbackTools,
+    capabilitySnapshot.feedbackTools,
+  )
   const request = GenerateRequest.make({
     modelId: selected.reference.modelId,
     systemInstruction: MinimalResponseEnvelope.SYSTEM_INSTRUCTION,
     messages,
     limits: { maxOutputTokens: MAX_OUTPUT_TOKENS },
-    feedbackTools: [],
+    feedbackTools: feedbackTools.map((tool) => ({
+      id: tool.id,
+      description: tool.description,
+      inputSchema: tool.inputSchema,
+    })),
   })
-  const result = yield* selected.adapter.generate(request)
-  if (result._tag !== 'Text') {
-    return yield* Effect.fail(new UnexpectedGenerationResultError({}))
-  }
+  const result =
+    feedbackTools.length === 0
+      ? yield* selected.adapter
+          .generate(request)
+          .pipe(
+            Effect.flatMap((initial) =>
+              initial._tag === 'Text'
+                ? Effect.succeed(initial)
+                : Effect.fail(new UnexpectedGenerationResultError({})),
+            ),
+          )
+      : yield* FeedbackGeneration.run({
+          adapter: selected.adapter,
+          request,
+          scope: frozen.scope,
+          tools: feedbackTools,
+          budget: {
+            maxCalls: MAX_FEEDBACK_CALLS,
+            maxResultTokens: MAX_FEEDBACK_RESULT_TOKENS,
+          },
+        })
 
   const decision = yield* MinimalResponseEnvelope.parse(result.text)
   if (decision._tag === 'Silence') return
