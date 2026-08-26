@@ -33,20 +33,19 @@ const makeBoundary = (session: Session, content: string | undefined): SessionBou
 export const fromSession = (session: Session): SessionBoundary =>
   makeBoundary(session, session.content)
 
-/** Freezes the mention-stripped user text before generation starts. */
-export const fromDirectMentionSession = (session: Session): SessionBoundary =>
-  makeBoundary(session, session.stripped.content)
-
 const optional = <A>(value: A | undefined): Option.Option<A> =>
   value === undefined ? Option.none<A>() : Option.some(value)
 
-export const makeLayer = (session: SessionBoundary) => {
-  const sendText = Effect.fn('KoishiSession.sendText')(function* (content: string) {
+export const makeSendText = (session: SessionBoundary) =>
+  Effect.fn('KoishiSession.sendText')(function* (content: string) {
     return yield* Effect.tryPromise({
       try: () => session.send(content),
       catch: (cause) => new HostSession.SendError({ cause }),
     })
   })
+
+export const makeLayer = (session: SessionBoundary) => {
+  const sendText = makeSendText(session)
 
   return Layer.succeed(
     HostSession.Service,

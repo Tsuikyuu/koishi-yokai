@@ -1,8 +1,12 @@
 import {
+  ActivityResponseMechanism,
+  CallBudget,
   CapabilityRegistry,
   ChannelMessageBuffer,
+  DirectResponseMechanism,
   HostConfiguration,
   HostSession,
+  WakeArbiter,
 } from '@yokai-internal/core'
 import { MessageArchive, MessageHistory } from '@yokai-internal/memory'
 import { Effect, ManagedRuntime } from 'effect'
@@ -13,11 +17,15 @@ import { makeLayer } from './layer'
 import { makeLayer as makeSessionLayer, type SessionBoundary } from './session'
 
 export type Services =
+  | ActivityResponseMechanism.Service
+  | CallBudget.Service
   | CapabilityRegistry.Service
   | ChannelMessageBuffer.Service
+  | DirectResponseMechanism.Service
   | HostConfiguration.Service
   | MessageArchive.Service
   | MessageHistory.Service
+  | WakeArbiter.Service
 
 export interface Interface {
   readonly runPromise: <A, E>(effect: Effect.Effect<A, E, Services>) => Promise<A>

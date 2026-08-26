@@ -33,6 +33,7 @@ const CONFIG: Config = {
   model: MODEL_REFERENCE,
   feedbackToolsEnabled: true,
   messageRetentionDays: 90,
+  wake: { directDebounceMs: 100 },
 }
 
 const discovery = AdapterDiscoveryStep.cases.Success.make({
