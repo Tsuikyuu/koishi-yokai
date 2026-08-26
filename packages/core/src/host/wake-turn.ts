@@ -1,21 +1,22 @@
 import { MinimalResponseEnvelope } from '@yokai-internal/mind'
 import {
-  CapabilityScope,
   ContextProviderRequest,
-  FocusMessage,
   GenerateRequest,
   HISTORY_CONTEXT_PROVIDER_ID,
   HISTORY_SEARCH_FEEDBACK_TOOL_ID,
   TokenLimit,
   UserMessage,
+  type CapabilityScope,
   type ContextFragment,
   type ContextProvider,
   type FeedbackTool,
+  type FocusMessage,
 } from 'yokai-protocol'
 import { Effect, Option, Schema } from 'effect'
 
 import { CapabilityRegistry } from '../capability-registry/index'
 import { ChannelMessageBuffer, TurnSnapshot } from '../turn-context/index'
+import type { WakeArbiter } from '../wake/index'
 import { FeedbackGeneration } from './feedback-generation'
 import { HostConfiguration } from './configuration'
 import { HostModelSelection } from './model-selection'
@@ -26,67 +27,29 @@ const HISTORY_CONTEXT_TOKENS = TokenLimit.make(2_048)
 const MAX_FEEDBACK_CALLS = 4
 const MAX_FEEDBACK_RESULT_TOKENS = 8_192
 
-export class MissingMessageError extends Schema.TaggedError<MissingMessageError>(
-  '@yokai/core/DirectMentionTurn.MissingMessageError',
-)('DirectMentionTurnMissingMessageError', {}) {}
-
 export class UnexpectedGenerationResultError extends Schema.TaggedError<UnexpectedGenerationResultError>(
-  '@yokai/core/DirectMentionTurn.UnexpectedGenerationResultError',
-)('DirectMentionTurnUnexpectedGenerationResultError', {}) {}
+  '@yokai/core/WakeTurn.UnexpectedGenerationResultError',
+)('WakeTurnUnexpectedGenerationResultError', {}) {}
 
-interface FrozenFocus {
+export interface Input {
   readonly scope: CapabilityScope
   readonly focus: FocusMessage
+  readonly markDispatched: WakeArbiter.MarkDispatched
+  readonly sendText: (
+    content: string,
+  ) => Effect.Effect<ReadonlyArray<string>, HostSession.SendError>
 }
 
-const required = <A>(value: Option.Option<A>): Effect.Effect<A, MissingMessageError> =>
-  Option.match(value, {
-    onNone: () => Effect.fail(new MissingMessageError({})),
-    onSome: Effect.succeed,
-  })
-
-const freezeFocus = Effect.fn('DirectMentionTurn.freezeFocus')(function* () {
-  const session = yield* HostSession.Service
-  const configuration = yield* HostConfiguration.Service
-  const content = yield* Option.match(session.content, {
-    onNone: () => Effect.fail(new MissingMessageError({})),
-    onSome: (value) => {
-      const trimmed = value.trim()
-      return trimmed.length === 0
-        ? Effect.fail(new MissingMessageError({}))
-        : Effect.succeed(trimmed)
-    },
-  })
-  const messageId = yield* required(session.messageId)
-  const authorId = yield* required(session.userId)
-  const channelId = yield* required(session.channelId)
-  const guildId = yield* required(session.guildId)
-  return {
-    scope: CapabilityScope.make({
-      instanceId: configuration.instanceId,
-      platform: session.platform,
-      guildId,
-      channelId,
-    }),
-    focus: FocusMessage.make({
-      messageId,
-      authorId,
-      timestamp: session.timestamp,
-      content,
-    }),
-  } satisfies FrozenFocus
-})
-
-const historyContext = Effect.fn('DirectMentionTurn.historyContext')(function* (
+const historyContext = Effect.fn('WakeTurn.historyContext')(function* (
   provider: ContextProvider | undefined,
-  frozen: FrozenFocus,
+  input: Input,
 ) {
   if (provider === undefined) return Option.none<ContextFragment>()
   return yield* provider
     .provide(
       ContextProviderRequest.make({
-        scope: frozen.scope,
-        focus: frozen.focus,
+        scope: input.scope,
+        focus: input.focus,
         tokenBudget: HISTORY_CONTEXT_TOKENS,
       }),
     )
@@ -133,16 +96,14 @@ const selectedFeedbackTools = (
     ? tools.filter((tool) => tool.id === HISTORY_SEARCH_FEEDBACK_TOOL_ID)
     : []
 
-export const run = Effect.fn('DirectMentionTurn.run')(function* () {
-  const session = yield* HostSession.Service
+export const run = Effect.fn('WakeTurn.run')(function* (input: Input) {
   const configuration = yield* HostConfiguration.Service
   const registry = yield* CapabilityRegistry.Service
   const channelBuffer = yield* ChannelMessageBuffer.Service
-  const frozen = yield* freezeFocus()
   const turnSnapshot = yield* channelBuffer.snapshot(
     TurnSnapshot.Request.make({
-      scope: frozen.scope,
-      focus: frozen.focus,
+      scope: input.scope,
+      focus: input.focus,
       messageCount: TurnSnapshot.defaultMessageCount(),
       tokenBudget: TurnSnapshot.DEFAULT_TOKEN_BUDGET,
     }),
@@ -151,7 +112,7 @@ export const run = Effect.fn('DirectMentionTurn.run')(function* () {
   const provider = capabilitySnapshot.contextProviders.find(
     (candidate) => candidate.id === HISTORY_CONTEXT_PROVIDER_ID,
   )
-  const context = removeFullyBufferedHistory(yield* historyContext(provider, frozen), turnSnapshot)
+  const context = removeFullyBufferedHistory(yield* historyContext(provider, input), turnSnapshot)
   const messages = requestMessages(turnSnapshot, context)
   const selected = yield* HostModelSelection.resolve()
   const feedbackTools = selectedFeedbackTools(
@@ -170,6 +131,8 @@ export const run = Effect.fn('DirectMentionTurn.run')(function* () {
       inputSchema: tool.inputSchema,
     })),
   })
+
+  yield* input.markDispatched()
   const result =
     feedbackTools.length === 0
       ? yield* selected.adapter
@@ -184,7 +147,7 @@ export const run = Effect.fn('DirectMentionTurn.run')(function* () {
       : yield* FeedbackGeneration.run({
           adapter: selected.adapter,
           request,
-          scope: frozen.scope,
+          scope: input.scope,
           tools: feedbackTools,
           budget: {
             maxCalls: MAX_FEEDBACK_CALLS,
@@ -194,7 +157,7 @@ export const run = Effect.fn('DirectMentionTurn.run')(function* () {
 
   const decision = yield* MinimalResponseEnvelope.parse(result.text)
   if (decision._tag === 'Silence') return
-  yield* session.sendText(decision.message).pipe(Effect.asVoid)
+  yield* input.sendText(decision.message).pipe(Effect.asVoid)
 })
 
-export * as DirectMentionTurn from './direct-mention-turn'
+export * as WakeTurn from './wake-turn'

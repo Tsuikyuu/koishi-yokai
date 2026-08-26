@@ -1,14 +1,18 @@
 import {
+  ActivityResponseMechanism,
   CapabilityRegistry,
   ChannelMessageBuffer,
-  DirectMentionTurn,
+  DirectResponseMechanism,
   type CapabilityRegistration as CoreCapabilityRegistration,
   type AdapterRegistration as CoreAdapterRegistration,
   HostModelSelection,
   HostSession,
   type ResolvedModel,
+  WakeArbiter,
+  WakeMessage,
+  WakeTurn,
 } from '@yokai-internal/core'
-import { MessageArchive } from '@yokai-internal/memory'
+import { MessageArchive, MessageArchiveEvent } from '@yokai-internal/memory'
 import type {
   ActionTool,
   AdapterId,
@@ -30,8 +34,14 @@ import { Context, Service, type Session } from 'koishi'
 import type { Config } from './config'
 import { DEFAULT_INSTANCE_ID } from './config'
 import { KoishiMessageNormalization, type EventKind } from './message-archive/normalization'
+import { KoishiWakeObservation } from './response/observation'
 import { YokaiRuntime } from './runtime/runtime'
-import { fromDirectMentionSession, fromSession } from './runtime/session'
+import { fromSession, makeSendText } from './runtime/session'
+
+interface ArchivedObservation {
+  readonly message: MessageArchiveEvent.ArchivedMessage
+  readonly isDuplicate: boolean
+}
 
 export class Yokai extends Service<Config> implements YokaiCapabilityHost {
   private readonly effectRuntime: YokaiRuntime.Interface
@@ -61,47 +71,79 @@ export class Yokai extends Service<Config> implements YokaiCapabilityHost {
     return this.runEffect(HostModelSelection.resolve())
   }
 
-  handleDirectMention(session: Session): Promise<void> {
-    return this.effectRuntime.runSession(
-      fromDirectMentionSession(session),
-      DirectMentionTurn.run().pipe(
-        Effect.scoped,
-        Effect.catch(() => Effect.void),
-      ),
-    )
-  }
-
-  private handleMessageArchiveEvent(session: Session, eventKind: EventKind): Promise<void> {
+  private archiveMessageEvent(
+    session: Session,
+    eventKind: EventKind,
+  ): Effect.Effect<Option.Option<ArchivedObservation>, never, YokaiRuntime.Services> {
     const instanceId =
       this.config.instanceId === undefined ? DEFAULT_INSTANCE_ID : this.config.instanceId
-    return this.runEffect(
-      KoishiMessageNormalization.normalize(session, instanceId, eventKind).pipe(
-        Effect.flatMap((event) =>
-          MessageArchive.Service.pipe(
-            Effect.flatMap((archive) => archive.record(event)),
-            Effect.flatMap((result) =>
-              ChannelMessageBuffer.Service.pipe(
-                Effect.flatMap((buffer) => buffer.ingest(result.message)),
-              ),
-            ),
-          ),
+    return KoishiMessageNormalization.normalize(session, instanceId, eventKind).pipe(
+      Effect.flatMap((event) =>
+        MessageArchive.Service.pipe(Effect.flatMap((archive) => archive.record(event))),
+      ),
+      Effect.tap((result) =>
+        ChannelMessageBuffer.Service.pipe(
+          Effect.flatMap((buffer) => buffer.ingest(result.message)),
         ),
-        Effect.asVoid,
-        Effect.catch((error) =>
-          Effect.logWarning('MessageArchive.event_ignored').pipe(
-            Effect.annotateLogs({ errorTag: error._tag, eventKind }),
-          ),
+      ),
+      Effect.map((result) =>
+        Option.some({
+          message: result.message,
+          isDuplicate: result._tag === 'Replay',
+        } satisfies ArchivedObservation),
+      ),
+      Effect.catch((error) =>
+        Effect.logWarning('MessageArchive.event_ignored').pipe(
+          Effect.annotateLogs({ errorTag: error._tag, eventKind }),
+          Effect.as(Option.none<ArchivedObservation>()),
         ),
       ),
     )
   }
 
-  handleMessageCreated(session: Session): Promise<void> {
-    return this.handleMessageArchiveEvent(session, 'created')
+  handleMessageCreated(session: Session): Promise<boolean> {
+    const boundary = fromSession(session)
+    const sendText = makeSendText(boundary)
+    const archivedEffect = this.archiveMessageEvent(session, 'created')
+    return this.runEffect(
+      Effect.gen(function* () {
+        const archived = yield* archivedEffect
+        if (Option.isNone(archived)) return false
+
+        const observation = KoishiWakeObservation.fromSession(
+          session,
+          archived.value.message,
+          archived.value.isDuplicate,
+        )
+        const directMechanism = yield* DirectResponseMechanism.Service
+        const activityMechanism = yield* ActivityResponseMechanism.Service
+        const direct = yield* directMechanism.observe(observation)
+        const activity = yield* activityMechanism.observe(observation)
+        const selected = Option.isSome(direct) ? direct : activity
+        if (Option.isNone(selected)) return false
+
+        const arbiter = yield* WakeArbiter.Service
+        const outcome = yield* arbiter.submit(selected.value, (proposal, markDispatched) =>
+          WakeTurn.run({
+            scope: proposal.scope,
+            focus: proposal.focus,
+            markDispatched,
+            sendText,
+          }).pipe(
+            Effect.scoped,
+            Effect.catch(() => Effect.void),
+          ),
+        )
+        if (outcome._tag === 'Executed') {
+          yield* activityMechanism.consume(outcome.proposal.scopeId)
+        }
+        return WakeMessage.isHardTrigger(observation)
+      }),
+    )
   }
 
   handleMessageUpdated(session: Session): Promise<void> {
-    return this.handleMessageArchiveEvent(session, 'updated')
+    return this.runEffect(this.archiveMessageEvent(session, 'updated').pipe(Effect.asVoid))
   }
 
   private bindUnregister(

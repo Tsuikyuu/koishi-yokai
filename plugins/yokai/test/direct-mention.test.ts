@@ -29,6 +29,7 @@ const MODEL_REFERENCE = 'fake-turn/model-a'
 const CONFIG: Config = {
   model: MODEL_REFERENCE,
   feedbackToolsEnabled: false,
+  wake: { directDebounceMs: 100 },
 }
 
 const discovery = AdapterDiscoveryStep.cases.Success.make({
@@ -108,12 +109,13 @@ const observeAdapter = (
 
 const makeHarness = Effect.fn('DirectMentionTest.makeHarness')(function* (
   generationSteps: ReadonlyArray<AdapterGenerationStepType>,
+  config: Config = CONFIG,
 ) {
   const ctx = yield* Effect.acquireRelease(
     Effect.sync(() => {
       const context = new Context()
       context.plugin(SQLiteDriver, { path: ':memory:' })
-      apply(context, CONFIG)
+      apply(context, config)
       return context
     }),
     (context) => Effect.promise(() => context.stop()),
@@ -150,6 +152,7 @@ const dispatchMessage = Effect.fn('DirectMentionTest.dispatchMessage')(function*
   harness: Harness,
   messageId: string,
   content: string,
+  replyToSelf = false,
 ) {
   const completed = yield* Deferred.make<void>()
   const removeListener = harness.ctx.on('middleware', (session) => {
@@ -166,6 +169,9 @@ const dispatchMessage = Effect.fn('DirectMentionTest.dispatchMessage')(function*
   session.type = 'message'
   session.messageId = messageId
   session.content = content
+  if (replyToSelf) {
+    session.quote = { id: 'yokai-message', user: { id: 'bot' }, content: '之前的回复' }
+  }
   harness.bot.dispatch(session)
   yield* Deferred.await(completed)
   yield* Effect.sync(() => removeListener())
@@ -209,6 +215,127 @@ it.effect('turns one direct mention into one generic generation and one group me
       expect(yield* Queue.take(harness.sentMessages)).toBe('三点见')
       expect(yield* Queue.size(harness.sentMessages)).toBe(0)
       expect(yield* generationStarts(harness.subject)).toHaveLength(1)
+    }),
+  ),
+)
+
+it.effect('treats a reply to Yokai as a direct wake without requiring an @', () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const harness = yield* makeHarness([
+        textGeneration(
+          '<yokai-response version="1"><decision action="reply"><message>收到回复</message></decision></yokai-response>',
+        ),
+      ])
+      yield* dispatchMessage(harness, 'message-quoted', '继续说', true)
+
+      expect((yield* Queue.take(harness.requests)).messages.at(-1)).toEqual({
+        role: 'user',
+        content: '继续说',
+      })
+      expect(yield* Queue.take(harness.sentMessages)).toBe('收到回复')
+      expect(yield* generationStarts(harness.subject)).toHaveLength(1)
+    }),
+  ),
+)
+
+it.effect('merges a direct burst into one frozen role turn', () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const harness = yield* makeHarness(
+        [
+          textGeneration(
+            '<yokai-response version="1"><decision action="reply"><message>合并回复</message></decision></yokai-response>',
+          ),
+        ],
+        {
+          ...CONFIG,
+          wake: { directDebounceMs: 500 },
+        },
+      )
+      yield* dispatchMessage(harness, 'burst-warmup', 'warmup')
+
+      const first = yield* dispatchMessage(
+        harness,
+        'burst-first',
+        h.at('bot').toString() + ' 第一段',
+      ).pipe(Effect.forkScoped)
+      const second = yield* dispatchMessage(
+        harness,
+        'burst-second',
+        h.at('bot').toString() + ' 第二段',
+      ).pipe(Effect.forkScoped)
+      yield* Fiber.join(first)
+      yield* Fiber.join(second)
+
+      const request = yield* Queue.take(harness.requests)
+      const combined = request.messages.map((entry) => entry.content).join('\n')
+      expect(combined).toContain('第一段')
+      expect(combined).toContain('第二段')
+      expect(yield* Queue.take(harness.sentMessages)).toBe('合并回复')
+      expect(yield* Queue.size(harness.requests)).toBe(0)
+      expect(yield* generationStarts(harness.subject)).toHaveLength(1)
+    }),
+  ),
+)
+
+it.effect('uses the longer activity window only after local thresholds pass', () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const harness = yield* makeHarness(
+        [
+          textGeneration(
+            '<yokai-response version="1"><decision action="reply"><message>社会触发回复</message></decision></yokai-response>',
+          ),
+        ],
+        {
+          ...CONFIG,
+          wake: {
+            directDebounceMs: 100,
+            activityDebounceMs: 200,
+            activityThreshold: 2,
+            relevanceThreshold: 2,
+          },
+        },
+      )
+
+      yield* dispatchMessage(harness, 'activity-first', '请问第一件事？')
+      expect(yield* Queue.size(harness.requests)).toBe(0)
+      yield* dispatchMessage(harness, 'activity-second', '请问第二件事？')
+
+      const request = yield* Queue.take(harness.requests)
+      expect(request.messages.at(-1)).toEqual({ role: 'user', content: '请问第二件事？' })
+      expect(request.messages.some((entry) => entry.content.includes('请问第一件事？'))).toBe(true)
+      expect(yield* Queue.take(harness.sentMessages)).toBe('社会触发回复')
+      expect(yield* generationStarts(harness.subject)).toHaveLength(1)
+
+      yield* dispatchMessage(harness, 'activity-cooldown', '请问第三件事？')
+      expect(yield* Queue.size(harness.requests)).toBe(0)
+      expect(yield* generationStarts(harness.subject)).toHaveLength(1)
+    }),
+  ),
+)
+
+it.effect('keeps exhausted social budget on the zero-model cold path', () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const harness = yield* makeHarness(
+        [
+          textGeneration(
+            '<yokai-response version="1"><decision action="reply"><message>must not send</message></decision></yokai-response>',
+          ),
+        ],
+        {
+          ...CONFIG,
+          wake: { activityThreshold: 1, relevanceThreshold: 1, activityDebounceMs: 100 },
+          callBudget: { normal: { minute: 0, day: 0 } },
+        },
+      )
+
+      yield* dispatchMessage(harness, 'activity-no-budget', '请问还能回复吗？')
+      expect(yield* Queue.size(harness.requests)).toBe(0)
+      expect(yield* Queue.size(harness.sentMessages)).toBe(0)
+      expect(yield* generationStarts(harness.subject)).toHaveLength(0)
     }),
   ),
 )

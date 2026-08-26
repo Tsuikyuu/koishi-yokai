@@ -1,7 +1,7 @@
 import { expect, it } from '@effect/vitest'
 import { AdapterConformanceSetup } from 'yokai-adapter-conformance'
 import { makeFakeAdapter } from 'yokai-adapter-conformance/fake'
-import { HostConfiguration } from '@yokai-internal/core'
+import { CapabilityRegistry, HostConfiguration } from '@yokai-internal/core'
 import {
   AdapterDescriptor,
   AdapterId,
@@ -61,6 +61,15 @@ class TestYokai extends Yokai {
 
   selectModel() {
     return this.resolveConfiguredModel()
+  }
+
+  responseMechanismIds() {
+    return this.runEffect(
+      CapabilityRegistry.Service.pipe(
+        Effect.flatMap((registry) => registry.snapshot()),
+        Effect.map((snapshot) => snapshot.responseMechanisms.map((mechanism) => mechanism.id)),
+      ),
+    )
   }
 }
 
@@ -127,6 +136,18 @@ it.effect('decodes exactly one selected model reference', () => {
     }
     expect(configuration.model.value.adapterId).toBe('remote')
     expect(configuration.model.value.modelId).toBe('selected')
+  }).pipe(Effect.ensuring(stop(ctx)))
+})
+
+it.effect('registers direct and activity as built-in response mechanisms', () => {
+  const ctx = new Context()
+  const service = new TestYokai(ctx, DEFAULT_CONFIG)
+
+  return Effect.gen(function* () {
+    expect((yield* Effect.promise(() => service.responseMechanismIds())).sort()).toEqual([
+      'activity',
+      'direct',
+    ])
   }).pipe(Effect.ensuring(stop(ctx)))
 })
 

@@ -2,7 +2,6 @@ import type { YokaiCapabilityHost } from 'yokai-protocol'
 import type { Context } from 'koishi'
 
 import { Config as ConfigSchema, type Config as YokaiConfig } from './config'
-import { register as registerDirectMention } from './direct-mention/middleware'
 import { register as registerMessageArchive } from './message-archive/integration'
 import { define as defineMessageArchiveModel } from './message-archive/model'
 import { Yokai } from './service'
@@ -24,5 +23,4 @@ export function apply(ctx: Context, config: Config): void {
   const service = new Yokai(ctx, config)
   ctx.set('yokai', service)
   registerMessageArchive(ctx, service)
-  registerDirectMention(ctx, service)
 }

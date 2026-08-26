@@ -1,5 +1,5 @@
 export { HostConfiguration } from './configuration'
-export { DirectMentionTurn } from './direct-mention-turn'
 export { FeedbackGeneration } from './feedback-generation'
 export { HostModelSelection } from './model-selection'
 export { HostSession } from './session'
+export { WakeTurn } from './wake-turn'
