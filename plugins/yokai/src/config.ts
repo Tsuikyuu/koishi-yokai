@@ -2,6 +2,7 @@ import { Schema } from 'koishi'
 
 export const DEFAULT_INSTANCE_ID = 'default'
 export const DEFAULT_MESSAGE_RETENTION_DAYS = 90
+export const DEFAULT_PRESET_RELOAD_DEBOUNCE_MS = 250
 export const DEFAULT_DIRECT_DEBOUNCE_MS = 500
 export const DEFAULT_ACTIVITY_DEBOUNCE_MS = 3_000
 export const DEFAULT_ACTIVITY_COOLDOWN_MS = 45_000
@@ -39,6 +40,9 @@ export interface CallBudgetConfig {
 
 export interface Config {
   instanceId?: string
+  presetId?: string
+  presetDirectory?: string
+  presetReloadDebounceMs?: number
   model?: string
   feedbackToolsEnabled: boolean
   messageRetentionDays?: number
@@ -126,6 +130,19 @@ export const Config: Schema<Config> = Schema.object({
     .max(128)
     .default(DEFAULT_INSTANCE_ID)
     .description('Yokai 实例 ID，用于隔离本地历史和状态。'),
+  presetId: Schema.string()
+    .pattern(/^[A-Za-z_][A-Za-z0-9._-]*$/)
+    .max(128)
+    .description('当前人格预设 ID；配置后仅在该预设存在时创建模型回合。'),
+  presetDirectory: Schema.path({ filters: ['directory'], allowCreate: true }).description(
+    '可选的 YAML/JSON 人格预设目录；文件修改会原子热更新后续回合。',
+  ),
+  presetReloadDebounceMs: Schema.natural()
+    .min(50)
+    .max(10_000)
+    .role('ms')
+    .default(DEFAULT_PRESET_RELOAD_DEBOUNCE_MS)
+    .description('预设目录变更后的安静期。'),
   model: Schema.dynamic('yokai-model').description('生成模型。未配置时仅运行本地路径。'),
   feedbackToolsEnabled: Schema.boolean()
     .default(false)

@@ -11,10 +11,12 @@ import {
   type ContextProvider,
   type FeedbackTool,
   type FocusMessage,
+  type PresetId,
 } from 'yokai-protocol'
 import { Effect, Option, Schema } from 'effect'
 
 import { CapabilityRegistry } from '../capability-registry/index'
+import { PresetRegistry } from '../preset/index'
 import { ChannelMessageBuffer, TurnSnapshot } from '../turn-context/index'
 import type { WakeArbiter } from '../wake/index'
 import { FeedbackGeneration } from './feedback-generation'
@@ -30,6 +32,12 @@ const MAX_FEEDBACK_RESULT_TOKENS = 8_192
 export class UnexpectedGenerationResultError extends Schema.TaggedError<UnexpectedGenerationResultError>(
   '@yokai/core/WakeTurn.UnexpectedGenerationResultError',
 )('WakeTurnUnexpectedGenerationResultError', {}) {}
+
+export class PresetSelectionUnavailableError extends Schema.TaggedError<PresetSelectionUnavailableError>(
+  '@yokai/core/WakeTurn.PresetSelectionUnavailableError',
+)('WakeTurnPresetSelectionUnavailableError', {
+  presetId: Schema.String,
+}) {}
 
 export interface Input {
   readonly scope: CapabilityScope
@@ -98,6 +106,19 @@ const selectedFeedbackTools = (
 
 export const run = Effect.fn('WakeTurn.run')(function* (input: Input) {
   const configuration = yield* HostConfiguration.Service
+  const presetRegistry = yield* PresetRegistry.Service
+  const preset = yield* Option.match(configuration.presetId, {
+    onNone: () => Effect.succeed(Option.none()),
+    onSome: (presetId: PresetId) =>
+      presetRegistry.snapshot(presetId).pipe(
+        Effect.flatMap(
+          Option.match({
+            onNone: () => Effect.fail(new PresetSelectionUnavailableError({ presetId })),
+            onSome: (snapshot) => Effect.succeed(Option.some(snapshot)),
+          }),
+        ),
+      ),
+  })
   const registry = yield* CapabilityRegistry.Service
   const channelBuffer = yield* ChannelMessageBuffer.Service
   const turnSnapshot = yield* channelBuffer.snapshot(
@@ -122,7 +143,11 @@ export const run = Effect.fn('WakeTurn.run')(function* (input: Input) {
   )
   const request = GenerateRequest.make({
     modelId: selected.reference.modelId,
-    systemInstruction: MinimalResponseEnvelope.SYSTEM_INSTRUCTION,
+    systemInstruction: Option.match(preset, {
+      onNone: () => MinimalResponseEnvelope.SYSTEM_INSTRUCTION,
+      onSome: (snapshot) =>
+        `${snapshot.compiledPrompt}\n\n${MinimalResponseEnvelope.SYSTEM_INSTRUCTION}`,
+    }),
     messages,
     limits: { maxOutputTokens: MAX_OUTPUT_TOKENS },
     feedbackTools: feedbackTools.map((tool) => ({

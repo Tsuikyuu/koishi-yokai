@@ -10,8 +10,11 @@ import { makeFakeAdapter, type FakeAdapterSubject } from 'yokai-adapter-conforma
 import {
   AdapterId,
   AdapterModelId,
+  CapabilityProtocolVersion,
   type GenerateRequest,
   GenerationUsage,
+  PresetSource,
+  PresetSourceId,
   type YokaiAdapter,
 } from 'yokai-protocol'
 import { Deferred, Effect, Fiber, Queue } from 'effect'
@@ -25,6 +28,7 @@ import { apply, type Config } from '../src/index'
 const ADAPTER_ID = AdapterId.make('fake-turn')
 const MODEL_ID = AdapterModelId.make('model-a')
 const MODEL_REFERENCE = 'fake-turn/model-a'
+const CAPABILITY_VERSION = CapabilityProtocolVersion.make({ major: 0, minor: 1 })
 
 const CONFIG: Config = {
   model: MODEL_REFERENCE,
@@ -62,6 +66,21 @@ const transportFailure = AdapterGenerationStep.cases.Failure.make({
     providerMessage: 'provider protocol text must stay private',
   },
   blocked: false,
+})
+
+const presetCandidate = (name: string) => ({
+  id: 'koharu',
+  persona: {
+    name,
+    selfConcept: 'A curious long-time member of the group.',
+    background: 'Grew up around a small neighborhood library.',
+    values: ['honesty'],
+    interests: ['folklore'],
+    opinions: ['Small practical help is better than grand promises.'],
+    speakingStyle: 'Warm and concise.',
+    socialBoundaries: ['Respect private matters.'],
+    knowledgeBoundaries: ['Admit when a fact is not known.'],
+  },
 })
 
 class TestBot extends Bot<Context, {}> {
@@ -410,6 +429,57 @@ it.effect('keeps messages arriving during generation out of the frozen turn snap
       expect(recent.content).toContain('message-during')
       expect(recent.content).toContain('arrived during generation')
       expect(secondRequest.messages.at(-1)).toEqual({ role: 'user', content: 'second focus' })
+    }),
+  ),
+)
+
+it.effect('keeps the current preset frozen while the next turn sees a hot update', () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const harness = yield* makeHarness(
+        [
+          textGeneration(
+            '<yokai-response version="1"><decision action="reply"><message>first</message></decision></yokai-response>',
+            true,
+          ),
+          textGeneration(
+            '<yokai-response version="1"><decision action="reply"><message>second</message></decision></yokai-response>',
+          ),
+        ],
+        { ...CONFIG, presetId: 'koharu' },
+      )
+      const presetSource = yield* Effect.promise(() =>
+        harness.ctx.yokai.registerPresetSource(
+          PresetSource.make({
+            id: PresetSourceId.make('turn-test'),
+            protocolVersion: CAPABILITY_VERSION,
+          }),
+        ),
+      )
+      yield* Effect.promise(() => presetSource.publish(presetCandidate('Koharu')))
+
+      const firstDispatch = yield* dispatchMessage(
+        harness,
+        'preset-first',
+        h.at('bot').toString() + ' first preset turn',
+      ).pipe(Effect.forkScoped)
+      const firstRequest = yield* Queue.take(harness.requests)
+      const requestId = yield* takeGenerationStart(harness.subject)
+      expect(firstRequest.systemInstruction).toContain('Name:\nKoharu')
+
+      yield* Effect.promise(() => presetSource.publish(presetCandidate('Haru')))
+      expect(firstRequest.systemInstruction).not.toContain('Name:\nHaru')
+      yield* harness.subject.control.release(requestId)
+      yield* Fiber.join(firstDispatch)
+
+      yield* dispatchMessage(
+        harness,
+        'preset-second',
+        h.at('bot').toString() + ' second preset turn',
+      )
+      const secondRequest = yield* Queue.take(harness.requests)
+      expect(secondRequest.systemInstruction).toContain('Name:\nHaru')
+      expect(secondRequest.systemInstruction).not.toContain('Name:\nKoharu')
     }),
   ),
 )

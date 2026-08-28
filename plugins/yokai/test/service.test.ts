@@ -12,6 +12,10 @@ import {
   ContextProvider,
   ContextProviderId,
   CURRENT_ADAPTER_PROTOCOL_VERSION,
+  PresetId,
+  PresetSource,
+  PresetSourceId,
+  type PresetSnapshot,
   TokenLimit,
   type YokaiAdapter,
 } from 'yokai-protocol'
@@ -195,6 +199,56 @@ it.effect('publishes through an adapter handle until that handle is unregistered
     expect(yield* Effect.promise(() => registration.unregister())).toBe(true)
     expect(yield* Effect.promise(() => registration.publishModels(snapshot))).toBe(false)
   }).pipe(Effect.ensuring(stop(ctx)))
+})
+
+it.effect('publishes versioned presets through the public source handle', () => {
+  const ctx = new Context()
+  apply(ctx, DEFAULT_CONFIG)
+
+  return Effect.scoped(
+    Effect.gen(function* () {
+      const updates = yield* Queue.unbounded<PresetSnapshot>()
+      ctx.on('yokai/preset-updated', (snapshot) => {
+        Effect.runSync(Queue.offer(updates, snapshot))
+      })
+      const registration = yield* Effect.promise(() =>
+        ctx.yokai.registerPresetSource(
+          PresetSource.make({
+            id: PresetSourceId.make('third-party.preset'),
+            protocolVersion: VERSION,
+          }),
+        ),
+      )
+      const candidate = {
+        id: 'koharu',
+        persona: {
+          name: 'Koharu',
+          selfConcept: 'A curious long-time member of the group.',
+          background: 'Grew up around a small neighborhood library.',
+          values: ['honesty'],
+          interests: ['folklore'],
+          opinions: ['Small practical help is better than grand promises.'],
+          speakingStyle: 'Warm and concise.',
+          socialBoundaries: ['Respect private matters.'],
+          knowledgeBoundaries: ['Admit when a fact is not known.'],
+        },
+      }
+
+      expect(yield* Effect.promise(() => registration.publish(candidate))).toBe(true)
+      const update = yield* Queue.take(updates)
+      expect(update).toMatchObject({ id: 'koharu', version: 1, sourceAvailable: true })
+      expect(yield* Effect.promise(() => registration.publish(candidate))).toBe(false)
+      expect(
+        yield* Effect.promise(() => ctx.yokai.getPresetSnapshot(PresetId.make('koharu'))),
+      ).toBe(update)
+
+      expect(yield* Effect.promise(() => registration.unregister())).toBe(true)
+      expect(
+        yield* Effect.promise(() => ctx.yokai.getPresetSnapshot(PresetId.make('koharu'))),
+      ).toMatchObject({ version: 1, sourceAvailable: false })
+      expect(yield* Effect.promise(() => registration.publish(candidate))).toBe(false)
+    }).pipe(Effect.ensuring(stop(ctx))),
+  )
 })
 
 it.effect('projects fake adapter lifecycle into the live Koishi model schema', () => {

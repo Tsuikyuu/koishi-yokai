@@ -6,6 +6,7 @@ import {
   DirectResponseMechanism,
   HostConfiguration,
   HostSession,
+  PresetRegistry,
   WakeArbiter,
 } from '@yokai-internal/core'
 import { MessageArchive, MessageHistory } from '@yokai-internal/memory'
@@ -25,6 +26,7 @@ export type Services =
   | HostConfiguration.Service
   | MessageArchive.Service
   | MessageHistory.Service
+  | PresetRegistry.Service
   | WakeArbiter.Service
 
 export interface Interface {

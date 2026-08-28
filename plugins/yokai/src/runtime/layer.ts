@@ -1,3 +1,5 @@
+import { resolve } from 'node:path'
+
 import {
   ActivityGateValue,
   ActivityResponseMechanism,
@@ -7,11 +9,12 @@ import {
   ChannelMessageBuffer,
   DirectResponseMechanism,
   HostConfiguration,
+  PresetRegistry,
   WakeArbiter,
   WakeProposal,
 } from '@yokai-internal/core'
 import { MessageArchive, MessageArchiveEvent, MessageHistory } from '@yokai-internal/memory'
-import { ModelReference } from 'yokai-protocol'
+import { ModelReference, PresetId } from 'yokai-protocol'
 import { DateTime, Effect, Layer, Option, Schema } from 'effect'
 import type { Context } from 'koishi'
 
@@ -28,6 +31,7 @@ import {
   DEFAULT_MESSAGE_RETENTION_DAYS,
   DEFAULT_NORMAL_DAY_CALLS,
   DEFAULT_NORMAL_MINUTE_CALLS,
+  DEFAULT_PRESET_RELOAD_DEBOUNCE_MS,
   DEFAULT_RELEVANCE_THRESHOLD,
   DEFAULT_RESERVED_DAY_CALLS,
   DEFAULT_RESERVED_MINUTE_CALLS,
@@ -38,9 +42,13 @@ import { HistoryCapabilityRegistration } from '../history/capabilities'
 import { KoishiMessageHistoryStorage } from '../history/storage'
 import { KoishiMessageArchiveStorage } from '../message-archive/storage'
 import { ModelCatalogSchemaProjection } from '../model-catalog/schema-projection'
+import { FilePresetSource } from '../preset/file-source'
+import { FilePresetStore } from '../preset/file-store'
+import { PresetEvents } from '../preset/events'
 import { BuiltinResponseCapabilities } from '../response/capabilities'
 
 const decodeModelReference = Schema.decodeUnknownEffect(ModelReference)
+const decodePresetId = Schema.decodeUnknownEffect(PresetId)
 
 const decodeConfiguration = Effect.fn('YokaiRuntime.decodeConfiguration')(function* (
   config: Config,
@@ -49,10 +57,15 @@ const decodeConfiguration = Effect.fn('YokaiRuntime.decodeConfiguration')(functi
     config.model === undefined
       ? Option.none<ModelReference>()
       : Option.some(yield* decodeModelReference(config.model))
+  const presetId =
+    config.presetId === undefined
+      ? Option.none<PresetId>()
+      : Option.some(yield* decodePresetId(config.presetId))
 
   return HostConfiguration.Service.of({
     instanceId: config.instanceId === undefined ? DEFAULT_INSTANCE_ID : config.instanceId,
     model,
+    presetId,
     feedbackToolsEnabled: config.feedbackToolsEnabled,
   })
 })
@@ -196,8 +209,18 @@ export const makeLayer = (config: Config, ctx: Context) => {
     CapabilityRegistry.layer,
     ChannelMessageBuffer.layer,
     configurationLayer(config),
+    PresetRegistry.layer,
     wakeServicesLayer(config),
   )
+  const presetDirectory =
+    config.presetDirectory === undefined
+      ? Option.none<string>()
+      : Option.some(resolve(ctx.baseDir, config.presetDirectory))
+  const filePresetSource = FilePresetSource.layer({
+    directory: presetDirectory,
+    debounceMs: configuredNumber(config.presetReloadDebounceMs, DEFAULT_PRESET_RELOAD_DEBOUNCE_MS),
+  }).pipe(Layer.provide(FilePresetStore.layer))
+  const presetIntegrations = Layer.merge(filePresetSource, PresetEvents.layer(ctx))
   const archiveServices = Layer.merge(
     messageArchiveLayer(config, ctx),
     messageHistoryLayer(config, ctx),
@@ -209,8 +232,9 @@ export const makeLayer = (config: Config, ctx: Context) => {
   const servicesWithAllBuiltins = BuiltinResponseCapabilities.layer.pipe(
     Layer.provideMerge(servicesWithBuiltins),
   )
+  const servicesWithPresets = presetIntegrations.pipe(Layer.provideMerge(servicesWithAllBuiltins))
   return ModelCatalogSchemaProjection.layer(ctx, config).pipe(
-    Layer.provideMerge(servicesWithAllBuiltins),
+    Layer.provideMerge(servicesWithPresets),
   )
 }
 

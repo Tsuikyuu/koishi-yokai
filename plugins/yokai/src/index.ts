@@ -1,4 +1,4 @@
-import type { YokaiCapabilityHost } from 'yokai-protocol'
+import type { PresetSnapshot, YokaiCapabilityHost } from 'yokai-protocol'
 import type { Context } from 'koishi'
 
 import { Config as ConfigSchema, type Config as YokaiConfig } from './config'
@@ -15,6 +15,10 @@ export type Config = YokaiConfig
 declare module 'koishi' {
   interface Context {
     yokai: YokaiCapabilityHost
+  }
+
+  interface Events {
+    'yokai/preset-updated'(snapshot: PresetSnapshot): void
   }
 }
 
