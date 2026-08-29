@@ -30,8 +30,8 @@ export type Services =
   | WakeArbiter.Service
 
 export interface Interface {
+  readonly start: () => Promise<void>
   readonly runPromise: <A, E>(effect: Effect.Effect<A, E, Services>) => Promise<A>
-  readonly runSync: <A, E>(effect: Effect.Effect<A, E, Services>) => A
   readonly runCleanup: (effect: Effect.Effect<boolean, never, Services>) => void
   readonly runSession: <A, E>(
     session: SessionBoundary,
@@ -44,8 +44,8 @@ export const make = (config: Config, ctx: Context): Interface => {
   const runtime = ManagedRuntime.make(makeLayer(config, ctx))
 
   const service: Interface = {
+    start: () => runtime.runPromise(CapabilityRegistry.Service.pipe(Effect.asVoid)),
     runPromise: (effect) => runtime.runPromise(effect),
-    runSync: (effect) => runtime.runSync(effect),
     runCleanup: (effect) => {
       runtime.runFork(effect)
     },
@@ -54,7 +54,6 @@ export const make = (config: Config, ctx: Context): Interface => {
     dispose: () => runtime.dispose(),
   }
 
-  service.runSync(CapabilityRegistry.Service.pipe(Effect.asVoid))
   return service
 }
 

@@ -53,9 +53,14 @@ export class Yokai extends Service<Config> implements YokaiCapabilityHost {
   private readonly effectRuntime: YokaiRuntime.Interface
 
   constructor(ctx: Context, config: Config) {
+    const effectRuntime = YokaiRuntime.make(config, ctx)
     super(ctx, 'yokai', true)
     this.config = config
-    this.effectRuntime = YokaiRuntime.make(config, ctx)
+    this.effectRuntime = effectRuntime
+  }
+
+  protected override start(): Promise<void> {
+    return this.effectRuntime.start()
   }
 
   protected override stop(): Promise<void> {

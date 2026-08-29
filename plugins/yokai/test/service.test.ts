@@ -1,3 +1,7 @@
+import { mkdtemp, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+
 import { expect, it } from '@effect/vitest'
 import { AdapterConformanceSetup } from 'yokai-adapter-conformance'
 import { makeFakeAdapter } from 'yokai-adapter-conformance/fake'
@@ -79,6 +83,11 @@ class TestYokai extends Yokai {
 
 const stop = (ctx: Context) => Effect.promise(() => ctx.stop())
 
+const temporaryDirectory = Effect.acquireRelease(
+  Effect.tryPromise(() => mkdtemp(join(tmpdir(), 'yokai-presets-'))),
+  (directory) => Effect.tryPromise(() => rm(directory, { recursive: true, force: true })),
+)
+
 const schemaOption = (schema: KoishiSchema, value: string): KoishiSchema | undefined => {
   const list = schema.list
   return list === undefined ? undefined : list.find((option) => option.value === value)
@@ -125,6 +134,21 @@ it.effect('starts without a selected model', () => {
     expect(configuration.feedbackToolsEnabled).toBe(true)
   }).pipe(Effect.ensuring(stop(ctx)))
 })
+
+it.effect('starts and stops when the preset directory requires asynchronous acquisition', () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const directory = yield* temporaryDirectory
+      const ctx = new Context()
+      apply(ctx, {
+        feedbackToolsEnabled: false,
+        presetDirectory: directory,
+      })
+
+      yield* Effect.promise(() => ctx.start()).pipe(Effect.ensuring(stop(ctx)))
+    }),
+  ),
+)
 
 it.effect('decodes exactly one selected model reference', () => {
   const ctx = new Context()
@@ -211,6 +235,7 @@ it.effect('publishes versioned presets through the public source handle', () => 
       ctx.on('yokai/preset-updated', (snapshot) => {
         Effect.runSync(Queue.offer(updates, snapshot))
       })
+      yield* Effect.promise(() => ctx.start())
       const registration = yield* Effect.promise(() =>
         ctx.yokai.registerPresetSource(
           PresetSource.make({
@@ -272,6 +297,7 @@ it.effect('projects fake adapter lifecycle into the live Koishi model schema', (
         }
       })
       apply(ctx, config)
+      yield* Effect.promise(() => ctx.start())
 
       const initialSchema = yield* takeSchemaMatching(schemaEvents, (schema) => {
         const option = schemaOption(schema, 'fake-live/model-a')

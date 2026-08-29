@@ -10,7 +10,7 @@ export const layer = (ctx: Context) =>
         Stream.runForEach((snapshot) =>
           Effect.sync(() => ctx.emit('yokai/preset-updated', snapshot)),
         ),
-        Effect.forkScoped,
+        Effect.forkScoped({ startImmediately: true }),
       )
     }),
   )
