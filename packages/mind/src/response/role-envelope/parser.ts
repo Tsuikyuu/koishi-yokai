@@ -3,12 +3,10 @@ import type { ActionTool } from 'yokai-protocol'
 
 import { decodeActionInput } from './portable-input'
 import {
-  EngagementDirective,
   MAX_ACTIONS,
   MAX_MESSAGES,
   ParseError,
   ResponseMessage,
-  type EngagementDirective as EngagementDirectiveType,
   type Envelope,
   type ParsedAction,
   type ResponseMessage as ResponseMessageType,
@@ -67,35 +65,6 @@ const parseMessages = Effect.fn('RoleResponseEnvelope.parseMessages')(function* 
   return yield* Effect.forEach(elements, (element) => parseMessage(element, context))
 })
 
-const parseDirectives = Effect.fn('RoleResponseEnvelope.parseDirectives')(function* (
-  container: XmlElement,
-) {
-  if (container.name !== 'directives' || container.attributes.length !== 0) {
-    return yield* Effect.fail(parseError('invalid-directive'))
-  }
-  const children = structuralChildren(container)
-  if (children === undefined || children.length !== 1) {
-    return yield* Effect.fail(parseError('invalid-directive'))
-  }
-  const engagement = children[0]
-  if (
-    engagement === undefined ||
-    engagement.name !== 'engagement' ||
-    engagement.attributes.length !== 1 ||
-    !hasOnlyAttributes(engagement, ['action'])
-  ) {
-    return yield* Effect.fail(parseError('invalid-directive'))
-  }
-  const engagementChildren = structuralChildren(engagement)
-  if (engagementChildren === undefined || engagementChildren.length !== 0) {
-    return yield* Effect.fail(parseError('invalid-directive'))
-  }
-  const action = attributeValue(engagement, 'action')
-  return yield* Schema.decodeUnknownEffect(EngagementDirective)(action).pipe(
-    Effect.mapError(() => parseError('invalid-directive')),
-  )
-})
-
 const parseAction = Effect.fn('RoleResponseEnvelope.parseAction')(function* (
   element: XmlElement,
   context: TurnContext,
@@ -146,7 +115,6 @@ const parseActions = Effect.fn('RoleResponseEnvelope.parseActions')(function* (
 
 interface EnvelopeSections {
   readonly messages: ReadonlyArray<XmlElement>
-  readonly directives: XmlElement | undefined
   readonly actions: XmlElement | undefined
 }
 
@@ -167,19 +135,11 @@ const extractSections = (root: XmlElement): Effect.Effect<EnvelopeSections, Pars
   const sections = children.slice(messageCount)
 
   const first = sections[0]
-  const second = sections[1]
   if (first === undefined) {
-    return Effect.succeed({ messages, directives: undefined, actions: undefined })
+    return Effect.succeed({ messages, actions: undefined })
   }
-  if (first.name === 'directives') {
-    if (second !== undefined && second.name !== 'actions') {
-      return Effect.fail(parseError('invalid-envelope'))
-    }
-    if (sections.length > 2) return Effect.fail(parseError('invalid-envelope'))
-    return Effect.succeed({ messages, directives: first, actions: second })
-  }
-  if (first.name === 'actions' && second === undefined) {
-    return Effect.succeed({ messages, directives: undefined, actions: first })
+  if (first.name === 'actions' && sections.length === 1) {
+    return Effect.succeed({ messages, actions: first })
   }
   return Effect.fail(parseError('invalid-envelope'))
 }
@@ -192,11 +152,7 @@ export const parseCompiled = Effect.fn('RoleResponseEnvelope.parseCompiled')(fun
   const root = yield* readDocument(source)
   const sections = yield* extractSections(root)
   const messages: ResponseMessagesType = yield* parseMessages(sections.messages, context)
-  const engagement: Option.Option<EngagementDirectiveType> =
-    sections.directives === undefined
-      ? Option.none()
-      : Option.some(yield* parseDirectives(sections.directives))
   const actions =
     sections.actions === undefined ? [] : yield* parseActions(sections.actions, context, tools)
-  return { messages, engagement, actions } satisfies Envelope
+  return { messages, actions } satisfies Envelope
 })

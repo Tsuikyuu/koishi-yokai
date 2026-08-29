@@ -9,8 +9,7 @@ Return exactly one XML document with one <output> root and no root attributes. R
 
 The root children must appear in this order:
 1. zero to four <message> elements
-2. optionally one <directives>
-3. optionally one <actions>
+2. optionally one <actions>
 
 To stay silent, output no <message>:
 <output></output>
@@ -21,13 +20,7 @@ For ordinary speech, use one or more messages without attributes. Split naturall
 Every <message> must contain non-empty, already-trimmed plain text with no leading or trailing whitespace. Preserve message order and do not split mechanically after every sentence. A platform quote is exceptional per-message metadata, not the default way to answer. Use quote only when intentionally quoting a particular visible message is needed for clarity; do not add it merely because you are responding to the focus, latest, mentioned, or triggering message:
 <output><message quote="VISIBLE MESSAGE ID">QUOTED ROLE MESSAGE</message><message>FOLLOWING ORDINARY MESSAGE</message></output>
 
-quote is the only optional <message> attribute and must copy a message ID visible in the frozen turn context. Ordinary messages have no attribute. Never invent a quote target.
-
-The only directive is optional engagement control:
-<directives><engagement action="extend"></engagement></directives>
-or
-<directives><engagement action="close"></engagement></directives>
-Do not invent another directive, directive field, or directive value.
+quote is the only optional <message> attribute and must copy a message ID visible in the frozen turn context. Ordinary messages have no attribute. Never invent a quote target or another root child.
 
 Action execution stage, completion policy, failure policy, timeout, and scope are fixed by the host. Never output or override them. An after-send or deferred action has not completed while this message is being written: never claim that an asynchronous action succeeded. Only claim success when success is already established by trusted frozen context or a current FeedbackTool result.`
 

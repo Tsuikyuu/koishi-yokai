@@ -35,18 +35,18 @@ MVP 不同步撤回或删除事件，也不提供消息级或手动删除入口�
 不可信标签的 JSON block，固定包含 `messageId`、`authorId`、`timestamp` 和 `content`；其中的
 `messageId` 同时进入冻结回合的 quote 白名单，因此模型能看到并安全引用焦点消息。
 
-角色响应协议只接受单个无属性 `<output>` XML 文档。根下依次允许零至四个纯文本 `message`、
-可选 `directives` 和可选 `actions`；零个 message 表示沉默，一至四个 message 在后续回合编排中
+角色响应协议只接受单个无属性 `<output>` XML 文档。根下依次允许零至四个纯文本 `message` 和
+可选 `actions`；零个 message 表示沉默，一至四个 message 在后续回合编排中
 按文档顺序逐段发送。普通 message 默认没有属性；只有确实需要平台引用的单段才携带
 `quote="VISIBLE MESSAGE ID"`，目标只能来自本回合冻结白名单，并在发送边界转换为 Koishi 引用元素。
 quote 只是该段的传输元数据，协议不传输 react、reply、follow-up 或 initiate decision。
-协议同时定义固定的
-engagement directive，以及由注册快照编译并经闭合 Schema 校验的 ActionTool XML 模板。
+协议不包含 directives 或 engagement；是否需要 model-facing interaction intent 留到 YK-025 重新评估，
+当前不预设具体 XML。ActionTool XML 模板由注册快照编译，并经过闭合 Schema 校验。
 未知或重复元素、越权引用、DTD、外部实体、畸形 XML 和任何超限输出都会使整个回合保持沉默，
 不会降级提取或发送 XML 片段。
 
 `<output>` 不携带模型自报的 version。live 提示与 parser 原子配对，XML 只在当前回合短暂使用；
-若需审计或回放，宿主必须在 XML 外记录 `protocolId = yokai.role-output/1`、ActionTool 与冻结
+若需审计或回放，宿主必须在 XML 外记录 `protocolId = yokai.role-output/2`、ActionTool 与冻结
 作用域快照；这个 protocolId 不进入模型 XML。未来独立消费者或持久化信封的版本协商也属于宿主
 边界，而不是模型输出字段。
 

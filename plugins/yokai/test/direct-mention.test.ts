@@ -484,7 +484,7 @@ it.effect('sends ordered message segments and applies quotes only to their own s
     Effect.gen(function* () {
       const harness = yield* makeHarness([
         textGeneration(
-          '<output><message>nice</message><message>one more thought</message><directives><engagement action="extend"></engagement></directives></output>',
+          '<output><message>nice</message><message>one more thought</message></output>',
         ),
         textGeneration(
           '<output><message>plain before</message><message quote="message-quoted">threaded reply</message><message>plain after</message></output>',

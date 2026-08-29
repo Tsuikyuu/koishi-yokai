@@ -50,24 +50,32 @@ it.effect('rejects malformed messages, legacy grammar, excess messages, and deni
   }),
 )
 
-it.effect('rejects unknown, duplicate, malformed, or out-of-order directives and sections', () =>
+it.effect('rejects the removed directives section as an invalid envelope', () =>
+  Effect.gen(function* () {
+    const protocol = yield* RoleResponseEnvelope.compile([], CONTEXT.scope)
+    const message = '<message>x</message>'
+    const legacy = [
+      response(`${message}<directives><engagement action="extend"></engagement></directives>`),
+      response(`${message}<directives><engagement action="close"></engagement></directives>`),
+      response('<directives><engagement action="extend"></engagement></directives>'),
+    ]
+
+    const failures = yield* Effect.forEach(legacy, (document) =>
+      protocol.parse(document, PARSE_CONTEXT).pipe(Effect.flip),
+    )
+    expect(failures.map((failure) => failure.reason)).toEqual([
+      'invalid-envelope',
+      'invalid-envelope',
+      'invalid-envelope',
+    ])
+  }),
+)
+
+it.effect('rejects malformed or out-of-order root sections', () =>
   Effect.gen(function* () {
     const protocol = yield* RoleResponseEnvelope.compile([], CONTEXT.scope)
     const message = '<message>x</message>'
     const invalid = [
-      response(`${message}<directives></directives>`),
-      response(`${message}<directives><unknown action="extend"></unknown></directives>`),
-      response(`${message}<directives><engagement action="keep"></engagement></directives>`),
-      response(`${message}<directives><engagement action="extend">text</engagement></directives>`),
-      response(
-        `${message}<directives><engagement action="extend" extra="x"></engagement></directives>`,
-      ),
-      response(
-        `${message}<directives><engagement action="extend"></engagement><engagement action="close"></engagement></directives>`,
-      ),
-      response(
-        `${message}<directives><engagement action="extend"></engagement></directives><directives><engagement action="close"></engagement></directives>`,
-      ),
       response(`${message}<actions></actions>`),
       response(`<actions></actions>${message}`),
       response(`${message}<unknown></unknown>`),

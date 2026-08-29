@@ -44,7 +44,7 @@ it.effect('compiles a stable role-only prompt with exact templates and schema co
     const protocol = yield* RoleResponseEnvelope.compile([schedule, reaction], CONTEXT.scope)
     const prompt = protocol.systemInstruction
 
-    expect(RoleResponseEnvelope.PROTOCOL_ID).toBe('yokai.role-output/1')
+    expect(RoleResponseEnvelope.PROTOCOL_ID).toBe('yokai.role-output/2')
     expect(protocol.protocolId).toBe(RoleResponseEnvelope.PROTOCOL_ID)
     expect(prompt.indexOf('ActionTool reaction.add')).toBeLessThan(
       prompt.indexOf('ActionTool schedule.create'),
@@ -77,7 +77,8 @@ it.effect('compiles a stable role-only prompt with exact templates and schema co
     expect(prompt).toContain('zero to four <message> elements')
     expect(prompt).toContain('<message quote="VISIBLE MESSAGE ID">')
     expect(prompt).not.toContain('<decision')
-    expect(prompt).toContain('<engagement action="extend"></engagement>')
+    expect(prompt).not.toContain('<directives')
+    expect(prompt).not.toContain('<engagement')
   }),
 )
 

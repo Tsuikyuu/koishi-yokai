@@ -1,6 +1,6 @@
 # Yokai 角色响应协议
 
-状态：YK-020 Draft 0.2
+状态：YK-020 Draft 0.3
 
 本文固定 Yokai 当前角色 XML、ActionTool 模板和本地验证边界。它只描述最终模型文本；
 需要模型观察结果的 FeedbackTool 继续使用 adapter 的通用函数调用协议。
@@ -9,29 +9,25 @@
 ## 1. 文档结构
 
 模型必须返回一个且仅一个 XML 文档。根元素必须是无属性的 `<output>`；其直接子元素依次为
-零至四个 `<message>`、可选的 `<directives>`、可选的 `<actions>`：
+零至四个 `<message>`、可选的 `<actions>`：
 
 ```xml
 <output>
   <message quote="VISIBLE MESSAGE ID">需要明确引用目标的角色消息</message>
   <message>随后发送的普通角色消息</message>
-  <directives>
-    <engagement action="extend"></engagement>
-  </directives>
 </output>
 ```
 
 示例省略可选 actions；actions 出现时只能包含当前回合可见 ActionTool 的精确模板实例。协议示例
 不得用 XML comment 充当占位符，因为 comment 本身会被解析器拒绝。
 
-所有 message 必须位于 directives 和 actions 之前；directives 出现时必须位于 actions 之前。
-零个 message 表示本回合沉默；没有 directive 和 action 的沉默仍使用完整的
+所有 message 必须位于 actions 之前。零个 message 表示本回合沉默；没有 action 的沉默仍使用完整的
 `<output></output>`，不使用自闭合标签。根元素及容器之间只允许 XML whitespace，不能出现其他文本。
 
 根元素前后只允许 XML whitespace，不接受 XML declaration、Markdown 围栏、说明文字、namespace、
 注释、CDATA、processing instruction、DTD 或自闭合标签。属性只使用双引号。
 
-## 2. Message 与 directive
+## 2. Message
 
 根级角色 message 遵守以下规则：
 
@@ -45,15 +41,9 @@
   平台反应由 ActionTool 表达，回复、跟进和主动发言的社会语义来自唤醒原因与冻结上下文，quote 仅是
   一段待发消息的传输元数据。
 
-唯一内置 directive 是可选的 engagement 变更：
-
-```xml
-<directives><engagement action="extend"></engagement></directives>
-<directives><engagement action="close"></engagement></directives>
-```
-
-缺席表示不改变租约。directives 出现时必须恰含一个 engagement，不能携带文本、额外属性或
-未知子元素。租约状态更新由后续回合编排任务负责。
+当前 YK-020/live wire 不包含 directive、engagement 或其他 model-facing interaction intent；这些
+根级元素一律按未知元素拒绝。YK-025 才重新评估是否需要让模型表达交互意图，不在此提前保留
+`<directives>`、engagement 枚举或任何具体 XML 形状。
 
 ## 3. 为什么根元素不携带版本
 
@@ -64,7 +54,7 @@ live 回合由同一次 compiler 调用原子地产生提示和与之配对的 p
 根标签对的固定 ASCII 开销也由旧写法的 45 个字符降为 17 个字符，每份响应少 28 个字符。
 
 真正需要审计或回放时，宿主必须在模型输出之外记录
-`protocolId = yokai.role-output/1`，以及该回合的 ActionTool 注册快照、冻结 scope 和可见 message ID
+`protocolId = yokai.role-output/2`，以及该回合的 ActionTool 注册快照、冻结 scope 和可见 message ID
 快照；这个 protocolId 绝不进入模型 XML。若未来出现独立消费者或持久化信封，再由宿主边界协商和
 封装协议版本；不能通过接受模型在 XML 中自报的版本来替代宿主记录。
 
@@ -131,7 +121,7 @@ reply decision；`wake` 只允许用于 `deferred`。XML 只能提供 tool ID �
 | 编译后协议提示 UTF-8 字节数 | 65,536 |
 
 解析器只识别五个标准 named entity 和合法十进制/十六进制 numeric entity。有限 grammar 不解析
-通用 DTD 或 entity，也不访问文件或网络。宿主先完成全部 message、directive、Action、Schema、
+通用 DTD 或 entity，也不访问文件或网络。宿主先完成全部 message、Action、Schema、
 quote target 和 scope 验证，再允许发送或执行任何内容；任一项失败都使整个信封失效，不能从残缺
 文本降级提取 message 或 Action。公开的类型化错误不携带模型原文、模板文本或参数值。
 这项原子性截至第一次平台发送之前；多段平台发送不是事务。任一段发送失败后停止后续段，已经成功

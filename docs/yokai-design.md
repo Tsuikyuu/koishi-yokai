@@ -344,7 +344,7 @@ FeedbackTool 使用 adapter 的原生 function calling；无需结果的 ActionT
 </output>
 ```
 
-无属性 `<output>` 根下依次为零至四个直接子级 `message`、可选 `directives` 和可选 `actions`。
+无属性 `<output>` 根下依次为零至四个直接子级 `message` 和可选 `actions`。
 零个 message 表示 silence；一至四个 message 是按文档顺序待发的纯文本段。message 默认没有属性，
 表示普通发言；仅当某一段确实需要平台引用时，才允许为该段提供唯一的 `quote="VISIBLE MESSAGE ID"`
 属性，且目标必须命中本回合冻结的可见消息白名单。quote 是逐段传输元数据，不是 reply、follow-up 或
@@ -356,12 +356,12 @@ initiate 的决策标签。每个当前可见 ActionTool 向提示词提供一�
 
 角色 XML 不携带模型自报的 version。live compiler 原子地产生提示和配对 parser，XML 只在当前回合
 短暂存在；自报版本既不权威，也无法恢复当时的 Tool 和授权范围。需要审计或回放时，宿主在 XML 外
-记录 `protocolId = yokai.role-output/1`、ActionTool 注册快照、冻结 scope 和可见消息 ID 快照；
+记录 `protocolId = yokai.role-output/2`、ActionTool 注册快照、冻结 scope 和可见消息 ID 快照；
 这个 protocolId 不进入模型 XML。只有未来出现独立消费者或持久化信封时，才在宿主边界协商并封装版本。
 
 主体完整接收文本后才解析 XML，不边生成边执行或发送。解析器禁用 DTD、外部实体和网络访问，
 并限制总字节数、元素深度、文本长度和动作数量；未知元素、重复字段、未知 Tool、越权参数和
-Schema 解码失败都会使整个信封失效。主体必须先验证全部 message、quote、directive 和 action，再执行
+Schema 解码失败都会使整个信封失效。主体必须先验证全部 message、quote 和 action，再执行
 任何动作；XML 整体畸形时角色回合静默失败，不从残缺文本中猜测消息或工具调用。
 
 首次结果包含 FeedbackTool 调用时，任何同时出现的文本或 XML 都只是未完成草稿，主体必须丢弃，
@@ -877,12 +877,13 @@ schedule.cancel
 租约规则：
 
 - 用户第一次 @ 或引用 Yokai 时自动开启。
-- XML 输出可以通过固定的 `engagement` directive 选择延长或关闭租约。
+- 当前角色 XML 不携带租约 directive。YK-025 才重新评估是否需要 model-facing interaction intent；
+  该任务开始前不固定 `<directives>`、engagement 枚举或其他具体 XML 形状。
 - 租约有效期内，参与者在同一频道的新消息获得 `engagement` 提案，无须再次 @。
 - 同一参与者连续发来的多条入站消息仍经过 debounce，合并成一个角色回合。
 - 只有租约参与者的消息能触发，不把整个频道切换成逐条角色生成模式。
 - 租约受最大持续时间、最大轮数和调用预算限制。
-- 超时、达到轮数、用户明显转向其他对象或模型主动关闭后结束。
+- 超时、达到轮数、用户明显转向其他对象或宿主本地规则判定关闭后结束。
 - 租约判断完全本地执行，不增加每条消息的远程调用。
 
 建议初始值为 5 分钟或 8 个用户轮次，以先到者为准。这样主动讨论期间接近普通即时对话，讨论结束后自动回到低成本活跃度门控。

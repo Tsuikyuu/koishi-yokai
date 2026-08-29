@@ -51,29 +51,6 @@ it.effect('decodes silence, ordered plain messages, and per-message quotes', () 
   }),
 )
 
-it.effect('decodes the fixed engagement directive and optional absence', () =>
-  Effect.gen(function* () {
-    const protocol = yield* RoleResponseEnvelope.compile([], CONTEXT.scope)
-    const extended = yield* protocol.parse(
-      response(
-        '<message>continue</message><directives><engagement action="extend"></engagement></directives>',
-      ),
-      PARSE_CONTEXT,
-    )
-    const closed = yield* protocol.parse(
-      response(
-        '<message>done</message><directives><engagement action="close"></engagement></directives>',
-      ),
-      PARSE_CONTEXT,
-    )
-    const absent = yield* protocol.parse(response('<message>neutral</message>'), PARSE_CONTEXT)
-
-    expect(extended.engagement).toEqual(Option.some('extend'))
-    expect(closed.engagement).toEqual(Option.some('close'))
-    expect(Option.isNone(absent.engagement)).toBe(true)
-  }),
-)
-
 it.effect('parses visible ActionTools recursively and preserves frozen registration policy', () =>
   Effect.gen(function* () {
     const reaction = yield* makeReactionTool()

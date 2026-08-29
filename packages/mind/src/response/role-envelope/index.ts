@@ -2,7 +2,6 @@ export { compile, parse, validateActionToolRegistration } from './compiler'
 export {
   CompileError,
   CompileFailureReason,
-  EngagementDirective,
   MAX_ACTIONS,
   MAX_ACTION_TEMPLATE_BYTES,
   MAX_MESSAGES,

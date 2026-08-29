@@ -1,4 +1,4 @@
-import { type Effect, type Option, Schema } from 'effect'
+import { type Effect, Schema } from 'effect'
 import type { ActionTool, ActionToolInput, CapabilityScope } from 'yokai-protocol'
 
 export const MAX_XML_BYTES = 16_384
@@ -12,7 +12,7 @@ export const MAX_ACTIONS = 8
 export const MAX_VISIBLE_ACTION_TOOLS = 16
 export const MAX_ACTION_TEMPLATE_BYTES = 16_384
 export const MAX_SYSTEM_INSTRUCTION_BYTES = 65_536
-export const PROTOCOL_ID = 'yokai.role-output/1'
+export const PROTOCOL_ID = 'yokai.role-output/2'
 
 export const MessageContent = Schema.String.check(
   Schema.isTrimmed(),
@@ -44,10 +44,6 @@ export const ResponseMessages = Schema.Array(ResponseMessage).check(
 
 export type ResponseMessages = typeof ResponseMessages.Type
 
-export const EngagementDirective = Schema.Literals(['extend', 'close'])
-
-export type EngagementDirective = typeof EngagementDirective.Type
-
 export interface ParsedAction {
   readonly tool: ActionTool
   readonly input: ActionToolInput
@@ -55,7 +51,6 @@ export interface ParsedAction {
 
 export interface Envelope {
   readonly messages: ResponseMessages
-  readonly engagement: Option.Option<EngagementDirective>
   readonly actions: ReadonlyArray<ParsedAction>
 }
 
@@ -100,7 +95,6 @@ export const ParseFailureReason = Schema.Literals([
   'invalid-message',
   'too-many-messages',
   'quote-scope-denied',
-  'invalid-directive',
   'too-many-actions',
   'unknown-action-tool',
   'action-scope-denied',

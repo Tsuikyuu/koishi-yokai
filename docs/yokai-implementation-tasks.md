@@ -321,15 +321,15 @@ Yokai 不调用 `generateContentStream`，不发送 `alt=sse`，也不请求、�
 
 前置：YK-009、YK-012、YK-019。
 
-交付：将 YK-012 的最小信封扩展为无属性 `<output>` 根；根下依次允许零至四个纯文本 `message`、可选 `directives` 和可选 `actions`。message 可选唯一的 `quote="VISIBLE MESSAGE ID"` 属性；普通发言默认不带 quote，只有确实需要平台引用的单段才携带 quote。编译严格角色内提示及当前可见 ActionTool 的精确 XML 模板，并实现安全解析和 Schema 解码。代码级协议见 [`yokai-role-response-protocol.md`](./yokai-role-response-protocol.md)。
+交付：将 YK-012 的最小信封扩展为无属性 `<output>` 根；根下依次允许零至四个纯文本 `message` 和可选 `actions`。message 可选唯一的 `quote="VISIBLE MESSAGE ID"` 属性；普通发言默认不带 quote，只有确实需要平台引用的单段才携带 quote。编译严格角色内提示及当前可见 ActionTool 的精确 XML 模板，并实现安全解析和 Schema 解码。代码级协议见 [`yokai-role-response-protocol.md`](./yokai-role-response-protocol.md)。
 
 `MinimalResponseEnvelope` 只保留为 YK-012 临时纵切的回归边界，不在 live 回合中使用，也不代表当前角色 wire grammar。
 
-角色 XML 不保留模型自报 version：live compiler 原子地产生提示和配对 parser，XML 不作为独立信封持久化。真正的审计或回放必须由宿主在 XML 外记录 `protocolId = yokai.role-output/1`、ActionTool 注册快照、冻结 scope 和可见消息 ID 快照；这个 protocolId 不进入模型 XML，模型自报版本既不充分也不权威。未来若增加独立消费者或持久信封，再在宿主边界协商版本。
+角色 XML 不保留模型自报 version：live compiler 原子地产生提示和配对 parser，XML 不作为独立信封持久化。真正的审计或回放必须由宿主在 XML 外记录 `protocolId = yokai.role-output/2`、ActionTool 注册快照、冻结 scope 和可见消息 ID 快照；这个 protocolId 不进入模型 XML，模型自报版本既不充分也不权威。未来若增加独立消费者或持久信封，再在宿主边界协商版本。
 
 验收：
 
-- 根元素恰为无属性 `<output>`；根级子元素严格按零至四个 message、可选 directives、可选 actions 排列，不接受任何 wire decision 或其他根级元素。
+- 根元素恰为无属性 `<output>`；根级子元素严格按零至四个 message、可选 actions 排列，不接受 wire decision、directives 或其他根级元素。
 - 零个 message 即 silence；一至四个 message 均为非空、已 trim 的纯文本，并完整保留文档顺序。
 - message 默认不带属性；quote 仅为对应单段的平台引用元数据，目标必须命中 compiler 冻结的可见 message ID 白名单，普通 message 不隐式补 quote。
 - 禁用 DTD、外部实体和网络访问，并限制 XML 字节数、深度、文本长度及动作数量。
@@ -393,9 +393,9 @@ Yokai 不调用 `generateContentStream`，不发送 `alt=sse`，也不请求、�
 
 前置：YK-018、YK-021。
 
-交付：在 @/回复后建立有界 `EngagementLease`，支持延长/关闭 directive 和 engagement 提案。
+交付：在 @/回复后建立有界 `EngagementLease`，实现宿主持有的延长/关闭状态转换和 engagement 提案；在该任务内重新评估是否需要 model-facing interaction intent。当前不预设 `<directives>`、engagement 枚举或任何具体 XML 形状；若评估后需要模型表达，必须另行冻结并验收新的宿主协议边界。
 
-验收：只有租约参与者可继续触发；同一参与者连续发来的多条入站消息仍合并为一个角色回合；TTL、最大轮数、转话题和显式关闭均可结束租约；过期后恢复普通门控。
+验收：只有租约参与者可继续触发；同一参与者连续发来的多条入站消息仍合并为一个角色回合；TTL、最大轮数、转话题和宿主显式关闭均可结束租约；过期后恢复普通门控。
 
 ### YK-026 持久化定时任务
 
