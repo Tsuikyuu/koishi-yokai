@@ -1,7 +1,5 @@
 # Yokai adapter conformance 设计
 
-状态：YK-003 Draft 0.1
-
 实现包：`yokai-adapter-conformance`
 
 协议依据：[`yokai-llm-adapter-protocol.md`](./yokai-llm-adapter-protocol.md)

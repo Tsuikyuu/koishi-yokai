@@ -4,6 +4,8 @@ import {
   AdapterId,
   AdapterModelSnapshot,
   AdapterTransportError,
+  ActionToolDurationMilliseconds,
+  ActionToolXmlTemplate,
   CURRENT_ADAPTER_PROTOCOL_VERSION,
   FeedbackToolId,
   ModelReference,
@@ -76,6 +78,26 @@ const makeActionTool = (id: string, minor = 1): ActionTool =>
   ActionTool.make({
     id: ActionToolId.make(id),
     protocolVersion: { major: 0, minor },
+    description: 'Test action tool',
+    xmlTemplate: ActionToolXmlTemplate.make(
+      `<action tool="${id}"><value>XML_ESCAPED_VALUE</value></action>`,
+    ),
+    inputSchema: {
+      _tag: 'Object',
+      properties: [
+        {
+          name: 'value',
+          required: true,
+          schema: { _tag: 'String' },
+        },
+      ],
+    },
+    executionStage: 'after-send',
+    completionPolicy: 'none',
+    failurePolicy: 'continue',
+    maxDurationMs: ActionToolDurationMilliseconds.make(250),
+    isAvailable: () => true,
+    isInputAllowed: () => true,
   })
 
 const makeFeedbackTool = (id: string): FeedbackTool =>
@@ -177,6 +199,31 @@ it.effect('admits exactly one of two concurrent same-domain registrations', () =
     expect(outcomes.filter(Result.isSuccess)).toHaveLength(1)
     expect(outcomes.filter(Result.isFailure)).toHaveLength(1)
     expect((yield* registry.snapshot()).actionTools).toHaveLength(1)
+  }).pipe(Effect.provide(CapabilityRegistry.layer)),
+)
+
+it.effect('rejects an invalid ActionTool template without poisoning other registrations', () =>
+  Effect.gen(function* () {
+    const registry = yield* CapabilityRegistry.Service
+    const invalid = {
+      ...makeActionTool('invalid-template'),
+      xmlTemplate: ActionToolXmlTemplate.make(
+        '<action tool="different-id"><value>XML_ESCAPED_VALUE</value></action>',
+      ),
+    }
+
+    const failure = yield* registry.registerActionTool(invalid).pipe(Effect.flip)
+    expect(failure).toMatchObject({
+      _tag: 'RoleResponseEnvelopeCompileError',
+      reason: 'template-tool-mismatch',
+      toolId: 'invalid-template',
+    })
+    expect((yield* registry.snapshot()).revision).toBe(0)
+
+    yield* registry.registerActionTool(makeActionTool('valid-template'))
+    const snapshot = yield* registry.snapshot()
+    expect(snapshot.revision).toBe(1)
+    expect(snapshot.actionTools.map((tool) => tool.id)).toEqual(['valid-template'])
   }).pipe(Effect.provide(CapabilityRegistry.layer)),
 )
 

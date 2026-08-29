@@ -7,6 +7,7 @@ import {
   type YokaiAdapter,
   negotiateAdapterProtocol,
 } from 'yokai-protocol'
+import { RoleResponseEnvelope } from '@yokai-internal/mind'
 import { Context, Effect, FiberMap, Layer, Option, Schema, Stream, SubscriptionRef } from 'effect'
 
 import {
@@ -106,7 +107,10 @@ export interface Interface {
   ) => Effect.Effect<CapabilityRegistration, CapabilityConflictError>
   readonly registerActionTool: (
     capability: ActionTool,
-  ) => Effect.Effect<CapabilityRegistration, CapabilityConflictError>
+  ) => Effect.Effect<
+    CapabilityRegistration,
+    CapabilityConflictError | RoleResponseEnvelope.CompileError
+  >
   readonly registerFeedbackTool: (
     capability: FeedbackTool,
   ) => Effect.Effect<CapabilityRegistration, CapabilityConflictError>
@@ -586,11 +590,13 @@ const make = Effect.fn('CapabilityRegistry.make')(function* () {
   const registerActionTool = Effect.fn('CapabilityRegistry.registerActionTool')(function* (
     capability: ActionTool,
   ) {
+    const validatedCapability =
+      yield* RoleResponseEnvelope.validateActionToolRegistration(capability)
     const key = yield* registerEntry(
       stateRef,
       'action-tool',
-      capability.id,
-      capability,
+      validatedCapability.id,
+      validatedCapability,
       (state) => state.actionTools,
       (entry) => entry.id,
       (state, actionTools) => ({ ...state, actionTools }),
