@@ -35,3 +35,41 @@ MVP 不同步撤回或删除事件，也不提供消息级或手动删除入口�
 角色消息；模型不可用、adapter 失败或 XML 整体无效时保持沉默。首次生成前可加入
 有界历史 ContextProvider；显式启用且 adapter 支持时，允许一批 `history.search` FeedbackTool
 调用和唯一一次最终生成。该路径仍不启用记忆或 ActionTool，也不会自动切换模型。
+
+## 人格预设
+
+配置 `presetId` 后，每个角色回合开始时会冻结该 ID 的最新有效人格快照。可同时配置
+`presetDirectory` 读取目录中的 `.yaml`、`.yml` 和 `.json` 文件；文件事件经过默认 250 ms 的
+`presetReloadDebounceMs` 安静期后重新加载。合法的新内容从下一回合开始生效，已经开始的回合
+继续使用旧快照；语法错误、Schema 错误或不存在的 Skill/Tool 引用不会替换最后有效版本。
+只改变缩进、键顺序等但内容 hash 相同的文件不会重复发布版本。
+
+最小 YAML 预设如下；三个能力引用列表均可省略，省略时默认为空：
+
+```yaml
+id: koharu
+persona:
+  name: 小春
+  selfConcept: 群里住了很久、好奇但不抢话的普通成员。
+  background: 在街区旧书店和图书馆附近长大。
+  values:
+    - 诚实
+    - 耐心
+  interests:
+    - 民俗
+    - 茶
+  opinions:
+    - 小而实际的帮助胜过夸张承诺。
+  speakingStyle: 温和、简洁，偶尔有一点玩笑。
+  socialBoundaries:
+    - 不追问别人不愿公开的私事。
+  knowledgeBoundaries:
+    - 不知道或没有依据时明确承认。
+skills: []
+actionTools: []
+feedbackTools: []
+```
+
+第三方预设插件通过 `ctx.yokai.registerPresetSource()` 注册来源，并使用返回句柄的 `publish()`
+发布 JSON 候选。主体统一完成 Schema 解码、引用校验、提示编译和 SHA-256；更新成功时发出
+`yokai/preset-updated`。来源卸载后保留最后有效快照并标记离线，旧句柄不能继续发布。

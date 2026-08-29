@@ -1,3 +1,7 @@
+import { mkdtemp, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+
 import { expect, it } from '@effect/vitest'
 import { AdapterConformanceSetup } from 'yokai-adapter-conformance'
 import { makeFakeAdapter } from 'yokai-adapter-conformance/fake'
@@ -12,6 +16,10 @@ import {
   ContextProvider,
   ContextProviderId,
   CURRENT_ADAPTER_PROTOCOL_VERSION,
+  PresetId,
+  PresetSource,
+  PresetSourceId,
+  type PresetSnapshot,
   TokenLimit,
   type YokaiAdapter,
 } from 'yokai-protocol'
@@ -75,6 +83,11 @@ class TestYokai extends Yokai {
 
 const stop = (ctx: Context) => Effect.promise(() => ctx.stop())
 
+const temporaryDirectory = Effect.acquireRelease(
+  Effect.tryPromise(() => mkdtemp(join(tmpdir(), 'yokai-presets-'))),
+  (directory) => Effect.tryPromise(() => rm(directory, { recursive: true, force: true })),
+)
+
 const schemaOption = (schema: KoishiSchema, value: string): KoishiSchema | undefined => {
   const list = schema.list
   return list === undefined ? undefined : list.find((option) => option.value === value)
@@ -121,6 +134,21 @@ it.effect('starts without a selected model', () => {
     expect(configuration.feedbackToolsEnabled).toBe(true)
   }).pipe(Effect.ensuring(stop(ctx)))
 })
+
+it.effect('starts and stops when the preset directory requires asynchronous acquisition', () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const directory = yield* temporaryDirectory
+      const ctx = new Context()
+      apply(ctx, {
+        feedbackToolsEnabled: false,
+        presetDirectory: directory,
+      })
+
+      yield* Effect.promise(() => ctx.start()).pipe(Effect.ensuring(stop(ctx)))
+    }),
+  ),
+)
 
 it.effect('decodes exactly one selected model reference', () => {
   const ctx = new Context()
@@ -197,6 +225,57 @@ it.effect('publishes through an adapter handle until that handle is unregistered
   }).pipe(Effect.ensuring(stop(ctx)))
 })
 
+it.effect('publishes versioned presets through the public source handle', () => {
+  const ctx = new Context()
+  apply(ctx, DEFAULT_CONFIG)
+
+  return Effect.scoped(
+    Effect.gen(function* () {
+      const updates = yield* Queue.unbounded<PresetSnapshot>()
+      ctx.on('yokai/preset-updated', (snapshot) => {
+        Effect.runSync(Queue.offer(updates, snapshot))
+      })
+      yield* Effect.promise(() => ctx.start())
+      const registration = yield* Effect.promise(() =>
+        ctx.yokai.registerPresetSource(
+          PresetSource.make({
+            id: PresetSourceId.make('third-party.preset'),
+            protocolVersion: VERSION,
+          }),
+        ),
+      )
+      const candidate = {
+        id: 'koharu',
+        persona: {
+          name: 'Koharu',
+          selfConcept: 'A curious long-time member of the group.',
+          background: 'Grew up around a small neighborhood library.',
+          values: ['honesty'],
+          interests: ['folklore'],
+          opinions: ['Small practical help is better than grand promises.'],
+          speakingStyle: 'Warm and concise.',
+          socialBoundaries: ['Respect private matters.'],
+          knowledgeBoundaries: ['Admit when a fact is not known.'],
+        },
+      }
+
+      expect(yield* Effect.promise(() => registration.publish(candidate))).toBe(true)
+      const update = yield* Queue.take(updates)
+      expect(update).toMatchObject({ id: 'koharu', version: 1, sourceAvailable: true })
+      expect(yield* Effect.promise(() => registration.publish(candidate))).toBe(false)
+      expect(
+        yield* Effect.promise(() => ctx.yokai.getPresetSnapshot(PresetId.make('koharu'))),
+      ).toBe(update)
+
+      expect(yield* Effect.promise(() => registration.unregister())).toBe(true)
+      expect(
+        yield* Effect.promise(() => ctx.yokai.getPresetSnapshot(PresetId.make('koharu'))),
+      ).toMatchObject({ version: 1, sourceAvailable: false })
+      expect(yield* Effect.promise(() => registration.publish(candidate))).toBe(false)
+    }).pipe(Effect.ensuring(stop(ctx))),
+  )
+})
+
 it.effect('projects fake adapter lifecycle into the live Koishi model schema', () => {
   const ctx = new Context()
   const config: Config = {
@@ -218,6 +297,7 @@ it.effect('projects fake adapter lifecycle into the live Koishi model schema', (
         }
       })
       apply(ctx, config)
+      yield* Effect.promise(() => ctx.start())
 
       const initialSchema = yield* takeSchemaMatching(schemaEvents, (schema) => {
         const option = schemaOption(schema, 'fake-live/model-a')

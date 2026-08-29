@@ -7,6 +7,9 @@ import {
   type AdapterRegistration as CoreAdapterRegistration,
   HostModelSelection,
   HostSession,
+  PresetRegistry,
+  type AvailableCapabilities,
+  type PresetSourceRegistration as CorePresetSourceRegistration,
   type ResolvedModel,
   WakeArbiter,
   WakeMessage,
@@ -22,6 +25,9 @@ import type {
   FeedbackTool,
   McpServer,
   PresetSource,
+  PresetId,
+  PresetRegistration,
+  PresetSnapshot,
   ResponseMechanism,
   Skill,
   ModelCatalogSnapshot,
@@ -47,9 +53,14 @@ export class Yokai extends Service<Config> implements YokaiCapabilityHost {
   private readonly effectRuntime: YokaiRuntime.Interface
 
   constructor(ctx: Context, config: Config) {
+    const effectRuntime = YokaiRuntime.make(config, ctx)
     super(ctx, 'yokai', true)
     this.config = config
-    this.effectRuntime = YokaiRuntime.make(config, ctx)
+    this.effectRuntime = effectRuntime
+  }
+
+  protected override start(): Promise<void> {
+    return this.effectRuntime.start()
   }
 
   protected override stop(): Promise<void> {
@@ -178,6 +189,35 @@ export class Yokai extends Service<Config> implements YokaiCapabilityHost {
     }
   }
 
+  private bindPresetRegistration(
+    owner: Context,
+    capabilityRegistration: CoreCapabilityRegistration,
+    sourceRegistration: CorePresetSourceRegistration,
+  ): PresetRegistration {
+    const combinedRegistration: CoreCapabilityRegistration = {
+      unregister: () =>
+        Effect.all([sourceRegistration.unregister(), capabilityRegistration.unregister()], {
+          concurrency: 'unbounded',
+        }).pipe(Effect.map((results) => results.some(Boolean))),
+    }
+    return {
+      unregister: this.bindUnregister(owner, combinedRegistration),
+      publish: (candidate) =>
+        this.effectRuntime.runPromise(
+          Effect.gen(function* () {
+            const registry = yield* CapabilityRegistry.Service
+            const snapshot = yield* registry.snapshot()
+            const available: AvailableCapabilities = {
+              skills: snapshot.skills.map((entry) => entry.id),
+              actionTools: snapshot.actionTools.map((entry) => entry.id),
+              feedbackTools: snapshot.feedbackTools.map((entry) => entry.id),
+            }
+            return yield* sourceRegistration.publish(candidate, available)
+          }),
+        ),
+    }
+  }
+
   private registerCapability<E>(
     owner: Context,
     registration: Effect.Effect<CoreCapabilityRegistration, E, CapabilityRegistry.Service>,
@@ -247,12 +287,21 @@ export class Yokai extends Service<Config> implements YokaiCapabilityHost {
     )
   }
 
-  registerPresetSource(capability: PresetSource): Promise<CapabilityRegistration> {
+  registerPresetSource(capability: PresetSource): Promise<PresetRegistration> {
     const owner = this[Context.current]
-    return this.registerCapability(
-      owner,
-      CapabilityRegistry.Service.pipe(
-        Effect.flatMap((registry) => registry.registerPresetSource(capability)),
+    return this.effectRuntime.runPromise(
+      Effect.gen(function* () {
+        const capabilityRegistry = yield* CapabilityRegistry.Service
+        const capabilityRegistration = yield* capabilityRegistry.registerPresetSource(capability)
+        const presetRegistry = yield* PresetRegistry.Service
+        const sourceRegistration = yield* presetRegistry
+          .registerSource(capability.id)
+          .pipe(Effect.tapError(() => capabilityRegistration.unregister()))
+        return { capabilityRegistration, sourceRegistration }
+      }).pipe(
+        Effect.map(({ capabilityRegistration, sourceRegistration }) =>
+          this.bindPresetRegistration(owner, capabilityRegistration, sourceRegistration),
+        ),
       ),
     )
   }
@@ -270,6 +319,15 @@ export class Yokai extends Service<Config> implements YokaiCapabilityHost {
   getModelCatalog(): Promise<ModelCatalogSnapshot> {
     return this.runEffect(
       CapabilityRegistry.Service.pipe(Effect.flatMap((registry) => registry.modelCatalog())),
+    )
+  }
+
+  getPresetSnapshot(presetId: PresetId): Promise<PresetSnapshot | undefined> {
+    return this.runEffect(
+      PresetRegistry.Service.pipe(
+        Effect.flatMap((registry) => registry.snapshot(presetId)),
+        Effect.map(Option.getOrUndefined),
+      ),
     )
   }
 

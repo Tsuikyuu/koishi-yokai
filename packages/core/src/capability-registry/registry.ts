@@ -123,6 +123,7 @@ export interface Interface {
     capability: ResponseMechanism,
   ) => Effect.Effect<CapabilityRegistration, CapabilityConflictError>
   readonly snapshot: () => Effect.Effect<TurnCapabilitySnapshot>
+  readonly changes: Stream.Stream<TurnCapabilitySnapshot>
   readonly modelCatalog: () => Effect.Effect<ModelCatalogSnapshot>
   readonly modelCatalogChanges: Stream.Stream<ModelCatalogSnapshot>
   readonly refreshModels: (
@@ -761,6 +762,10 @@ const make = Effect.fn('CapabilityRegistry.make')(function* () {
     snapshot: Effect.fn('CapabilityRegistry.snapshot')(function* () {
       return turnSnapshot(yield* SubscriptionRef.get(stateRef))
     }),
+    changes: SubscriptionRef.changes(stateRef).pipe(
+      Stream.changesWith((left, right) => left.revision === right.revision),
+      Stream.map(turnSnapshot),
+    ),
     modelCatalog: Effect.fn('CapabilityRegistry.modelCatalog')(function* () {
       return (yield* SubscriptionRef.get(stateRef)).modelCatalog
     }),

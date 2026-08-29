@@ -17,6 +17,7 @@ import {
   DEFAULT_DIRECT_DEBOUNCE_MS,
   DEFAULT_NORMAL_DAY_CALLS,
   DEFAULT_NORMAL_MINUTE_CALLS,
+  DEFAULT_PRESET_RELOAD_DEBOUNCE_MS,
   DEFAULT_RELEVANCE_THRESHOLD,
   DEFAULT_RESERVED_DAY_CALLS,
   DEFAULT_RESERVED_MINUTE_CALLS,
@@ -34,6 +35,7 @@ it('keeps model, local wake gating, budgets, instance, and retention in main con
     model: 'gemini/gemini-2.5-flash',
     feedbackToolsEnabled: true,
     messageRetentionDays: 90,
+    presetReloadDebounceMs: DEFAULT_PRESET_RELOAD_DEBOUNCE_MS,
     wake: {
       directDebounceMs: DEFAULT_DIRECT_DEBOUNCE_MS,
       activityDebounceMs: DEFAULT_ACTIVITY_DEBOUNCE_MS,
@@ -61,6 +63,9 @@ it('keeps model, local wake gating, budgets, instance, and retention in main con
   const feedbackToolsEnabled = fields.feedbackToolsEnabled
   const instanceId = fields.instanceId
   const messageRetentionDays = fields.messageRetentionDays
+  const presetId = fields.presetId
+  const presetDirectory = fields.presetDirectory
+  const presetReloadDebounceMs = fields.presetReloadDebounceMs
   const wake = fields.wake
   const callBudget = fields.callBudget
   if (
@@ -68,6 +73,9 @@ it('keeps model, local wake gating, budgets, instance, and retention in main con
     feedbackToolsEnabled === undefined ||
     instanceId === undefined ||
     messageRetentionDays === undefined ||
+    presetId === undefined ||
+    presetDirectory === undefined ||
+    presetReloadDebounceMs === undefined ||
     wake === undefined ||
     callBudget === undefined
   ) {
@@ -84,6 +92,9 @@ it('keeps model, local wake gating, budgets, instance, and retention in main con
   expect(messageRetentionDays.meta.default).toBe(90)
   expect(messageRetentionDays.meta.min).toBe(1)
   expect(messageRetentionDays.meta.max).toBe(3_650)
+  expect(presetId.meta.default).toBeUndefined()
+  expect(presetDirectory.meta.role).toBe('path')
+  expect(presetReloadDebounceMs.meta.default).toBe(DEFAULT_PRESET_RELOAD_DEBOUNCE_MS)
   expect(wake({ directDebounceMs: 800 })).toEqual({
     directDebounceMs: 800,
     activityDebounceMs: DEFAULT_ACTIVITY_DEBOUNCE_MS,

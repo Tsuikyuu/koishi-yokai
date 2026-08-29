@@ -1,9 +1,10 @@
-import type { ModelReference } from 'yokai-protocol'
+import type { ModelReference, PresetId } from 'yokai-protocol'
 import { Context, Layer, type Option } from 'effect'
 
 export interface Interface {
   readonly instanceId: string
   readonly model: Option.Option<ModelReference>
+  readonly presetId: Option.Option<PresetId>
   readonly feedbackToolsEnabled: boolean
 }
 

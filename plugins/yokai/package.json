@@ -25,6 +25,7 @@
   },
   "dependencies": {
     "effect": "4.0.0-rc.110",
+    "yaml": "^2.9.0",
     "yokai-protocol": "workspace:^"
   },
   "devDependencies": {
