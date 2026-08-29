@@ -8,6 +8,7 @@ import {
   MAX_ACTION_TEMPLATE_BYTES,
   MAX_SYSTEM_INSTRUCTION_BYTES,
   MAX_VISIBLE_ACTION_TOOLS,
+  PROTOCOL_ID,
   type CompiledProtocol,
   type ParseContext,
   type TurnContext,
@@ -108,11 +109,12 @@ export const compile = Effect.fn('RoleResponseEnvelope.compile')(function* (
     return yield* Effect.fail(compileError('prompt-too-large', 'registry'))
   }
   const protocol: CompiledProtocol = {
+    protocolId: PROTOCOL_ID,
     systemInstruction,
     parse: (source: string, context: ParseContext) =>
       parseCompiled(
         source,
-        { scope: frozenScope, replyToMessageIds: [...context.replyToMessageIds] },
+        { scope: frozenScope, quotableMessageIds: [...context.quotableMessageIds] },
         frozenTools,
       ),
   }
@@ -125,5 +127,5 @@ export const parse = Effect.fn('RoleResponseEnvelope.parse')(function* (
   actionTools: ReadonlyArray<ActionTool>,
 ) {
   const protocol = yield* compile(actionTools, context.scope)
-  return yield* protocol.parse(source, { replyToMessageIds: context.replyToMessageIds })
+  return yield* protocol.parse(source, { quotableMessageIds: context.quotableMessageIds })
 })

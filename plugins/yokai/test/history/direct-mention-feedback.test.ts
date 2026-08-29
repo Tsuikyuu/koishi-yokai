@@ -64,7 +64,7 @@ const toolCall = AdapterGenerationStep.cases.ToolCalls.make({
 const finalText = AdapterGenerationStep.cases.Text.make({
   result: {
     _tag: 'Text',
-    text: '<yokai-response version="1"><decision action="reply"><message>周五发射。</message></decision></yokai-response>',
+    text: '<output><message>周五发射。</message></output>',
     finishReason: 'stop',
     usage: GenerationUsage.cases.Unavailable.make({}),
   },

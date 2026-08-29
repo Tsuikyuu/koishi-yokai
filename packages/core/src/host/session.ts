@@ -9,7 +9,7 @@ export class SendError extends Schema.TaggedError<SendError>('@yokai/core/HostSe
 
 export type SendText = (
   content: string,
-  replyToMessageId: Option.Option<string>,
+  quoteMessageId: Option.Option<string>,
 ) => Effect.Effect<ReadonlyArray<string>, SendError>
 
 /** Koishi-independent input frozen from one host Session at the plugin boundary. */

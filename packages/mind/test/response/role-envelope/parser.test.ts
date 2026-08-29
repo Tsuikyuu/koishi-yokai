@@ -4,40 +4,50 @@ import { Effect, Option } from 'effect'
 import { RoleResponseEnvelope } from '../../../src/index'
 import { CONTEXT, PARSE_CONTEXT, makeReactionTool, makeRichTool } from './fixtures'
 
-const response = (body: string): string => `<yokai-response version="1">${body}</yokai-response>`
+const response = (body: string): string => `<output>${body}</output>`
 
-it.effect('exhaustively decodes all five decisions and standard XML text entities', () =>
+it.effect('decodes silence, ordered plain messages, and per-message quotes', () =>
   Effect.gen(function* () {
     const protocol = yield* RoleResponseEnvelope.compile([], CONTEXT.scope)
     const documents = [
-      response('<decision action="silence"></decision>'),
-      response('<decision action="react"><message>&#x1F47B;</message></decision>'),
+      response(''),
+      response('<message>&#x1F47B;</message><message>still here</message>'),
       response(
-        '<decision action="reply" reply-to="focus-message"><message>three &amp; &lt;four&gt;</message></decision>',
+        '<message>first</message><message quote="focus-message">three &amp; &lt;four&gt;</message><message quote="recent-message">last</message>',
       ),
-      response('<decision action="follow-up"><message>still here</message></decision>'),
-      response('<decision action="initiate"><message>new topic</message></decision>'),
+      response(
+        '<message>one</message><message>two</message><message>three</message><message>four</message>',
+      ),
     ]
     const envelopes = yield* Effect.forEach(documents, (document) =>
       protocol.parse(document, PARSE_CONTEXT),
     )
 
-    expect(envelopes.map((envelope) => envelope.decision._tag)).toEqual([
-      'Silence',
-      'React',
-      'Reply',
-      'FollowUp',
-      'Initiate',
+    expect(
+      envelopes.map((envelope) =>
+        envelope.messages.map((message) => ({
+          content: message.content,
+          quote: Option.getOrNull(message.quote),
+        })),
+      ),
+    ).toEqual([
+      [],
+      [
+        { content: '👻', quote: null },
+        { content: 'still here', quote: null },
+      ],
+      [
+        { content: 'first', quote: null },
+        { content: 'three & <four>', quote: 'focus-message' },
+        { content: 'last', quote: 'recent-message' },
+      ],
+      [
+        { content: 'one', quote: null },
+        { content: 'two', quote: null },
+        { content: 'three', quote: null },
+        { content: 'four', quote: null },
+      ],
     ])
-    expect(envelopes[1]).toMatchObject({ decision: { _tag: 'React', message: '👻' } })
-    expect(envelopes[2]).toMatchObject({
-      decision: { _tag: 'Reply', message: 'three & <four>' },
-    })
-    const reply = envelopes[2]
-    if (reply === undefined || reply.decision._tag !== 'Reply') {
-      return yield* Effect.die('Expected a reply decision')
-    }
-    expect(reply.decision.replyTo).toEqual(Option.some('focus-message'))
   }),
 )
 
@@ -46,20 +56,17 @@ it.effect('decodes the fixed engagement directive and optional absence', () =>
     const protocol = yield* RoleResponseEnvelope.compile([], CONTEXT.scope)
     const extended = yield* protocol.parse(
       response(
-        '<decision action="reply"><message>continue</message></decision><directives><engagement action="extend"></engagement></directives>',
+        '<message>continue</message><directives><engagement action="extend"></engagement></directives>',
       ),
       PARSE_CONTEXT,
     )
     const closed = yield* protocol.parse(
       response(
-        '<decision action="reply"><message>done</message></decision><directives><engagement action="close"></engagement></directives>',
+        '<message>done</message><directives><engagement action="close"></engagement></directives>',
       ),
       PARSE_CONTEXT,
     )
-    const absent = yield* protocol.parse(
-      response('<decision action="reply"><message>neutral</message></decision>'),
-      PARSE_CONTEXT,
-    )
+    const absent = yield* protocol.parse(response('<message>neutral</message>'), PARSE_CONTEXT)
 
     expect(extended.engagement).toEqual(Option.some('extend'))
     expect(closed.engagement).toEqual(Option.some('close'))
@@ -73,7 +80,7 @@ it.effect('parses visible ActionTools recursively and preserves frozen registrat
     const schedule = yield* makeRichTool()
     const protocol = yield* RoleResponseEnvelope.compile([schedule, reaction], CONTEXT.scope)
     const envelope = yield* protocol.parse(
-      response(`<decision action="reply"><message>scheduled</message></decision>
+      response(`<message>scheduled</message>
         <actions>
           <action tool="reaction.add"><emoji>👍</emoji></action>
           <action tool="schedule.create">
@@ -113,7 +120,7 @@ it.effect('allows repeated calls to the same visible ActionTool', () =>
     const reaction = yield* makeReactionTool()
     const protocol = yield* RoleResponseEnvelope.compile([reaction], CONTEXT.scope)
     const envelope = yield* protocol.parse(
-      response(`<decision action="react"><message>nice</message></decision><actions>
+      response(`<message>nice</message><actions>
         <action tool="reaction.add"><emoji>👍</emoji></action>
         <action tool="reaction.add"><emoji>✨</emoji></action>
       </actions>`),

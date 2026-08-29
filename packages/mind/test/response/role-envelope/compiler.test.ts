@@ -44,6 +44,8 @@ it.effect('compiles a stable role-only prompt with exact templates and schema co
     const protocol = yield* RoleResponseEnvelope.compile([schedule, reaction], CONTEXT.scope)
     const prompt = protocol.systemInstruction
 
+    expect(RoleResponseEnvelope.PROTOCOL_ID).toBe('yokai.role-output/1')
+    expect(protocol.protocolId).toBe(RoleResponseEnvelope.PROTOCOL_ID)
     expect(prompt.indexOf('ActionTool reaction.add')).toBeLessThan(
       prompt.indexOf('ActionTool schedule.create'),
     )
@@ -71,6 +73,10 @@ it.effect('compiles a stable role-only prompt with exact templates and schema co
     expect(prompt).toContain('user-authored message')
     expect(prompt).toContain('untrusted context')
     expect(prompt).toContain('never claim that an asynchronous action succeeded')
+    expect(prompt).toContain('<output>')
+    expect(prompt).toContain('zero to four <message> elements')
+    expect(prompt).toContain('<message quote="VISIBLE MESSAGE ID">')
+    expect(prompt).not.toContain('<decision')
     expect(prompt).toContain('<engagement action="extend"></engagement>')
   }),
 )
@@ -81,18 +87,19 @@ it.effect('keeps the no-tool prompt closed and the convenience parser scope-awar
     expect(protocol.systemInstruction).toContain('Do not output <actions>.')
 
     const parsed = yield* RoleResponseEnvelope.parse(
-      '<yokai-response version="1"><decision action="reply" reply-to="focus-message"><message>x</message></decision></yokai-response>',
+      '<output><message quote="focus-message">x</message></output>',
       CONTEXT,
       [],
     )
-    expect(parsed.decision._tag).toBe('Reply')
+    expect(parsed.messages).toHaveLength(1)
+    expect(parsed.messages[0]).toMatchObject({ content: 'x' })
 
     const denied = yield* RoleResponseEnvelope.parse(
-      '<yokai-response version="1"><decision action="reply" reply-to="outside"><message>x</message></decision></yokai-response>',
+      '<output><message quote="outside">x</message></output>',
       CONTEXT,
       [],
     ).pipe(Effect.flip)
-    expect(denied.reason).toBe('reply-scope-denied')
+    expect(denied.reason).toBe('quote-scope-denied')
   }),
 )
 
@@ -225,7 +232,7 @@ it.effect('filters availability once and reports throwing visibility checks with
     expect(protocol.systemInstruction).not.toContain(REACTION_TEMPLATE)
     const unknown = yield* protocol
       .parse(
-        '<yokai-response version="1"><decision action="react"><message>x</message></decision><actions><action tool="reaction.add"><emoji>👍</emoji></action></actions></yokai-response>',
+        '<output><message>x</message><actions><action tool="reaction.add"><emoji>👍</emoji></action></actions></output>',
         PARSE_CONTEXT,
       )
       .pipe(Effect.flip)
@@ -262,7 +269,7 @@ it.effect('freezes the caller scope for visibility and decoded-input authorizati
     mutableScope.channelId = 'mutated-after-compile'
 
     const envelope = yield* protocol.parse(
-      '<yokai-response version="1"><decision action="react"><message>x</message></decision><actions><action tool="reaction.add"><emoji>👍</emoji></action></actions></yokai-response>',
+      '<output><message>x</message><actions><action tool="reaction.add"><emoji>👍</emoji></action></actions></output>',
       PARSE_CONTEXT,
     )
 

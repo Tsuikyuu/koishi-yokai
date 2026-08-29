@@ -42,7 +42,7 @@ const request = GenerateRequest.make({
 const finalText = AdapterGenerationStep.cases.Text.make({
   result: {
     _tag: 'Text',
-    text: '<yokai-response version="1"><decision action="reply"><message>done</message></decision></yokai-response>',
+    text: '<output><message>done</message></output>',
     finishReason: 'stop',
     usage: GenerationUsage.cases.Unavailable.make({}),
   },

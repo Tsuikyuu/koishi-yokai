@@ -105,7 +105,7 @@ const removeFullyBufferedHistory = (
   )
 }
 
-const replyToMessageIds = (
+const quotableMessageIds = (
   snapshot: TurnSnapshot.Snapshot,
   context: Option.Option<ContextFragment>,
 ): ReadonlyArray<string> => {
@@ -209,20 +209,10 @@ export const run = Effect.fn('WakeTurn.run')(function* (input: Input) {
         })
 
   const response = yield* responseProtocol.parse(result.text, {
-    replyToMessageIds: replyToMessageIds(turnSnapshot, context),
+    quotableMessageIds: quotableMessageIds(turnSnapshot, context),
   })
-  switch (response.decision._tag) {
-    case 'Silence':
-      return
-    case 'Reply':
-      yield* input
-        .sendText(response.decision.message, response.decision.replyTo)
-        .pipe(Effect.asVoid)
-      return
-    case 'React':
-    case 'FollowUp':
-    case 'Initiate':
-      yield* input.sendText(response.decision.message, Option.none()).pipe(Effect.asVoid)
+  for (const message of response.messages) {
+    yield* input.sendText(message.content, message.quote).pipe(Effect.asVoid)
   }
 })
 

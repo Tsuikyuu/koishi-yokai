@@ -18,9 +18,9 @@ const SESSION: SessionBoundary = {
   messageId: 'message',
   content: 'hello',
   isDirect: false,
-  send: (content, replyToMessageId) =>
+  send: (content, quoteMessageId) =>
     Promise.resolve([
-      replyToMessageId === undefined ? 'sent:' + content : `sent:${replyToMessageId}:${content}`,
+      quoteMessageId === undefined ? 'sent:' + content : `sent:${quoteMessageId}:${content}`,
     ]),
 }
 

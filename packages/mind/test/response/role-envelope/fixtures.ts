@@ -14,11 +14,11 @@ export const CONTEXT: RoleResponseEnvelope.TurnContext = {
     guildId: 'guild',
     channelId: 'channel',
   },
-  replyToMessageIds: ['focus-message', 'recent-message'],
+  quotableMessageIds: ['focus-message', 'recent-message'],
 }
 
 export const PARSE_CONTEXT: RoleResponseEnvelope.ParseContext = {
-  replyToMessageIds: CONTEXT.replyToMessageIds,
+  quotableMessageIds: CONTEXT.quotableMessageIds,
 }
 
 export const REACTION_TEMPLATE =

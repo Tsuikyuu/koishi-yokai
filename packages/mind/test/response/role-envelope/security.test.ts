@@ -11,62 +11,66 @@ import {
   makeTextBundleTool,
 } from './fixtures'
 
-const response = (body: string): string => `<yokai-response version="1">${body}</yokai-response>`
+const response = (body: string): string => `<output>${body}</output>`
 
-it.effect('rejects missing, duplicate, unknown, and scope-invalid decision content', () =>
+it.effect('rejects malformed messages, legacy grammar, excess messages, and denied quotes', () =>
   Effect.gen(function* () {
     const protocol = yield* RoleResponseEnvelope.compile([], CONTEXT.scope)
-    const documents = [
-      response('<decision action="silence"><message>leak</message></decision>'),
-      response('<decision action="react"></decision>'),
-      response('<decision action="reply"></decision>'),
-      response('<decision action="reply"><message>one</message><message>two</message></decision>'),
-      response('<decision action="reply"><message> </message></decision>'),
-      response('<decision action="unknown"><message>text</message></decision>'),
-      response(
-        '<decision action="follow-up" reply-to="focus-message"><message>x</message></decision>',
-      ),
-      response('<decision action="reply" extra="value"><message>x</message></decision>'),
+    const malformed = [
+      response('<message> </message>'),
+      response('<message extra="value">x</message>'),
+      response('<message quote="focus-message" extra="value">x</message>'),
+      response('<message quote="">x</message>'),
     ]
-    const failures = yield* Effect.forEach(documents, (document) =>
+    const malformedFailures = yield* Effect.forEach(malformed, (document) =>
       protocol.parse(document, PARSE_CONTEXT).pipe(Effect.flip),
     )
+    expect(malformedFailures.every((failure) => failure.reason === 'invalid-message')).toBe(true)
 
-    expect(failures.every((failure) => failure.reason === 'invalid-decision')).toBe(true)
+    const tooMany = yield* protocol
+      .parse(response('<message>x</message>'.repeat(5)), PARSE_CONTEXT)
+      .pipe(Effect.flip)
+    expect(tooMany.reason).toBe('too-many-messages')
+
+    const legacy = [
+      '<yokai-response version="1"><decision action="reply"><message>x</message></decision></yokai-response>',
+      response('<decision action="reply"><message>x</message></decision>'),
+    ]
+    const legacyFailures = yield* Effect.forEach(legacy, (document) =>
+      protocol.parse(document, PARSE_CONTEXT).pipe(Effect.flip),
+    )
+    expect(
+      legacyFailures.every((failure) => failure._tag === 'RoleResponseEnvelopeParseError'),
+    ).toBe(true)
 
     const denied = yield* protocol
-      .parse(
-        response(
-          '<decision action="reply" reply-to="outside-frozen-turn"><message>x</message></decision>',
-        ),
-        PARSE_CONTEXT,
-      )
+      .parse(response('<message quote="outside-frozen-turn">x</message>'), PARSE_CONTEXT)
       .pipe(Effect.flip)
-    expect(denied.reason).toBe('reply-scope-denied')
+    expect(denied.reason).toBe('quote-scope-denied')
   }),
 )
 
 it.effect('rejects unknown, duplicate, malformed, or out-of-order directives and sections', () =>
   Effect.gen(function* () {
     const protocol = yield* RoleResponseEnvelope.compile([], CONTEXT.scope)
-    const decision = '<decision action="reply"><message>x</message></decision>'
+    const message = '<message>x</message>'
     const invalid = [
-      response(`${decision}<directives></directives>`),
-      response(`${decision}<directives><unknown action="extend"></unknown></directives>`),
-      response(`${decision}<directives><engagement action="keep"></engagement></directives>`),
-      response(`${decision}<directives><engagement action="extend">text</engagement></directives>`),
+      response(`${message}<directives></directives>`),
+      response(`${message}<directives><unknown action="extend"></unknown></directives>`),
+      response(`${message}<directives><engagement action="keep"></engagement></directives>`),
+      response(`${message}<directives><engagement action="extend">text</engagement></directives>`),
       response(
-        `${decision}<directives><engagement action="extend" extra="x"></engagement></directives>`,
+        `${message}<directives><engagement action="extend" extra="x"></engagement></directives>`,
       ),
       response(
-        `${decision}<directives><engagement action="extend"></engagement><engagement action="close"></engagement></directives>`,
+        `${message}<directives><engagement action="extend"></engagement><engagement action="close"></engagement></directives>`,
       ),
       response(
-        `${decision}<directives><engagement action="extend"></engagement></directives><directives><engagement action="close"></engagement></directives>`,
+        `${message}<directives><engagement action="extend"></engagement></directives><directives><engagement action="close"></engagement></directives>`,
       ),
-      response(`${decision}<actions></actions>`),
-      response(`<actions></actions>${decision}`),
-      response(`${decision}<unknown></unknown>`),
+      response(`${message}<actions></actions>`),
+      response(`<actions></actions>${message}`),
+      response(`${message}<unknown></unknown>`),
     ]
 
     const failures = yield* Effect.forEach(invalid, (document) =>
@@ -82,15 +86,15 @@ it.effect('rejects unknown tools and every schema or structural mismatch before 
   Effect.gen(function* () {
     const schedule = yield* makeRichTool()
     const protocol = yield* RoleResponseEnvelope.compile([schedule], CONTEXT.scope)
-    const decision = '<decision action="reply"><message>x</message></decision>'
+    const message = '<message>x</message>'
     const action = (body: string, attributes = '') =>
       response(
-        `${decision}<actions><action tool="schedule.create"${attributes}>${body}</action></actions>`,
+        `${message}<actions><action tool="schedule.create"${attributes}>${body}</action></actions>`,
       )
     const validTail =
       '<mode>once</mode><metadata><source>focus-message</source></metadata><tags><item>tag</item></tags>'
     const invalid = [
-      response(`${decision}<actions><action tool="unknown"><query>x</query></action></actions>`),
+      response(`${message}<actions><action tool="unknown"><query>x</query></action></actions>`),
       action(`<query>x</query><count>1</count>${validTail}`, ' stage="deferred"'),
       action(`<query>x</query><count>1</count><extra>x</extra>${validTail}`),
       action(`<query>x</query><query>y</query><count>1</count>${validTail}`),
@@ -137,7 +141,7 @@ it.effect('authorizes decoded input and converts false or throwing checks into t
       },
     )
     const document = response(
-      '<decision action="react"><message>x</message></decision><actions><action tool="reaction.add"><emoji>👍</emoji></action></actions>',
+      '<message>x</message><actions><action tool="reaction.add"><emoji>👍</emoji></action></actions>',
     )
     const failures = yield* Effect.forEach([unavailable, throwing], (tool) =>
       RoleResponseEnvelope.compile([tool], CONTEXT.scope).pipe(
@@ -157,7 +161,7 @@ it.effect('authorizes decoded input and converts false or throwing checks into t
     const invalidInput = yield* protocol
       .parse(
         response(
-          '<decision action="react"><message>x</message></decision><actions><action tool="reaction.add"><emoji><nested>not text</nested></emoji></action></actions>',
+          '<message>x</message><actions><action tool="reaction.add"><emoji><nested>not text</nested></emoji></action></actions>',
         ),
         PARSE_CONTEXT,
       )
@@ -170,21 +174,21 @@ it.effect('authorizes decoded input and converts false or throwing checks into t
 it.effect('rejects DTD, entities, PI, CDATA, comments, nested markup, and non-canonical XML', () =>
   Effect.gen(function* () {
     const protocol = yield* RoleResponseEnvelope.compile([], CONTEXT.scope)
-    const valid = response('<decision action="reply"><message>x</message></decision>')
+    const valid = response('<message>x</message>')
     const invalid = [
-      `<!DOCTYPE yokai-response>${valid}`,
-      `<!DOCTYPE yokai-response [<!ENTITY xxe SYSTEM "file:///etc/passwd">]>${valid}`,
+      `<!DOCTYPE output>${valid}`,
+      `<!DOCTYPE output [<!ENTITY xxe SYSTEM "file:///etc/passwd">]>${valid}`,
       '<?xml version="1.0"?>' + valid,
       '<!--comment-->' + valid,
-      response('<decision action="reply"><message><![CDATA[x]]></message></decision>'),
-      response('<decision action="reply"><message>&external;</message></decision>'),
-      response('<decision action="reply"><message>&#x110000;</message></decision>'),
-      response('<decision action="reply"><message><b>x</b></message></decision>'),
-      '<yokai-response version=\'1\'><decision action="silence"></decision></yokai-response>',
-      '<yokai-response version="1"><decision action="silence"/></yokai-response>',
+      response('<message><![CDATA[x]]></message>'),
+      response('<message>&external;</message>'),
+      response('<message>&#x110000;</message>'),
+      response('<message><b>x</b></message>'),
+      '<output version="1"></output>',
+      '<output/>',
       valid + 'explanation',
       'explanation' + valid,
-      '<yokai-response version="1" version="1"><decision action="silence"></decision></yokai-response>',
+      '<output version="1" version="1"></output>',
     ]
     const failures = yield* Effect.forEach(invalid, (document) =>
       protocol.parse(document, PARSE_CONTEXT).pipe(Effect.flip),
@@ -204,27 +208,27 @@ it.effect('enforces byte, depth, breadth, attribute, text, total-text, and actio
     const reactionProtocol = yield* RoleResponseEnvelope.compile([reaction], CONTEXT.scope)
     const bundle = yield* makeTextBundleTool()
     const bundleProtocol = yield* RoleResponseEnvelope.compile([bundle], CONTEXT.scope)
-    const decision = '<decision action="reply"><message>x</message></decision>'
+    const message = '<message>x</message>'
 
     const oversized = '鬼'.repeat(RoleResponseEnvelope.MAX_XML_BYTES)
-    const tooDeep = `<yokai-response version="1">${'<x>'.repeat(16)}${'</x>'.repeat(16)}</yokai-response>`
-    const tooWide = `<yokai-response version="1">${'<x></x>'.repeat(RoleResponseEnvelope.MAX_XML_ELEMENTS)}</yokai-response>`
+    const tooDeep = `<output>${'<x>'.repeat(16)}${'</x>'.repeat(16)}</output>`
+    const tooWide = `<output>${'<x></x>'.repeat(RoleResponseEnvelope.MAX_XML_ELEMENTS)}</output>`
     const attributes = Array.from(
-      { length: RoleResponseEnvelope.MAX_XML_ATTRIBUTES },
+      { length: RoleResponseEnvelope.MAX_XML_ATTRIBUTES + 1 },
       (_, index) => ` a${index}="x"`,
     ).join('')
-    const tooManyAttributes = `<yokai-response version="1"${attributes}></yokai-response>`
+    const tooManyAttributes = `<output${attributes}></output>`
     const tooLongText = response(
-      `<decision action="reply"><message>${'x'.repeat(RoleResponseEnvelope.MAX_TEXT_LENGTH + 1)}</message></decision>`,
+      `<message>${'x'.repeat(RoleResponseEnvelope.MAX_TEXT_LENGTH + 1)}</message>`,
     )
     const text = 'x'.repeat(RoleResponseEnvelope.MAX_TEXT_LENGTH)
     const tooMuchText = response(
-      `${decision}<actions><action tool="text.bundle"><one>${text}</one><two>${text}</two><three>${text}</three></action></actions>`,
+      `${message}<actions><action tool="text.bundle"><one>${text}</one><two>${text}</two><three>${text}</three></action></actions>`,
     )
     const calls = '<action tool="reaction.add"><emoji>👍</emoji></action>'.repeat(
       RoleResponseEnvelope.MAX_ACTIONS + 1,
     )
-    const tooManyActions = response(`${decision}<actions>${calls}</actions>`)
+    const tooManyActions = response(`${message}<actions>${calls}</actions>`)
 
     const failures = yield* Effect.all([
       empty.parse(oversized, PARSE_CONTEXT).pipe(Effect.flip),

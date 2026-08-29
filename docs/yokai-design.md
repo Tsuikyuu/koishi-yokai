@@ -292,7 +292,10 @@ Yokai 需要缓慢变化的当前状态，避免每轮像全新的客服会话�
 
 ### 3.8 发言决策
 
-Yokai 的行为集合固定为 `silence`、`react`、`reply`、`follow-up` 和 `initiate`。
+Yokai 的社会行为仍可描述为 `silence`、`react`、`reply`、`follow-up` 和 `initiate`，但这些是主体
+结合唤醒原因、冻结上下文和能力所理解的内部意图，不是模型输出 XML 中的 wire decision。
+零个输出 message 表示 silence；平台反应使用 ActionTool；回复、跟进和主动发言均输出普通 message。
+message 上可选的 quote 只表示这一段需要平台引用，不重新引入 reply decision。
 
 每种行为计算社会效用：
 
@@ -324,10 +327,8 @@ utility =
 FeedbackTool 使用 adapter 的原生 function calling；无需结果的 ActionTool 继续使用最终 XML：
 
 ```xml
-<yokai-response version="1">
-  <decision action="reply" reply-to="message-id">
-    <message>三点是吧，我记一下</message>
-  </decision>
+<output>
+  <message quote="message-id">三点是吧，我记一下</message>
   <actions>
     <action tool="schedule.create">
       <time>15:00</time>
@@ -340,19 +341,27 @@ FeedbackTool 使用 adapter 的原生 function calling；无需结果的 ActionT
       <source-message-id>message-id</source-message-id>
     </action>
   </actions>
-</yokai-response>
+</output>
 ```
 
-`decision` 只能是 `silence/react/reply/follow-up/initiate` 中的一种。`message` 是唯一可发送的
-角色文本；`actions` 可为空。每个当前可见 ActionTool 向提示词提供一段精确 XML 模板，模型只能
-复制模板并填写字段，不能自定义 Tool 名称、字段或执行阶段。
+无属性 `<output>` 根下依次为零至四个直接子级 `message`、可选 `directives` 和可选 `actions`。
+零个 message 表示 silence；一至四个 message 是按文档顺序待发的纯文本段。message 默认没有属性，
+表示普通发言；仅当某一段确实需要平台引用时，才允许为该段提供唯一的 `quote="VISIBLE MESSAGE ID"`
+属性，且目标必须命中本回合冻结的可见消息白名单。quote 是逐段传输元数据，不是 reply、follow-up 或
+initiate 的决策标签。每个当前可见 ActionTool 向提示词提供一段精确 XML 模板，模型只能复制模板并
+填写字段，不能自定义 Tool 名称、字段或执行阶段。
 
-模型输出只能包含一个 `<yokai-response>` 根元素，不允许前后说明或 Markdown 代码围栏。
+模型输出只能包含一个无属性 `<output>` 根元素，不允许前后说明或 Markdown 代码围栏。
 `message` 和参数字段只允许 XML 转义后的纯文本，不允许嵌套标记、CDATA 或处理指令。
+
+角色 XML 不携带模型自报的 version。live compiler 原子地产生提示和配对 parser，XML 只在当前回合
+短暂存在；自报版本既不权威，也无法恢复当时的 Tool 和授权范围。需要审计或回放时，宿主在 XML 外
+记录 `protocolId = yokai.role-output/1`、ActionTool 注册快照、冻结 scope 和可见消息 ID 快照；
+这个 protocolId 不进入模型 XML。只有未来出现独立消费者或持久化信封时，才在宿主边界协商并封装版本。
 
 主体完整接收文本后才解析 XML，不边生成边执行或发送。解析器禁用 DTD、外部实体和网络访问，
 并限制总字节数、元素深度、文本长度和动作数量；未知元素、重复字段、未知 Tool、越权参数和
-Schema 解码失败都会使整个信封失效。主体必须先验证全部 decision、directive 和 action，再执行
+Schema 解码失败都会使整个信封失效。主体必须先验证全部 message、quote、directive 和 action，再执行
 任何动作；XML 整体畸形时角色回合静默失败，不从残缺文本中猜测消息或工具调用。
 
 首次结果包含 FeedbackTool 调用时，任何同时出现的文本或 XML 都只是未完成草稿，主体必须丢弃，
@@ -426,7 +435,11 @@ Yokai 内置工具不提供高危写操作。第三方工具的授权、副作�
 
 - 根据消息长度、频道速度、被点名程度和当前状态计算等待时间。
 - 多段消息必须来自自然的表达结构，不能随机切割。
-- 角色回合使用创建时的冻结快照；XML 完整校验且必要前置动作成功后直接发送，不等待普通后置动作。
+- 角色回合使用创建时的冻结快照；XML 完整校验且必要前置动作成功后，YK-021 按 XML 文档顺序逐段
+  发送一至四个 message，不并发、不重排；每段仅携带自身通过白名单校验的 quote。
+- 多段平台发送不是事务；任一段发送失败后停止后续段，已经成功发送的段不伪装回滚，也不重发。
+- 首段前等待和段间节奏由 YK-021 根据长度与场景计算；解析器只保留顺序，adapter 不自行决定节奏。
+  全部消息发送完成不等待普通后置动作。
 - 不同时发送多条互相重复的候选结果。
 - 不保持全天候即时回复；活跃时间和社交精力影响参与概率。
 - 模型错误、超时和限流默认表现为沉默，不能把技术错误发进群聊。
@@ -866,7 +879,7 @@ schedule.cancel
 - 用户第一次 @ 或引用 Yokai 时自动开启。
 - XML 输出可以通过固定的 `engagement` directive 选择延长或关闭租约。
 - 租约有效期内，参与者在同一频道的新消息获得 `engagement` 提案，无须再次 @。
-- 连续发送的多段消息仍经过 debounce，合并成一个角色回合。
+- 同一参与者连续发来的多条入站消息仍经过 debounce，合并成一个角色回合。
 - 只有租约参与者的消息能触发，不把整个频道切换成逐条角色生成模式。
 - 租约受最大持续时间、最大轮数和调用预算限制。
 - 超时、达到轮数、用户明显转向其他对象或模型主动关闭后结束。
@@ -914,13 +927,17 @@ schedule.cancel
 
 ### 5.8 对 chatluna-character 的取舍
 
-参考 `koishi-plugin-chatluna-character` 的三个有效模式：
+参考 `koishi-plugin-chatluna-character` 的四个有效模式：
 
 - [`MessageCollector.addFilter()` 与 `triggerCollect()`](https://github.com/PinkElysiaDev/chatluna-character-meow/blob/main/src/service/message.ts) 把消息观察和实际模型调用分开。
 - [`TriggerStore`](https://github.com/PinkElysiaDev/chatluna-character-meow/blob/main/src/service/trigger.ts) 同时支持等待下一条消息的 `next_reply` 和持久化的 `wake_up_reply`。
 - [`Preset`](https://github.com/PinkElysiaDev/chatluna-character-meow/blob/main/src/preset.ts) 使用文件监听重载 YAML，并通过事件让对话侧清理预设缓存。
+- 本地核实的输出实现把多个顶层 `message` 保留为有序、相互独立的发送片段，并把 quote 建模为
+  每个 message 自己的可选传输元数据。
 
 Yokai 将这些模式统一成 `ResponseMechanism + WakeProposal + WakeArbiter`，避免固定间隔、活跃度、空闲、连续回复和计划任务分别硬编码一套触发流程；预设更新也由唯一版本化注册表负责，避免不同模块各自维护可能失效的预设缓存。
+Yokai 借鉴有序片段和逐 message quote 的表示，但不采用其宽松正则提取或接受任意 quote 字符串的
+解析边界；Yokai 必须严格验证完整 XML，并要求每个 quote 命中当前回合冻结的可见消息白名单。
 
 ## 6. 最小数据模型
 

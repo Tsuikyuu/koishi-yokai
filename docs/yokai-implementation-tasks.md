@@ -255,7 +255,7 @@ Yokai 不调用 `generateContentStream`，不发送 `alt=sse`，也不请求、�
 
 前置：YK-003、YK-010、YK-011。
 
-交付：先不引入活跃度、记忆和工具，定义只含 `reply/silence` 与 message 的最小 XML 信封，使用 YK-003 的 fake adapter 完成“Koishi 收到 @ → 冻结少量消息 → 通用 adapter 生成 XML → 严格解析 → 发送一条角色消息”的供应商无关最小纵切。后续 YK-020 在此解析器上扩展完整 decision、directive 和 ActionTool。
+交付：先不引入活跃度、记忆和工具，定义只含 `reply/silence` 与 message 的临时最小 XML 信封，使用 YK-003 的 fake adapter 完成“Koishi 收到 @ → 冻结少量消息 → 通用 adapter 生成 XML → 严格解析 → 发送一条角色消息”的供应商无关最小纵切。后续 YK-020 以正式角色协议取代该临时信封。
 
 验收：Koishi 集成测试只通过 `YokaiAdapter` 调用 fake adapter，发出一次生成请求和一条群消息；主体测试不导入 Gemini SDK 或 Gemini adapter；非 @ 消息不调用模型；XML 或 adapter 错误时群聊保持沉默且不泄漏协议文本。
 
@@ -321,23 +321,29 @@ Yokai 不调用 `generateContentStream`，不发送 `alt=sse`，也不请求、�
 
 前置：YK-009、YK-012、YK-019。
 
-交付：扩展 YK-012 的版本化 `<yokai-response>` XML 信封，加入 `silence/react/reply/follow-up/initiate` decision、唯一 message、ActionTool 和 directive，编译严格角色内提示及当前可见 ActionTool 的精确 XML 模板，并实现安全解析和 Schema 解码。代码级协议见 [`yokai-role-response-protocol.md`](./yokai-role-response-protocol.md)。
+交付：将 YK-012 的最小信封扩展为无属性 `<output>` 根；根下依次允许零至四个纯文本 `message`、可选 `directives` 和可选 `actions`。message 可选唯一的 `quote="VISIBLE MESSAGE ID"` 属性；普通发言默认不带 quote，只有确实需要平台引用的单段才携带 quote。编译严格角色内提示及当前可见 ActionTool 的精确 XML 模板，并实现安全解析和 Schema 解码。代码级协议见 [`yokai-role-response-protocol.md`](./yokai-role-response-protocol.md)。
+
+`MinimalResponseEnvelope` 只保留为 YK-012 临时纵切的回归边界，不在 live 回合中使用，也不代表当前角色 wire grammar。
+
+角色 XML 不保留模型自报 version：live compiler 原子地产生提示和配对 parser，XML 不作为独立信封持久化。真正的审计或回放必须由宿主在 XML 外记录 `protocolId = yokai.role-output/1`、ActionTool 注册快照、冻结 scope 和可见消息 ID 快照；这个 protocolId 不进入模型 XML，模型自报版本既不充分也不权威。未来若增加独立消费者或持久信封，再在宿主边界协商版本。
 
 验收：
 
-- 所有 decision 穷尽解码；reply 必须有合法 message，silence 不得携带待发文本。
+- 根元素恰为无属性 `<output>`；根级子元素严格按零至四个 message、可选 directives、可选 actions 排列，不接受任何 wire decision 或其他根级元素。
+- 零个 message 即 silence；一至四个 message 均为非空、已 trim 的纯文本，并完整保留文档顺序。
+- message 默认不带属性；quote 仅为对应单段的平台引用元数据，目标必须命中 compiler 冻结的可见 message ID 白名单，普通 message 不隐式补 quote。
 - 禁用 DTD、外部实体和网络访问，并限制 XML 字节数、深度、文本长度及动作数量。
 - 未知/重复元素、未知 ActionTool、额外参数、越权作用域、畸形转义和 Schema 失败均不能进入执行器。
 - 整体 XML 畸形时不猜测或降级提取消息，不向群聊发送 XML 片段。
 - ActionTool ID、执行阶段、完成/失败策略来自能力快照，模型只能填写模板参数。
-- 提示包含角色外禁语、不可信上下文边界，以及“异步动作完成前不得声称成功”；当前、focus、群聊和用户消息均视为不可信数据，focus 以包含 `messageId`、`authorId`、`timestamp`、`content` 的带标签 JSON block 注入，其 ID 必须可用于本回合 `reply-to` 白名单。
+- 提示包含角色外禁语、不可信上下文边界，以及“异步动作完成前不得声称成功”；当前、focus、群聊和用户消息均视为不可信数据，focus 以包含 `messageId`、`authorId`、`timestamp`、`content` 的带标签 JSON block 注入，其 ID 必须进入本回合冻结的 quote 白名单。
 - 不增加角色外内容检测、二次 LLM 审查或重写步骤。
 
 ### YK-021 有界回合编排、动作执行与失败沉默
 
 前置：YK-003、YK-011、YK-014、YK-018、YK-020。
 
-交付：运行有界 ContextProvider 并组装单一冻结上下文，选择一个可用模型，执行首次生成；文本结果进入 XML 快速路径，ToolCallBatch 则执行一批 FeedbackTool 并进行唯一最终生成；最后校验角色 XML，按注册策略执行 `before-send/after-send/deferred` ActionTool，并按长度和场景计算发送节奏。生成期间不因新消息或话题变化取消、重做或复核当前回合。
+交付：运行有界 ContextProvider 并组装单一冻结上下文，选择一个可用模型，执行首次生成；文本结果进入 XML 快速路径，ToolCallBatch 则执行一批 FeedbackTool 并进行唯一最终生成；最后校验角色 XML，按注册策略执行 `before-send/after-send/deferred` ActionTool，对一至四个 message 按 XML 顺序逐段发送，并按长度和场景计算首段前等待与段间节奏。生成期间不因新消息或话题变化取消、重做或复核当前回合。
 
 验收：
 
@@ -352,7 +358,9 @@ Yokai 不调用 `generateContentStream`，不发送 `alt=sse`，也不请求、�
 - ActionTool 结果从不传给 adapter；任何 ActionTool 都不能递归触发当前回合的生成。
 - `before-send` ActionTool 只执行低延迟允许项并受统一短超时；配置为 block-reply 的失败阻止发送。
 - `after-send` ActionTool 不延迟消息；`deferred` 由有主作用域持有，完成后至多提交一个新 WakeProposal。
-- 决策为 silence 时不发送；adapter、Tool、XML、超时和限流错误都不进入群聊。
+- 零个 message 时不发送；一至四个 message 不并发、不重排，逐段只发送自身文本及自身通过白名单校验的 quote。
+- 任一段平台发送失败后停止后续段；已经成功发送的段不重发，也不伪装成可回滚事务。
+- adapter、Tool、XML、超时和限流错误都不进入群聊。
 - 生成后不重读频道；记录模型耗时与人为发送等待，二者分开统计。
 
 ## 5. 仿生能力增量
@@ -387,7 +395,7 @@ Yokai 不调用 `generateContentStream`，不发送 `alt=sse`，也不请求、�
 
 交付：在 @/回复后建立有界 `EngagementLease`，支持延长/关闭 directive 和 engagement 提案。
 
-验收：只有租约参与者可继续触发；多段消息仍合并；TTL、最大轮数、转话题和显式关闭均可结束租约；过期后恢复普通门控。
+验收：只有租约参与者可继续触发；同一参与者连续发来的多条入站消息仍合并为一个角色回合；TTL、最大轮数、转话题和显式关闭均可结束租约；过期后恢复普通门控。
 
 ### YK-026 持久化定时任务
 

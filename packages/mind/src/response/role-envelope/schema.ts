@@ -7,40 +7,42 @@ export const MAX_XML_ELEMENTS = 1_024
 export const MAX_XML_ATTRIBUTES = 128
 export const MAX_TEXT_LENGTH = 4_096
 export const MAX_TOTAL_TEXT_LENGTH = 12_288
+export const MAX_MESSAGES = 4
 export const MAX_ACTIONS = 8
 export const MAX_VISIBLE_ACTION_TOOLS = 16
 export const MAX_ACTION_TEMPLATE_BYTES = 16_384
 export const MAX_SYSTEM_INSTRUCTION_BYTES = 65_536
+export const PROTOCOL_ID = 'yokai.role-output/1'
 
-export const Message = Schema.String.check(
+export const MessageContent = Schema.String.check(
   Schema.isTrimmed(),
   Schema.isNonEmpty(),
   Schema.isMaxLength(MAX_TEXT_LENGTH),
 )
 
-export type Message = typeof Message.Type
+export type MessageContent = typeof MessageContent.Type
 
-export const ReplyTarget = Schema.String.check(
+export const QuoteTarget = Schema.String.check(
   Schema.isTrimmed(),
   Schema.isNonEmpty(),
   Schema.isMaxLength(512),
   Schema.isPattern(/^[^\p{C}]+$/u),
 )
 
-export type ReplyTarget = typeof ReplyTarget.Type
+export type QuoteTarget = typeof QuoteTarget.Type
 
-export const Decision = Schema.TaggedUnion({
-  Silence: {},
-  React: { message: Message },
-  Reply: {
-    message: Message,
-    replyTo: Schema.OptionFromNullOr(ReplyTarget),
-  },
-  FollowUp: { message: Message },
-  Initiate: { message: Message },
+export const ResponseMessage = Schema.Struct({
+  content: MessageContent,
+  quote: Schema.OptionFromNullOr(QuoteTarget),
 })
 
-export type Decision = typeof Decision.Type
+export interface ResponseMessage extends Schema.Schema.Type<typeof ResponseMessage> {}
+
+export const ResponseMessages = Schema.Array(ResponseMessage).check(
+  Schema.isMaxLength(MAX_MESSAGES),
+)
+
+export type ResponseMessages = typeof ResponseMessages.Type
 
 export const EngagementDirective = Schema.Literals(['extend', 'close'])
 
@@ -52,13 +54,13 @@ export interface ParsedAction {
 }
 
 export interface Envelope {
-  readonly decision: Decision
+  readonly messages: ResponseMessages
   readonly engagement: Option.Option<EngagementDirective>
   readonly actions: ReadonlyArray<ParsedAction>
 }
 
 export interface ParseContext {
-  readonly replyToMessageIds: ReadonlyArray<string>
+  readonly quotableMessageIds: ReadonlyArray<string>
 }
 
 export interface TurnContext extends ParseContext {
@@ -95,8 +97,9 @@ export const ParseFailureReason = Schema.Literals([
   'text-too-large',
   'invalid-xml',
   'invalid-envelope',
-  'invalid-decision',
-  'reply-scope-denied',
+  'invalid-message',
+  'too-many-messages',
+  'quote-scope-denied',
   'invalid-directive',
   'too-many-actions',
   'unknown-action-tool',
@@ -115,6 +118,7 @@ export class ParseError extends Schema.TaggedError<ParseError>(
 }) {}
 
 export interface CompiledProtocol {
+  readonly protocolId: typeof PROTOCOL_ID
   readonly systemInstruction: string
   readonly parse: (source: string, context: ParseContext) => Effect.Effect<Envelope, ParseError>
 }

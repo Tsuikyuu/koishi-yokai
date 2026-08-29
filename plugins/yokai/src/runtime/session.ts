@@ -13,7 +13,7 @@ export interface SessionBoundary {
   readonly messageId: string | undefined
   readonly content: string | undefined
   readonly isDirect: boolean
-  readonly send: (content: string, replyToMessageId: string | undefined) => Promise<string[]>
+  readonly send: (content: string, quoteMessageId: string | undefined) => Promise<string[]>
 }
 
 const makeBoundary = (session: Session, content: string | undefined): SessionBoundary => ({
@@ -27,11 +27,9 @@ const makeBoundary = (session: Session, content: string | undefined): SessionBou
   messageId: session.messageId,
   content,
   isDirect: session.isDirect,
-  send: (content, replyToMessageId) =>
+  send: (content, quoteMessageId) =>
     session.send(
-      replyToMessageId === undefined
-        ? h.text(content)
-        : [h.quote(replyToMessageId), h.text(content)],
+      quoteMessageId === undefined ? h.text(content) : [h.quote(quoteMessageId), h.text(content)],
     ),
 })
 
@@ -44,10 +42,10 @@ const optional = <A>(value: A | undefined): Option.Option<A> =>
 export const makeSendText = (session: SessionBoundary) =>
   Effect.fn('KoishiSession.sendText')(function* (
     content: string,
-    replyToMessageId: Option.Option<string>,
+    quoteMessageId: Option.Option<string>,
   ) {
     return yield* Effect.tryPromise({
-      try: () => session.send(content, Option.getOrUndefined(replyToMessageId)),
+      try: () => session.send(content, Option.getOrUndefined(quoteMessageId)),
       catch: (cause) => new HostSession.SendError({ cause }),
     })
   })

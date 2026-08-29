@@ -340,8 +340,7 @@ export const structuralChildren = (element: XmlElement): ReadonlyArray<XmlElemen
   return elements
 }
 
-export const plainText = (element: XmlElement): string | undefined => {
-  if (element.attributes.length !== 0) return undefined
+export const textContent = (element: XmlElement): string | undefined => {
   const parts: Array<string> = []
   for (const child of element.children) {
     if (child._tag === 'Element') return undefined
@@ -349,3 +348,6 @@ export const plainText = (element: XmlElement): string | undefined => {
   }
   return parts.join('')
 }
+
+export const plainText = (element: XmlElement): string | undefined =>
+  element.attributes.length === 0 ? textContent(element) : undefined

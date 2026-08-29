@@ -245,9 +245,7 @@ it.effect('turns one direct mention into one generic generation and one group me
   Effect.scoped(
     Effect.gen(function* () {
       const harness = yield* makeHarness([
-        textGeneration(
-          '<yokai-response version="1"><decision action="reply"><message>三点见</message></decision></yokai-response>',
-        ),
+        textGeneration('<output><message>三点见</message></output>'),
       ])
       yield* dispatchMessage(harness, 'message-reply', h.at('bot').toString() + '  下午三点可以吗')
 
@@ -266,9 +264,7 @@ it.effect('treats a reply to Yokai as a direct wake without requiring an @', () 
   Effect.scoped(
     Effect.gen(function* () {
       const harness = yield* makeHarness([
-        textGeneration(
-          '<yokai-response version="1"><decision action="reply"><message>收到回复</message></decision></yokai-response>',
-        ),
+        textGeneration('<output><message>收到回复</message></output>'),
       ])
       yield* dispatchMessage(harness, 'message-quoted', '继续说', true)
 
@@ -287,11 +283,7 @@ it.effect('merges a direct burst into one frozen role turn', () =>
   Effect.scoped(
     Effect.gen(function* () {
       const harness = yield* makeHarness(
-        [
-          textGeneration(
-            '<yokai-response version="1"><decision action="reply"><message>合并回复</message></decision></yokai-response>',
-          ),
-        ],
+        [textGeneration('<output><message>合并回复</message></output>')],
         {
           ...CONFIG,
           wake: { directDebounceMs: 500 },
@@ -327,11 +319,7 @@ it.effect('uses the longer activity window only after local thresholds pass', ()
   Effect.scoped(
     Effect.gen(function* () {
       const harness = yield* makeHarness(
-        [
-          textGeneration(
-            '<yokai-response version="1"><decision action="reply"><message>社会触发回复</message></decision></yokai-response>',
-          ),
-        ],
+        [textGeneration('<output><message>社会触发回复</message></output>')],
         {
           ...CONFIG,
           wake: {
@@ -364,11 +352,7 @@ it.effect('keeps exhausted social budget on the zero-model cold path', () =>
   Effect.scoped(
     Effect.gen(function* () {
       const harness = yield* makeHarness(
-        [
-          textGeneration(
-            '<yokai-response version="1"><decision action="reply"><message>must not send</message></decision></yokai-response>',
-          ),
-        ],
+        [textGeneration('<output><message>must not send</message></output>')],
         {
           ...CONFIG,
           wake: { activityThreshold: 1, relevanceThreshold: 1, activityDebounceMs: 100 },
@@ -388,9 +372,7 @@ it.effect('sends decoded XML message content as text instead of Koishi elements'
   Effect.scoped(
     Effect.gen(function* () {
       const harness = yield* makeHarness([
-        textGeneration(
-          '<yokai-response version="1"><decision action="reply"><message>&lt;at id=&quot;victim&quot;/&gt;</message></decision></yokai-response>',
-        ),
+        textGeneration('<output><message>&lt;at id=&quot;victim&quot;/&gt;</message></output>'),
       ])
       yield* dispatchMessage(harness, 'message-text', h.at('bot').toString() + ' 叫一下他')
 
@@ -404,9 +386,7 @@ it.effect('does not invoke the model for a message without a direct mention', ()
   Effect.scoped(
     Effect.gen(function* () {
       const harness = yield* makeHarness([
-        textGeneration(
-          '<yokai-response version="1"><decision action="reply"><message>must not send</message></decision></yokai-response>',
-        ),
+        textGeneration('<output><message>must not send</message></output>'),
       ])
       yield* dispatchMessage(harness, 'message-ordinary', '大家下午三点可以吗')
 
@@ -421,13 +401,8 @@ it.effect('keeps messages arriving during generation out of the frozen turn snap
   Effect.scoped(
     Effect.gen(function* () {
       const harness = yield* makeHarness([
-        textGeneration(
-          '<yokai-response version="1"><decision action="reply"><message>first</message></decision></yokai-response>',
-          true,
-        ),
-        textGeneration(
-          '<yokai-response version="1"><decision action="reply"><message>second</message></decision></yokai-response>',
-        ),
+        textGeneration('<output><message>first</message></output>', true),
+        textGeneration('<output><message>second</message></output>'),
       ])
 
       const firstDispatch = yield* dispatchMessage(
@@ -463,13 +438,8 @@ it.effect('keeps the current preset frozen while the next turn sees a hot update
     Effect.gen(function* () {
       const harness = yield* makeHarness(
         [
-          textGeneration(
-            '<yokai-response version="1"><decision action="reply"><message>first</message></decision></yokai-response>',
-            true,
-          ),
-          textGeneration(
-            '<yokai-response version="1"><decision action="reply"><message>second</message></decision></yokai-response>',
-          ),
+          textGeneration('<output><message>first</message></output>', true),
+          textGeneration('<output><message>second</message></output>'),
         ],
         { ...CONFIG, presetId: 'koharu' },
       )
@@ -509,33 +479,36 @@ it.effect('keeps the current preset frozen while the next turn sees a hot update
   ),
 )
 
-it.effect('uses the complete role protocol and freezes valid reply targets', () =>
+it.effect('sends ordered message segments and applies quotes only to their own segment', () =>
   Effect.scoped(
     Effect.gen(function* () {
       const harness = yield* makeHarness([
         textGeneration(
-          '<yokai-response version="1"><decision action="react"><message>nice</message></decision><directives><engagement action="extend"></engagement></directives></yokai-response>',
+          '<output><message>nice</message><message>one more thought</message><directives><engagement action="extend"></engagement></directives></output>',
         ),
         textGeneration(
-          '<yokai-response version="1"><decision action="follow-up"><message>one more thought</message></decision></yokai-response>',
+          '<output><message>plain before</message><message quote="message-quoted">threaded reply</message><message>plain after</message></output>',
         ),
         textGeneration(
-          '<yokai-response version="1"><decision action="initiate"><message>new topic</message></decision></yokai-response>',
+          '<output><message quote="outside-snapshot">must not send</message></output>',
         ),
         textGeneration(
-          '<yokai-response version="1"><decision action="reply" reply-to="message-reply"><message>threaded reply</message></decision></yokai-response>',
+          '<output><message>must not send</message><actions><action tool="not-visible"><value>ignored</value></action></actions></output>',
         ),
         textGeneration(
-          '<yokai-response version="1"><decision action="reply" reply-to="outside-snapshot"><message>must not send</message></decision></yokai-response>',
+          '<yokai-response version="1"><decision action="reply"><message>legacy</message></decision></yokai-response>',
         ),
         textGeneration(
-          '<yokai-response version="1"><decision action="reply"><message>must not send</message></decision><actions><action tool="not-visible"><value>ignored</value></action></actions></yokai-response>',
+          '<output><message>one</message><message>two</message><message>three</message><message>four</message><message>five</message></output>',
         ),
       ])
 
-      yield* dispatchMessage(harness, 'message-react', h.at('bot').toString() + ' react')
+      yield* dispatchMessage(harness, 'message-multi', h.at('bot').toString() + ' multi')
       const firstRequest = yield* Queue.take(harness.requests)
-      expect(firstRequest.systemInstruction).toContain('<decision action="react">')
+      expect(firstRequest.systemInstruction).toContain('<output>')
+      expect(firstRequest.systemInstruction).toContain('zero to four <message> elements')
+      expect(firstRequest.systemInstruction).toContain('<message quote="VISIBLE MESSAGE ID">')
+      expect(firstRequest.systemInstruction).not.toContain('<decision')
       expect(firstRequest.systemInstruction).toContain('No ActionTool is visible in this turn')
       expect(firstRequest.systemInstruction).toContain('training data')
       expect(firstRequest.systemInstruction).toContain('context window')
@@ -543,20 +516,19 @@ it.effect('uses the complete role protocol and freezes valid reply targets', () 
       expect(firstRequest.systemInstruction).toContain('user-authored message')
       expect(firstRequest.systemInstruction).toContain('untrusted context')
       expect(yield* Queue.take(harness.sentMessages)).toBe('nice')
-
-      yield* dispatchMessage(harness, 'message-follow-up', h.at('bot').toString() + ' continue')
       expect(yield* Queue.take(harness.sentMessages)).toBe('one more thought')
 
-      yield* dispatchMessage(harness, 'message-initiate', h.at('bot').toString() + ' start')
-      expect(yield* Queue.take(harness.sentMessages)).toBe('new topic')
-
-      yield* dispatchMessage(harness, 'message-reply', h.at('bot').toString() + ' reply')
+      yield* dispatchMessage(harness, 'message-quoted', h.at('bot').toString() + ' quote')
+      expect(yield* Queue.take(harness.sentMessages)).toBe('plain before')
       expect(yield* Queue.take(harness.sentMessages)).toBe(
-        '<quote id="message-reply"/>threaded reply',
+        '<quote id="message-quoted"/>threaded reply',
       )
+      expect(yield* Queue.take(harness.sentMessages)).toBe('plain after')
 
       yield* dispatchMessage(harness, 'message-outside', h.at('bot').toString() + ' invalid target')
       yield* dispatchMessage(harness, 'message-action', h.at('bot').toString() + ' invalid action')
+      yield* dispatchMessage(harness, 'message-legacy', h.at('bot').toString() + ' legacy')
+      yield* dispatchMessage(harness, 'message-excess', h.at('bot').toString() + ' excess')
       expect(yield* Queue.size(harness.sentMessages)).toBe(0)
       expect(yield* generationStarts(harness.subject)).toHaveLength(6)
     }),
@@ -567,10 +539,8 @@ it.effect('keeps silence and malformed XML out of group chat', () =>
   Effect.scoped(
     Effect.gen(function* () {
       const harness = yield* makeHarness([
-        textGeneration(
-          '<yokai-response version="1"><decision action="silence"></decision></yokai-response>',
-        ),
-        textGeneration('<yokai-response>protocol leak</yokai-response>'),
+        textGeneration('<output></output>'),
+        textGeneration('<output><message>protocol leak</output>'),
       ])
       yield* dispatchMessage(harness, 'message-silence', h.at('bot').toString() + ' 在吗')
       yield* dispatchMessage(harness, 'message-malformed', h.at('bot').toString() + ' 回一下')
