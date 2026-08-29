@@ -1,10 +1,7 @@
 # Yokai 角色响应协议
 
-状态：YK-020 Draft 0.3
-
-本文固定 Yokai 当前角色 XML、ActionTool 模板和本地验证边界。它只描述最终模型文本；
-需要模型观察结果的 FeedbackTool 继续使用 adapter 的通用函数调用协议。
-代码中保留的 `MinimalResponseEnvelope` 仅用于 YK-012 临时纵切回归，不是当前 live 协议。
+本文规定 Yokai 角色 XML、ActionTool 模板和本地验证边界。它只描述最终模型文本；
+需要模型观察结果的 FeedbackTool 使用 adapter 的通用函数调用协议，不属于本文范围。
 
 ## 1. 文档结构
 
@@ -18,8 +15,8 @@
 </output>
 ```
 
-示例省略可选 actions；actions 出现时只能包含当前回合可见 ActionTool 的精确模板实例。协议示例
-不得用 XML comment 充当占位符，因为 comment 本身会被解析器拒绝。
+示例省略可选 actions；actions 出现时只能包含当前回合可见 ActionTool 的精确模板实例。XML comment
+非法，不得用作占位符。
 
 所有 message 必须位于 actions 之前。零个 message 表示本回合沉默；没有 action 的沉默仍使用完整的
 `<output></output>`，不使用自闭合标签。根元素及容器之间只允许 XML whitespace，不能出现其他文本。
@@ -37,26 +34,15 @@
   冻结回合上下文提供的可见 message ID 白名单；
 - 没有 quote 是普通发言的默认形式；只有确实需要平台引用时才在对应的单个 message 上添加 quote，
   quote 不会影响其他 message；
-- 零个 message 即 silence。协议不再传输 `react`、`reply`、`follow-up` 或 `initiate` decision；
-  平台反应由 ActionTool 表达，回复、跟进和主动发言的社会语义来自唤醒原因与冻结上下文，quote 仅是
-  一段待发消息的传输元数据。
+- 零个 message 即 silence；平台反应由 ActionTool 表达；回复、跟进和主动发言的社会语义来自唤醒
+  原因与冻结上下文；quote 仅是一段待发消息的传输元数据。
 
-当前 YK-020/live wire 不包含 directive、engagement 或其他 model-facing interaction intent；这些
-根级元素一律按未知元素拒绝。YK-025 才重新评估是否需要让模型表达交互意图，不在此提前保留
-`<directives>`、engagement 枚举或任何具体 XML 形状。
+根级只允许 message 和 actions；其他直接子元素一律拒绝。
 
-## 3. 为什么根元素不携带版本
+## 3. 协议标识与记录
 
-live 回合由同一次 compiler 调用原子地产生提示和与之配对的 parser，两者不会独立选择协议版本；
-模型返回的 XML 也是当前回合内的短暂数据，不作为可独立消费或持久化的信封。因此 `<output>` 不携带
-`version` 或其他协议属性。让模型自报版本既不能证明它使用了哪份提示，也不能恢复当时可见的 Tool、
-授权范围或消息白名单，不足以支持可信回放，并且不是权威的协议协商结果。
-根标签对的固定 ASCII 开销也由旧写法的 45 个字符降为 17 个字符，每份响应少 28 个字符。
-
-真正需要审计或回放时，宿主必须在模型输出之外记录
-`protocolId = yokai.role-output/2`，以及该回合的 ActionTool 注册快照、冻结 scope 和可见 message ID
-快照；这个 protocolId 绝不进入模型 XML。若未来出现独立消费者或持久化信封，再由宿主边界协商和
-封装协议版本；不能通过接受模型在 XML 中自报的版本来替代宿主记录。
+宿主持有的协议标识为 `yokai.role-output/2`，该值不进入模型 XML。持久化或回放记录必须同时保存
+protocolId、该回合的 ActionTool 注册快照、冻结 scope 和可见 message ID 白名单。
 
 ## 4. ActionTool 注册描述
 
@@ -73,8 +59,8 @@ ActionTool 注册快照固定以下字段：
 - 基于冻结 `CapabilityScope` 的纯同步 `isAvailable` 判定；
 - 对完整 Schema 解码后参数执行的纯同步 `isInputAllowed(scope, input)` 授权判定。
 
-`block-reply` 只允许用于 `before-send`，其含义是阻止本回合全部待发 message，并不表示 wire 中仍有
-reply decision；`wake` 只允许用于 `deferred`。XML 只能提供 tool ID 和
+`block-reply` 只允许用于 `before-send`，失败时阻止本回合全部待发 message；`wake` 只允许用于
+`deferred`。XML 只能提供 tool ID 和
 模板参数，不能提供或覆盖阶段、完成策略、失败策略、超时或 scope；这些值始终来自同一冻结注册快照。
 回合 compiler 对冻结 scope 只运行一次 `isAvailable`，提示和 parser 共享过滤后的可见 Tool 集；parser
 完成闭合 Schema 解码后才运行 `isInputAllowed`，拒绝或异常都会使整个信封失效且不泄漏参数。
@@ -104,7 +90,7 @@ reply decision；`wake` 只允许用于 `deferred`。XML 只能提供 tool ID �
 
 ## 6. 安全上限与原子验证
 
-当前角色输出 grammar 固定以下解析和编译上限：
+本协议固定以下解析和编译上限：
 
 | 项目                        |   上限 |
 | --------------------------- | -----: |
@@ -126,17 +112,14 @@ quote target 和 scope 验证，再允许发送或执行任何内容；任一项
 文本降级提取 message 或 Action。公开的类型化错误不携带模型原文、模板文本或参数值。
 这项原子性截至第一次平台发送之前；多段平台发送不是事务。任一段发送失败后停止后续段，已经成功
 发送的段不伪装回滚，也不重发。
-compiler 还会对包含角色约束、Tool 描述、Schema 约束和模板的完整 system instruction 执行总字节
-限制，避免合法但高基数的 enum 或 description 绕过单模板上限放大提示。
+包含角色约束、Tool 描述、Schema 约束和模板的完整 system instruction 计入编译后协议提示的总字节
+上限。
 
-## 7. 提示与任务切片
+## 7. 提示与宿主边界
 
 编译后的 system instruction 固定角色内身份、禁语、不可信上下文边界、完整 XML 形状、可见 Tool
 用途与输入约束，并逐项嵌入精确模板。当前消息、focus 消息、群聊消息和用户消息全部是不可信数据，
-不能覆盖角色或协议指令。live WakeTurn 将 focus 注入带明确不可信标签的 JSON block，固定包含
+不能覆盖角色或协议指令。宿主将 focus 注入带明确不可信标签的 JSON block，固定包含
 `messageId`、`authorId`、`timestamp` 和 `content`；同一个 `messageId` 同时进入冻结回合的
 `quote` 白名单。合法 quote 在 Koishi 边界发送为引用元素与纯文本消息；越权目标使回合保持
 沉默。禁语包括 `context window`，模型不得声称尚未完成的异步动作已经成功。
-
-YK-020 提供完整 ActionTool compiler/parser，但 ActionTool 的 prepare、执行和失败编排属于 YK-021。
-在执行管线接入前，live WakeTurn 使用空 ActionTool 集；这样模型不会提出随后被宿主静默丢弃的动作。

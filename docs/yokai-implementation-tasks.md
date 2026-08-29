@@ -1,7 +1,5 @@
 # Yokai 可验收实施任务
 
-状态：Draft 0.8
-
 依据：[`yokai-design.md`](./yokai-design.md)
 
 首发 adapter：`koishi-plugin-yokai-adapter-gemini`
@@ -35,7 +33,8 @@ Gemini 客户端：Google 官方 `@google/genai` v2 API，以实例级 fetch 注
 
 - 每个工作区可独立类型检查，根工作区能构建全部包。
 - 每个导入 Effect 的工作区都精确声明 `effect@4.0.0-rc.110`。
-- Gemini adapter 将官方 `@google/genai` 锁定为稳定 2.x 精确版本，并声明 `node >= 20` 运行时基线；其他工作区不引入该 SDK。当前精确版本尚无实例级 fetch 注入口时，Gemini adapter 工作区允许把本地 Yarn patch 作为已接受的开发期偏差并保持 `private: true`；正式发布门禁延后，发布前仍必须改用包含该注入口的上游精确版本或已发布、可审计的 scoped fork/npm alias。
+- Gemini adapter 将 `@google/genai` 锁定为稳定 2.x 精确版本，并声明 `node >= 20` 运行时基线；
+  其他工作区不引入该 SDK。
 - 包名、依赖方向和输出目录符合设计文档，没有 Koishi 依赖泄漏到内部包。
 
 ### YK-002 通用 adapter 协议
@@ -110,9 +109,8 @@ Gemini 客户端：Google 官方 `@google/genai` v2 API，以实例级 fetch 注
   `Response`；非 `2xx` 仍由 SDK 转换为 `ApiError`，不能在 body 消费前让 `ctx.http` 提前撤销 timeout 或 dispose 管理。
 - SDK 的内建 timeout 和 retry 均保持关闭。`requestTimeoutMs` 由 Effect 对每个 endpoint 尝试施加硬截止并
   通过 AbortSignal 传播到 SDK、注入 fetch 和 `ctx.http`；Koishi HTTP 自身的全局 timeout 仍生效，较早者终止请求。
-- 当前官方精确版本没有实例级 fetch 注入口时，本地 Yarn patch 是已接受的开发期偏差，Gemini adapter 包必须
-  保持 `private: true`，且该偏差不阻塞后续内部任务；正式发布门禁延后，发布前仍须切换到包含该最小注入口的
-  上游精确版本或已发布、可审计的 scoped fork/npm alias，不能要求使用者复现仓库根级 Yarn patch。
+- Gemini adapter 的发布依赖是直接提供实例级 fetch 注入口的 Google 官方 `@google/genai` 稳定 2.x
+  精确版本；发布包不依赖仓库级 patch。
 - SDK Promise 通过 `Effect.tryPromise` 调用，SDK 异常在服务边界翻译为类型化 adapter 错误。
 - adapter Layer 的作用域关闭后，进行中的 header 或 body 读取均被中断，client 引用和密钥被释放；共享的
   `ctx.http` 服务仍归 Koishi Context 所有，adapter 不主动 dispose 它。
@@ -255,7 +253,9 @@ Yokai 不调用 `generateContentStream`，不发送 `alt=sse`，也不请求、�
 
 前置：YK-003、YK-010、YK-011。
 
-交付：先不引入活跃度、记忆和工具，定义只含 `reply/silence` 与 message 的临时最小 XML 信封，使用 YK-003 的 fake adapter 完成“Koishi 收到 @ → 冻结少量消息 → 通用 adapter 生成 XML → 严格解析 → 发送一条角色消息”的供应商无关最小纵切。后续 YK-020 以正式角色协议取代该临时信封。
+交付：在不引入活跃度、记忆和工具的边界内，定义只支持单条消息或沉默的最小 XML response schema，
+使用 YK-003 的 fake adapter 完成“Koishi 收到 @ → 冻结少量消息 → 通用 adapter 生成 XML → 严格解析
+→ 发送一条角色消息”的供应商无关最小纵切。
 
 验收：Koishi 集成测试只通过 `YokaiAdapter` 调用 fake adapter，发出一次生成请求和一条群消息；主体测试不导入 Gemini SDK 或 Gemini adapter；非 @ 消息不调用模型；XML 或 adapter 错误时群聊保持沉默且不泄漏协议文本。
 
@@ -321,15 +321,18 @@ Yokai 不调用 `generateContentStream`，不发送 `alt=sse`，也不请求、�
 
 前置：YK-009、YK-012、YK-019。
 
-交付：将 YK-012 的最小信封扩展为无属性 `<output>` 根；根下依次允许零至四个纯文本 `message` 和可选 `actions`。message 可选唯一的 `quote="VISIBLE MESSAGE ID"` 属性；普通发言默认不带 quote，只有确实需要平台引用的单段才携带 quote。编译严格角色内提示及当前可见 ActionTool 的精确 XML 模板，并实现安全解析和 Schema 解码。代码级协议见 [`yokai-role-response-protocol.md`](./yokai-role-response-protocol.md)。
+交付：定义无属性 `<output>` 根；根下依次允许零至四个纯文本 `message` 和可选 `actions`。message
+可选唯一的 `quote="VISIBLE MESSAGE ID"` 属性；普通发言默认不带 quote，只有确实需要平台引用的单段
+才携带 quote。编译严格角色内提示及当前可见 ActionTool 的精确 XML 模板，并实现安全解析和 Schema
+解码。代码级协议见 [`yokai-role-response-protocol.md`](./yokai-role-response-protocol.md)。
 
-`MinimalResponseEnvelope` 只保留为 YK-012 临时纵切的回归边界，不在 live 回合中使用，也不代表当前角色 wire grammar。
-
-角色 XML 不保留模型自报 version：live compiler 原子地产生提示和配对 parser，XML 不作为独立信封持久化。真正的审计或回放必须由宿主在 XML 外记录 `protocolId = yokai.role-output/2`、ActionTool 注册快照、冻结 scope 和可见消息 ID 快照；这个 protocolId 不进入模型 XML，模型自报版本既不充分也不权威。未来若增加独立消费者或持久信封，再在宿主边界协商版本。
+编译结果携带宿主持有的 `protocolId = yokai.role-output/2`，该值不进入模型 XML。审计或回放记录同时
+保存 ActionTool 注册快照、冻结 scope 和可见消息 ID 白名单。
 
 验收：
 
-- 根元素恰为无属性 `<output>`；根级子元素严格按零至四个 message、可选 actions 排列，不接受 wire decision、directives 或其他根级元素。
+- 根元素恰为无属性 `<output>`；根级子元素严格按零至四个 message、可选 actions 排列，其他根级元素
+  一律拒绝。
 - 零个 message 即 silence；一至四个 message 均为非空、已 trim 的纯文本，并完整保留文档顺序。
 - message 默认不带属性；quote 仅为对应单段的平台引用元数据，目标必须命中 compiler 冻结的可见 message ID 白名单，普通 message 不隐式补 quote。
 - 禁用 DTD、外部实体和网络访问，并限制 XML 字节数、深度、文本长度及动作数量。
@@ -393,9 +396,14 @@ Yokai 不调用 `generateContentStream`，不发送 `alt=sse`，也不请求、�
 
 前置：YK-018、YK-021。
 
-交付：在 @/回复后建立有界 `EngagementLease`，实现宿主持有的延长/关闭状态转换和 engagement 提案；在该任务内重新评估是否需要 model-facing interaction intent。当前不预设 `<directives>`、engagement 枚举或任何具体 XML 形状；若评估后需要模型表达，必须另行冻结并验收新的宿主协议边界。
+交付：在 @/回复后建立有界 `EngagementLease`，以宿主本地状态机实现开启、续期和关闭，并在租约有效期内
+为参与者消息提交持续讨论 WakeProposal。租约状态不进入角色 XML。
 
-验收：只有租约参与者可继续触发；同一参与者连续发来的多条入站消息仍合并为一个角色回合；TTL、最大轮数、转话题和宿主显式关闭均可结束租约；过期后恢复普通门控。
+验收：只有租约参与者可继续触发；同一参与者连续发来的多条入站消息合并为一个角色回合；
+WakeArbiter 接受合并提案时恰好扣减一个剩余轮次，并将空闲到期时间更新为
+`min(now + ttl, absoluteExpiresAt)`，绝对期限不可延长；未被接受或仅在 debounce 中合并的单条消息不扣减
+轮次；`ttl` 和 `maxDuration` 为正数且 `ttl <= maxDuration`，`maxRounds` 为正整数；空闲到期、绝对期限、
+剩余轮数归零、转话题和宿主显式关闭均可结束租约；结束后恢复普通门控，时间边界由 `TestClock` 验证。
 
 ### YK-026 持久化定时任务
 
@@ -450,12 +458,14 @@ Yokai 不调用 `generateContentStream`，不发送 `alt=sse`，也不请求、�
 
 交付：分别记录活跃度分布、触发原因、合并数、逻辑生成数和供应商物理 endpoint 尝试数，以及
 single-pass/bounded-feedback 路径、FeedbackTool 批次与结果 token、ContextProvider 查询、XML 解析、
-ActionTool 阶段、费用、模型耗时、编排耗时和人为等待，提供离线回放。
+ActionTool 阶段、费用、模型耗时、编排耗时和人为等待。每个角色回合同时记录 protocolId、ActionTool
+注册快照、冻结 scope 和可见 message ID 白名单，提供离线回放。
 
 验收：同一录制输入在固定 Clock/随机服务下得到同一门控结果；可断言 single-pass 逻辑生成数为 1、
 bounded-feedback 为 2 且无第三次逻辑生成，同时单独观察每次逻辑生成的 endpoint 尝试数与超时后重复计费
 风险；汇总单次路径比例、反馈工具率、XML 有效率、唤醒到请求发出 p95、XML 编排 p95、模型耗时、
-人为等待、每 100 条消息回合数和每千条成本；调试输出脱敏且不发送到群聊。
+人为等待、每 100 条消息回合数和每千条成本；离线回放按记录的 protocolId 选择解析边界，并使用同一
+ActionTool、scope 和 quote 白名单快照，不能获得录制回合之外的动作或引用权限；调试输出脱敏且不发送到群聊。
 
 ### YK-032 匿名盲测数据集
 

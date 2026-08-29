@@ -1,7 +1,5 @@
 # Yokai LLM Adapter 协议
 
-状态：YK-002 Draft 0.1
-
 协议版本：`0.1`
 
 实现包：`yokai-protocol`
@@ -210,11 +208,3 @@ YK-002 必须拥有 `AdapterModelSnapshot` 的公共 Schema，否则 `discoverMo
   以及由各 adapter 专属测试验证的同模型物理尝试上界。
 
 Gemini adapter 必须在 YK-008 结束前通过该完整套件。
-
-## 12. 开源经验取舍
-
-- [Effect AI](https://github.com/Effect-TS/effect/tree/66114151c2b4640bf773f2b3456ce70d679422f6/packages/effect/src/unstable/ai)：借鉴 Effect service、Schema、tagged response/error 和 provider hook 分层；不公开 `effect/unstable/ai` 类型，也不采用自动 Tool handler、stream 或 `previousResponseId` 作为协议。
-- [Vercel AI SDK Provider v4](https://github.com/vercel/ai/tree/main/packages/provider/src/language-model/v4)：借鉴显式 spec version、判别结果、call ID、usage 和 provider 独立包；拒绝 `providerOptions`、raw metadata、多模态和开放式多步调用。
-- [PydanticAI deferred tools](https://github.com/pydantic/pydantic-ai/blob/main/docs/deferred-tools.md)：借鉴按 call ID 暂停和恢复、结果集合验证；拒绝完整消息历史重放、审批、partial resolution 和 durable Agent loop。
-- [LangChain standard tests](https://github.com/langchain-ai/langchainjs/tree/main/internal/standard-tests)：借鉴一个 conformance suite 验证所有 provider；不引入 Runnable、callback 或 Agent 抽象。
-- [ChatLuna](https://github.com/ChatLunaLab/chatluna)：只借鉴 Koishi 注册、disposer、动态刷新和 adapter 包拆分；不复制其 Koishi/LangChain 类型耦合、能力猜测、可变模型池或多步 Agent。其 AGPL 代码不进入 Yokai 实现。
