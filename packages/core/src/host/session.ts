@@ -7,6 +7,11 @@ export class SendError extends Schema.TaggedError<SendError>('@yokai/core/HostSe
   },
 ) {}
 
+export type SendText = (
+  content: string,
+  replyToMessageId: Option.Option<string>,
+) => Effect.Effect<ReadonlyArray<string>, SendError>
+
 /** Koishi-independent input frozen from one host Session at the plugin boundary. */
 export interface Interface {
   readonly eventType: string
@@ -19,7 +24,7 @@ export interface Interface {
   readonly messageId: Option.Option<string>
   readonly content: Option.Option<string>
   readonly isDirect: boolean
-  readonly sendText: (content: string) => Effect.Effect<ReadonlyArray<string>, SendError>
+  readonly sendText: SendText
 }
 
 export class Service extends Context.Service<Service, Interface>()('@yokai/core/HostSession') {}

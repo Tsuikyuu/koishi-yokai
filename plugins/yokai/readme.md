@@ -31,10 +31,21 @@ MVP 不同步撤回或删除事件，也不提供消息级或手动删除入口�
 并同时受 token 预算约束。达到上限时优先保留焦点和最新消息；生成期间到达的消息只进入下一回合，
 不会改变已经发给通用 `YokaiAdapter` 的快照。
 
-当前最小响应协议只接受版本 1 的 `reply` 或 `silence` XML：合法 reply 最多发送一条纯文本
-角色消息；模型不可用、adapter 失败或 XML 整体无效时保持沉默。首次生成前可加入
-有界历史 ContextProvider；显式启用且 adapter 支持时，允许一批 `history.search` FeedbackTool
-调用和唯一一次最终生成。该路径仍不启用记忆或 ActionTool，也不会自动切换模型。
+当前消息、焦点消息、群聊消息和用户消息都按不可信数据处理。live 回合把焦点消息放进带明确
+不可信标签的 JSON block，固定包含 `messageId`、`authorId`、`timestamp` 和 `content`；其中的
+`messageId` 同时进入冻结回合的 `reply-to` 白名单，因此模型能看到并安全引用焦点消息。
+
+角色响应协议只接受版本 1 的单个 `<yokai-response>` XML 文档，并穷尽解码
+`silence/react/reply/follow-up/initiate` 五种 decision。除 `silence` 外，每种 decision 都必须包含
+唯一一条纯文本角色消息；`reply-to` 只能引用本回合冻结上下文中的消息 ID，并在发送边界转换为
+Koishi 引用元素。协议同时定义固定的
+engagement directive，以及由注册快照编译并经闭合 Schema 校验的 ActionTool XML 模板。
+未知或重复元素、越权引用、DTD、外部实体、畸形 XML 和任何超限输出都会使整个回合保持沉默，
+不会降级提取或发送 XML 片段。
+
+首次生成前可加入有界历史 ContextProvider；显式启用且 adapter 支持时，允许一批
+`history.search` FeedbackTool 调用和唯一一次最终生成。动作执行管线接入前，live 回合不会向模型
+暴露 ActionTool 模板，避免模型提出宿主尚不能诚实执行的动作；该路径也不会自动切换模型。
 
 ## 人格预设
 

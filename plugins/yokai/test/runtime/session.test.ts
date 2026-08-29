@@ -18,7 +18,10 @@ const SESSION: SessionBoundary = {
   messageId: 'message',
   content: 'hello',
   isDirect: false,
-  send: (content) => Promise.resolve(['sent:' + content]),
+  send: (content, replyToMessageId) =>
+    Promise.resolve([
+      replyToMessageId === undefined ? 'sent:' + content : `sent:${replyToMessageId}:${content}`,
+    ]),
 }
 
 it.effect('freezes a Koishi-independent Session input and delegates text sending', () =>
@@ -35,7 +38,10 @@ it.effect('freezes a Koishi-independent Session input and delegates text sending
     expect(Option.getOrNull(session.messageId)).toBe('message')
     expect(Option.getOrNull(session.content)).toBe('hello')
     expect(session.isDirect).toBe(false)
-    expect(yield* session.sendText('world')).toEqual(['sent:world'])
+    expect(yield* session.sendText('world', Option.none())).toEqual(['sent:world'])
+    expect(yield* session.sendText('world', Option.some('source-message'))).toEqual([
+      'sent:source-message:world',
+    ])
   }).pipe(Effect.provide(KoishiSession.makeLayer(SESSION))),
 )
 
@@ -48,7 +54,7 @@ it.effect('translates Session send rejection into a typed host error', () => {
 
   return Effect.gen(function* () {
     const session = yield* HostSession.Service
-    const failure = yield* session.sendText('world').pipe(Effect.flip)
+    const failure = yield* session.sendText('world', Option.none()).pipe(Effect.flip)
 
     expect(failure._tag).toBe('HostSessionSendError')
     expect(failure.cause).toBe(canary)

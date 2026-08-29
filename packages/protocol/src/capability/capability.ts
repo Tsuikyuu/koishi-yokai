@@ -136,10 +136,83 @@ export const ContextProvider = Schema.Struct({
 
 export interface ContextProvider extends Schema.Schema.Type<typeof ContextProvider> {}
 
-export const ActionTool = Schema.Struct({
+export const MAX_ACTION_TOOL_DESCRIPTION_LENGTH = 2048
+export const MAX_ACTION_TOOL_XML_TEMPLATE_LENGTH = 16_384
+
+export const ActionToolXmlTemplate = Schema.String.check(
+  Schema.isTrimmed(),
+  Schema.isNonEmpty(),
+  Schema.isMaxLength(MAX_ACTION_TOOL_XML_TEMPLATE_LENGTH),
+).pipe(Schema.brand('@yokai/protocol/ActionToolXmlTemplate'))
+
+export type ActionToolXmlTemplate = typeof ActionToolXmlTemplate.Type
+
+export const ActionToolExecutionStage = Schema.Literals(['before-send', 'after-send', 'deferred'])
+
+export type ActionToolExecutionStage = typeof ActionToolExecutionStage.Type
+
+export const ActionToolCompletionPolicy = Schema.Literals(['none', 'wake'])
+
+export type ActionToolCompletionPolicy = typeof ActionToolCompletionPolicy.Type
+
+export const ActionToolFailurePolicy = Schema.Literals(['continue', 'block-reply'])
+
+export type ActionToolFailurePolicy = typeof ActionToolFailurePolicy.Type
+
+export const ActionToolDurationMilliseconds = Schema.Int.check(Schema.isGreaterThan(0)).pipe(
+  Schema.brand('@yokai/protocol/ActionToolDurationMilliseconds'),
+)
+
+export type ActionToolDurationMilliseconds = typeof ActionToolDurationMilliseconds.Type
+
+/** A synchronous, side-effect-free visibility check for the frozen turn scope. */
+export type ActionToolIsAvailable = (scope: CapabilityScope) => boolean
+
+const ActionToolIsAvailableSchema = Schema.declare(
+  (value): value is ActionToolIsAvailable => typeof value === 'function',
+)
+
+export const ActionToolInput = Schema.Record(Schema.String, Schema.Json)
+
+export interface ActionToolInput extends Schema.Schema.Type<typeof ActionToolInput> {}
+
+/** A synchronous, side-effect-free authorization check over fully decoded input. */
+export type ActionToolIsInputAllowed = (scope: CapabilityScope, input: ActionToolInput) => boolean
+
+const ActionToolIsInputAllowedSchema = Schema.declare(
+  (value): value is ActionToolIsInputAllowed => typeof value === 'function',
+)
+
+const ActionToolRegistration = Schema.Struct({
   id: ActionToolId,
   protocolVersion: CapabilityProtocolVersion,
+  description: Schema.String.check(
+    Schema.isTrimmed(),
+    Schema.isNonEmpty(),
+    Schema.isMaxLength(MAX_ACTION_TOOL_DESCRIPTION_LENGTH),
+  ),
+  xmlTemplate: ActionToolXmlTemplate,
+  inputSchema: PortableToolInputSchema,
+  executionStage: ActionToolExecutionStage,
+  completionPolicy: ActionToolCompletionPolicy,
+  failurePolicy: ActionToolFailurePolicy,
+  maxDurationMs: ActionToolDurationMilliseconds,
+  isAvailable: ActionToolIsAvailableSchema,
+  isInputAllowed: ActionToolIsInputAllowedSchema,
 })
+
+interface ActionToolRegistration extends Schema.Schema.Type<typeof ActionToolRegistration> {}
+
+export const ActionTool = ActionToolRegistration.check(
+  Schema.makeFilter((tool: ActionToolRegistration) => {
+    if (tool.failurePolicy === 'block-reply' && tool.executionStage !== 'before-send') {
+      return 'Expected block-reply ActionTool failure policy only at before-send stage'
+    }
+    return tool.completionPolicy === 'wake' && tool.executionStage !== 'deferred'
+      ? 'Expected wake ActionTool completion policy only at deferred stage'
+      : true
+  }),
+)
 
 export interface ActionTool extends Schema.Schema.Type<typeof ActionTool> {}
 

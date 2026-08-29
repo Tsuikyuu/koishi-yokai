@@ -321,7 +321,7 @@ Yokai 不调用 `generateContentStream`，不发送 `alt=sse`，也不请求、�
 
 前置：YK-009、YK-012、YK-019。
 
-交付：扩展 YK-012 的版本化 `<yokai-response>` XML 信封，加入 `silence/react/reply/follow-up/initiate` decision、唯一 message、ActionTool 和 directive，编译严格角色内提示及当前可见 ActionTool 的精确 XML 模板，并实现安全解析和 Schema 解码。
+交付：扩展 YK-012 的版本化 `<yokai-response>` XML 信封，加入 `silence/react/reply/follow-up/initiate` decision、唯一 message、ActionTool 和 directive，编译严格角色内提示及当前可见 ActionTool 的精确 XML 模板，并实现安全解析和 Schema 解码。代码级协议见 [`yokai-role-response-protocol.md`](./yokai-role-response-protocol.md)。
 
 验收：
 
@@ -330,7 +330,7 @@ Yokai 不调用 `generateContentStream`，不发送 `alt=sse`，也不请求、�
 - 未知/重复元素、未知 ActionTool、额外参数、越权作用域、畸形转义和 Schema 失败均不能进入执行器。
 - 整体 XML 畸形时不猜测或降级提取消息，不向群聊发送 XML 片段。
 - ActionTool ID、执行阶段、完成/失败策略来自能力快照，模型只能填写模板参数。
-- 提示包含角色外禁语、不可信上下文边界，以及“异步动作完成前不得声称成功”。
+- 提示包含角色外禁语、不可信上下文边界，以及“异步动作完成前不得声称成功”；当前、focus、群聊和用户消息均视为不可信数据，focus 以包含 `messageId`、`authorId`、`timestamp`、`content` 的带标签 JSON block 注入，其 ID 必须可用于本回合 `reply-to` 白名单。
 - 不增加角色外内容检测、二次 LLM 审查或重写步骤。
 
 ### YK-021 有界回合编排、动作执行与失败沉默
