@@ -22,7 +22,9 @@
     "lint:code": "eslint . --max-warnings 0",
     "lint:fix": "eslint . --fix && prettier --write .",
     "pub": "yakumo publish",
-    "test": "vitest run"
+    "test": "vitest run",
+    "typecheck": "yakumo run yokai-workspaces -- typecheck && yakumo run yokai-workspaces -- typecheck:test",
+    "check": "yarn typecheck && yarn lint && yarn test && yarn build"
   },
   "devDependencies": {
     "@effect/vitest": "4.0.0-rc.110",

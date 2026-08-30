@@ -18,9 +18,18 @@ const OTHER_SCOPE = CapabilityScope.make({
 
 const limits = (count: number): CallBudget.ClassifiedLimits =>
   CallBudget.ClassifiedLimits.make({
-    reserved: { minute: count, day: count },
-    normal: { minute: count, day: count },
-    background: { minute: count, day: count },
+    reserved: CallBudget.WindowLimits.make({
+      minute: CallBudget.CallCount.make(count),
+      day: CallBudget.CallCount.make(count),
+    }),
+    normal: CallBudget.WindowLimits.make({
+      minute: CallBudget.CallCount.make(count),
+      day: CallBudget.CallCount.make(count),
+    }),
+    background: CallBudget.WindowLimits.make({
+      minute: CallBudget.CallCount.make(count),
+      day: CallBudget.CallCount.make(count),
+    }),
   })
 
 const testLayer = (count = 8, cooldownMs = 45_000) => {

@@ -1,6 +1,15 @@
 - id: 0fwjiy
   name: yakumo
   config:
+    alias:
+      yokai-workspaces:
+        - /packages/adapter-conformance
+        - /packages/core
+        - /packages/memory
+        - /packages/mind
+        - /packages/protocol
+        - /plugins/yokai
+        - /plugins/yokai-adapter-gemini
     pipeline:
       build:
         - tsc

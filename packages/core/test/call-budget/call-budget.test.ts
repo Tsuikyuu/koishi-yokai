@@ -8,7 +8,21 @@ const limits = (
   reserved: { readonly minute: number; readonly day: number },
   normal: { readonly minute: number; readonly day: number },
   background: { readonly minute: number; readonly day: number },
-): CallBudget.ClassifiedLimits => CallBudget.ClassifiedLimits.make({ reserved, normal, background })
+): CallBudget.ClassifiedLimits =>
+  CallBudget.ClassifiedLimits.make({
+    reserved: CallBudget.WindowLimits.make({
+      minute: CallBudget.CallCount.make(reserved.minute),
+      day: CallBudget.CallCount.make(reserved.day),
+    }),
+    normal: CallBudget.WindowLimits.make({
+      minute: CallBudget.CallCount.make(normal.minute),
+      day: CallBudget.CallCount.make(normal.day),
+    }),
+    background: CallBudget.WindowLimits.make({
+      minute: CallBudget.CallCount.make(background.minute),
+      day: CallBudget.CallCount.make(background.day),
+    }),
+  })
 
 const options = (
   classifiedLimits: CallBudget.ClassifiedLimits,

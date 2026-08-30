@@ -11,7 +11,8 @@
   "sideEffects": false,
   "license": "MIT",
   "scripts": {
-    "typecheck": "tsc --project tsconfig.json --noEmit --pretty false"
+    "typecheck": "tsc --project tsconfig.json --noEmit --pretty false",
+    "typecheck:test": "tsc --project test/tsconfig.json --pretty false"
   },
   "dependencies": {
     "@yokai-internal/memory": "workspace:^",
@@ -20,6 +21,8 @@
     "yokai-protocol": "workspace:^"
   },
   "devDependencies": {
-    "typescript": "^5.6.2"
+    "@effect/vitest": "4.0.0-rc.110",
+    "typescript": "^5.6.2",
+    "vitest": "4.1.11"
   }
 }

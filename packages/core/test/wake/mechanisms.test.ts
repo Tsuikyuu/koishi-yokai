@@ -52,9 +52,18 @@ const mechanismLayer = Layer.merge(
         Layer.provide(
           CallBudget.layer({
             limits: CallBudget.ClassifiedLimits.make({
-              reserved: { minute: 100, day: 100 },
-              normal: { minute: 100, day: 100 },
-              background: { minute: 100, day: 100 },
+              reserved: CallBudget.WindowLimits.make({
+                minute: CallBudget.CallCount.make(100),
+                day: CallBudget.CallCount.make(100),
+              }),
+              normal: CallBudget.WindowLimits.make({
+                minute: CallBudget.CallCount.make(100),
+                day: CallBudget.CallCount.make(100),
+              }),
+              background: CallBudget.WindowLimits.make({
+                minute: CallBudget.CallCount.make(100),
+                day: CallBudget.CallCount.make(100),
+              }),
             }),
             timeZone: DateTime.zoneMakeNamedUnsafe('UTC'),
           }),
