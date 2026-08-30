@@ -2,6 +2,7 @@ import { CapabilityScope, FocusMessage, ResponseMechanismId } from 'yokai-protoc
 import { Schema } from 'effect'
 
 import { Category } from '../call-budget/model'
+import type { ScheduledTaskModel } from '../schedule/model'
 
 export const ScopeId = Schema.NonEmptyString.pipe(Schema.brand('@yokai/core/WakeScopeId'))
 
@@ -114,12 +115,17 @@ export const DIRECT_MECHANISM_ID = ResponseMechanismId.make('direct')
 export const ACTIVITY_MECHANISM_ID = ResponseMechanismId.make('activity')
 export const ENGAGEMENT_MECHANISM_ID = ResponseMechanismId.make('engagement')
 export const ACTION_COMPLETION_MECHANISM_ID = ResponseMechanismId.make('action-completion')
+export const SCHEDULE_MECHANISM_ID = ResponseMechanismId.make('schedule')
 export const CHANNEL_CONVERSATION_MERGE_KEY = MergeKey.make('channel-conversation')
 export const ACTION_COMPLETION_MERGE_KEY = MergeKey.make('action-completion')
 export const ACTION_COMPLETION_REASON_CODE = ReasonCode.make('deferred-complete')
+export const SCHEDULE_REASON_CODE = ReasonCode.make('task-due')
 export const ACTION_COMPLETION_PRIORITY = Priority.make(5)
+export const SCHEDULE_PRIORITY = Priority.make(100)
 export const ACTION_COMPLETION_DEBOUNCE_MS = DurationMilliseconds.make(250)
 export const ACTION_COMPLETION_TTL_MS = DurationMilliseconds.make(10_000)
+export const SCHEDULE_DEBOUNCE_MS = DurationMilliseconds.make(0)
+export const MIN_SCHEDULE_PROPOSAL_TTL_MS = DurationMilliseconds.make(60_000)
 
 export const scopeIdOf = (scope: CapabilityScope): ScopeId =>
   ScopeId.make(JSON.stringify([scope.instanceId, scope.platform, scope.guildId, scope.channelId]))
@@ -146,6 +152,58 @@ export const deferredCompletion = (turn: Merged, now: number): Proposal =>
     budgetCategory: 'background',
     cooldownPolicy: 'enforce',
   })
+
+const scheduledMergeKey = (task: ScheduledTaskModel.Task): MergeKey =>
+  MergeKey.make(`schedule:${task.scheduleId}:${String(task.occurrence)}`)
+
+const scheduledFocusContent = (task: ScheduledTaskModel.Task): string =>
+  [
+    'The following host-managed scheduled task is now due.',
+    JSON.stringify({
+      scheduleId: task.scheduleId,
+      occurrence: task.occurrence,
+      dueAt: task.dueAt,
+      timeZone: task.timeZone,
+      reason: task.reason,
+    }),
+  ].join('\n')
+
+/** Create one non-merging reserved-budget proposal for a durably claimed occurrence. */
+export const scheduledTask = (
+  task: ScheduledTaskModel.Task,
+  now: number,
+  gracePeriodMs: DurationMilliseconds,
+): Proposal => {
+  const minimumExpiry = now + MIN_SCHEDULE_PROPOSAL_TTL_MS
+  const occurrenceGraceExpiry = task.dueAt + gracePeriodMs + 1
+  return Proposal.make({
+    scopeId: scopeIdOf(task),
+    scope: CapabilityScope.make({
+      instanceId: task.instanceId,
+      platform: task.platform,
+      guildId: task.guildId,
+      channelId: task.channelId,
+    }),
+    mergeKey: scheduledMergeKey(task),
+    kind: 'schedule',
+    reason: Reason.make({
+      mechanismId: SCHEDULE_MECHANISM_ID,
+      code: SCHEDULE_REASON_CODE,
+      priority: SCHEDULE_PRIORITY,
+    }),
+    focus: FocusMessage.make({
+      messageId: task.createdMessageId,
+      authorId: task.creatorId,
+      timestamp: task.dueAt,
+      content: scheduledFocusContent(task),
+    }),
+    submittedAt: EpochMilliseconds.make(now),
+    expiresAt: EpochMilliseconds.make(Math.max(minimumExpiry, occurrenceGraceExpiry)),
+    debounceMs: SCHEDULE_DEBOUNCE_MS,
+    budgetCategory: 'reserved',
+    cooldownPolicy: 'bypass',
+  })
+}
 
 const sameReason = (left: Reason, right: Reason): boolean =>
   left.mechanismId === right.mechanismId && left.code === right.code

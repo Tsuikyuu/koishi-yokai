@@ -24,6 +24,8 @@ export const HISTORY_CONTEXT_PROVIDER_ID = ContextProviderId.make('history.conte
 
 export const NOTEBOOK_CONTEXT_PROVIDER_ID = ContextProviderId.make('notebook.context')
 
+export const SCHEDULE_CONTEXT_PROVIDER_ID = ContextProviderId.make('schedule.context')
+
 export const ActionToolId = Schema.String.check(...capabilityIdChecks).pipe(
   Schema.brand('@yokai/protocol/ActionToolId'),
 )
@@ -31,6 +33,12 @@ export const ActionToolId = Schema.String.check(...capabilityIdChecks).pipe(
 export type ActionToolId = typeof ActionToolId.Type
 
 export const NOTEBOOK_WRITE_ACTION_TOOL_ID = ActionToolId.make('notebook.write')
+
+export const SCHEDULE_CREATE_ACTION_TOOL_ID = ActionToolId.make('schedule.create')
+
+export const SCHEDULE_UPDATE_ACTION_TOOL_ID = ActionToolId.make('schedule.update')
+
+export const SCHEDULE_CANCEL_ACTION_TOOL_ID = ActionToolId.make('schedule.cancel')
 
 export const SkillId = Schema.String.check(...capabilityIdChecks).pipe(
   Schema.brand('@yokai/protocol/SkillId'),
@@ -362,6 +370,8 @@ export const FeedbackTool = Schema.Struct({
 export interface FeedbackTool extends Schema.Schema.Type<typeof FeedbackTool> {}
 
 export const HISTORY_SEARCH_FEEDBACK_TOOL_ID = FeedbackToolId.make('history.search')
+
+export const SCHEDULE_QUERY_FEEDBACK_TOOL_ID = FeedbackToolId.make('schedule.query')
 
 export const feedbackToolDeclaration = (tool: FeedbackTool): FeedbackToolDeclaration =>
   FeedbackToolDeclaration.make({

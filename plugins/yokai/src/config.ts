@@ -5,6 +5,10 @@ export const DEFAULT_MESSAGE_RETENTION_DAYS = 90
 export const DEFAULT_NOTEBOOK_MAX_NOTES_PER_REPLY = 4
 export const DEFAULT_NOTEBOOK_RECALL_LIMIT = 8
 export const DEFAULT_NOTEBOOK_EXPIRATION_DAYS = 365
+export const DEFAULT_SCHEDULE_ENABLED = true
+export const DEFAULT_SCHEDULE_TIME_ZONE = 'UTC'
+export const DEFAULT_SCHEDULE_GRACE_PERIOD_MS = 5 * 60 * 1_000
+export const DEFAULT_SCHEDULE_CONTEXT_LIMIT = 8
 export const DEFAULT_PRESET_RELOAD_DEBOUNCE_MS = 250
 export const DEFAULT_DIRECT_DEBOUNCE_MS = 500
 export const DEFAULT_HARD_REPLY_AT_MENTION = true
@@ -85,6 +89,13 @@ export interface NotebookConfig {
   defaultExpirationDays?: number
 }
 
+export interface ScheduleConfig {
+  enabled?: boolean
+  timeZone?: string
+  gracePeriodMs?: number
+  contextLimit?: number
+}
+
 export interface Config {
   instanceId?: string
   presetId?: string
@@ -94,6 +105,7 @@ export interface Config {
   feedbackToolsEnabled: boolean
   messageRetentionDays?: number
   notebook?: NotebookConfig
+  schedule?: ScheduleConfig
   state?: StateConfig
   wake?: WakeConfig
   engagement?: EngagementConfig
@@ -290,6 +302,31 @@ const NotebookConfigSchema = Schema.object({
   defaultExpirationDays: DEFAULT_NOTEBOOK_EXPIRATION_DAYS,
 })
 
+const ScheduleConfigSchema = Schema.object({
+  enabled: Schema.boolean()
+    .default(DEFAULT_SCHEDULE_ENABLED)
+    .description('启用持久化定时任务能力与到期唤醒。'),
+  timeZone: Schema.string()
+    .default(DEFAULT_SCHEDULE_TIME_ZONE)
+    .description('解析定时任务日期和时间使用的 IANA 时区。'),
+  gracePeriodMs: Schema.natural()
+    .min(0)
+    .max(30 * 24 * 60 * 60 * 1_000)
+    .role('ms')
+    .default(DEFAULT_SCHEDULE_GRACE_PERIOD_MS)
+    .description('重启后允许错过任务立即触发的宽限时间。'),
+  contextLimit: Schema.natural()
+    .min(1)
+    .max(32)
+    .default(DEFAULT_SCHEDULE_CONTEXT_LIMIT)
+    .description('生成前注入的近期待办数量上限。'),
+}).default({
+  enabled: DEFAULT_SCHEDULE_ENABLED,
+  timeZone: DEFAULT_SCHEDULE_TIME_ZONE,
+  gracePeriodMs: DEFAULT_SCHEDULE_GRACE_PERIOD_MS,
+  contextLimit: DEFAULT_SCHEDULE_CONTEXT_LIMIT,
+})
+
 export const Config: Schema<Config> = Schema.object({
   instanceId: Schema.string()
     .pattern(/^[A-Za-z][A-Za-z0-9._-]*$/)
@@ -319,6 +356,7 @@ export const Config: Schema<Config> = Schema.object({
     .default(DEFAULT_MESSAGE_RETENTION_DAYS)
     .description('原始群聊消息的本地保留天数。'),
   notebook: NotebookConfigSchema.description('长期记事本的写入、召回和默认过期参数。'),
+  schedule: ScheduleConfigSchema.description('持久化定时任务的开关、时区、错过宽限和上下文上限。'),
   state: StateConfigSchema.description('角色心境、社交精力、近期参与和成员关系的本地状态参数。'),
   wake: WakeConfigSchema.description('硬回复开关、本地活跃度门控、合并窗口和冷却设置。'),
   engagement: EngagementConfigSchema.description('持续讨论租约的空闲期、绝对期限和轮数边界。'),

@@ -5,7 +5,13 @@ import { join } from 'node:path'
 import { expect, it } from '@effect/vitest'
 import { AdapterConformanceSetup } from 'yokai-adapter-conformance'
 import { makeFakeAdapter } from 'yokai-adapter-conformance/fake'
-import { CapabilityRegistry, HostConfiguration } from '@yokai-internal/core'
+import {
+  CapabilityRegistry,
+  HostConfiguration,
+  ScheduledDelivery,
+  ScheduledTaskModel,
+} from '@yokai-internal/core'
+import { MessageArchiveEvent } from '@yokai-internal/memory'
 import {
   AdapterDescriptor,
   AdapterId,
@@ -25,7 +31,7 @@ import {
   type YokaiAdapter,
 } from 'yokai-protocol'
 import { Deferred, Effect, Option, Queue, Ref, Schema } from 'effect'
-import { Context, type Schema as KoishiSchema } from 'koishi'
+import { Bot, Context, type Fragment, type Schema as KoishiSchema, Universal } from 'koishi'
 import { vi } from 'vitest'
 
 vi.mock('koishi', () => import('@koishijs/core'))
@@ -82,7 +88,66 @@ class TestYokai extends Yokai {
       ),
     )
   }
+
+  capabilityIds() {
+    return this.runEffect(
+      CapabilityRegistry.Service.pipe(
+        Effect.flatMap((registry) => registry.snapshot()),
+        Effect.map((snapshot) => ({
+          contextProviders: snapshot.contextProviders.map((provider) => provider.id),
+          actionTools: snapshot.actionTools.map((tool) => tool.id),
+          feedbackTools: snapshot.feedbackTools.map((tool) => tool.id),
+          responseMechanisms: snapshot.responseMechanisms.map((mechanism) => mechanism.id),
+        })),
+      ),
+    )
+  }
+
+  scheduleDeliveryAvailable(task: ScheduledTaskModel.Task) {
+    return this.runEffect(
+      ScheduledDelivery.Service.pipe(Effect.flatMap((delivery) => delivery.isAvailable(task))),
+    )
+  }
 }
+
+class ScheduleAvailabilityBot extends Bot<Context, {}> {
+  constructor(ctx: Context) {
+    super(ctx, {}, 'test')
+    this.user = { id: 'bot' }
+  }
+
+  override sendMessage(_channelId: string, _content: Fragment): Promise<string[]> {
+    return Promise.resolve(['sent'])
+  }
+
+  override dispose(): Promise<void> {
+    return Promise.resolve()
+  }
+}
+
+const scheduleTask = (selfId = 'bot'): ScheduledTaskModel.Task =>
+  ScheduledTaskModel.Task.make({
+    instanceId: MessageArchiveEvent.InstanceId.make('default'),
+    platform: MessageArchiveEvent.PlatformId.make('test'),
+    guildId: MessageArchiveEvent.GuildId.make('guild'),
+    channelId: MessageArchiveEvent.ChannelId.make('channel'),
+    scheduleId: ScheduledTaskModel.ScheduleId.make(`schedule_${'a'.repeat(32)}`),
+    dedupeKey: ScheduledTaskModel.DedupeKey.make('availability'),
+    creationFingerprint: ScheduledTaskModel.CreationFingerprint.make('a'.repeat(64)),
+    createdMessageId: MessageArchiveEvent.MessageId.make('source'),
+    creatorId: MessageArchiveEvent.ActorId.make('user'),
+    selfId: MessageArchiveEvent.ActorId.make(selfId),
+    reason: ScheduledTaskModel.Reason.make('Availability check'),
+    dueAt: ScheduledTaskModel.EpochMilliseconds.make(1_000),
+    repeatEveryMs: Option.none(),
+    timeZone: ScheduledTaskModel.TimeZoneId.make('UTC'),
+    status: 'pending',
+    occurrence: ScheduledTaskModel.Occurrence.make(0),
+    revision: ScheduledTaskModel.Revision.make(1),
+    createdAt: ScheduledTaskModel.EpochMilliseconds.make(0),
+    updatedAt: ScheduledTaskModel.EpochMilliseconds.make(0),
+    lastTriggeredAt: Option.none(),
+  })
 
 const stop = (ctx: Context) => Effect.promise(() => ctx.stop())
 
@@ -154,6 +219,19 @@ it.effect('rejects an engagement idle TTL longer than its absolute duration', ()
   }).pipe(Effect.ensuring(stop(ctx)))
 })
 
+it.effect('rejects an invalid schedule IANA time zone', () => {
+  const ctx = new Context()
+  const service = new TestYokai(ctx, {
+    feedbackToolsEnabled: false,
+    schedule: { timeZone: 'Not/A-Time-Zone' },
+  })
+
+  return Effect.gen(function* () {
+    const outcome = yield* Effect.promise(() => service.readConfiguration()).pipe(Effect.exit)
+    expect(outcome._tag).toBe('Failure')
+  }).pipe(Effect.ensuring(stop(ctx)))
+})
+
 it.effect('starts and stops when the preset directory requires asynchronous acquisition', () =>
   Effect.scoped(
     Effect.gen(function* () {
@@ -186,17 +264,54 @@ it.effect('decodes exactly one selected model reference', () => {
   }).pipe(Effect.ensuring(stop(ctx)))
 })
 
-it.effect('registers direct, activity, and engagement as built-in response mechanisms', () => {
+it.effect(
+  'registers direct, activity, engagement, and schedule as built-in response mechanisms',
+  () => {
+    const ctx = new Context()
+    const service = new TestYokai(ctx, DEFAULT_CONFIG)
+
+    return Effect.gen(function* () {
+      expect((yield* Effect.promise(() => service.responseMechanismIds())).sort()).toEqual([
+        'action-completion',
+        'activity',
+        'direct',
+        'engagement',
+        'schedule',
+      ])
+    }).pipe(Effect.ensuring(stop(ctx)))
+  },
+)
+
+it.effect('hides the schedule response mechanism when persistent scheduling is disabled', () => {
+  const ctx = new Context()
+  const service = new TestYokai(ctx, {
+    ...DEFAULT_CONFIG,
+    schedule: { enabled: false },
+  })
+
+  return Effect.gen(function* () {
+    const capabilities = yield* Effect.promise(() => service.capabilityIds())
+    expect(capabilities.contextProviders).not.toContain('schedule.context')
+    expect(capabilities.actionTools).not.toContain('schedule.create')
+    expect(capabilities.actionTools).not.toContain('schedule.update')
+    expect(capabilities.actionTools).not.toContain('schedule.cancel')
+    expect(capabilities.feedbackTools).not.toContain('schedule.query')
+    expect(capabilities.responseMechanisms).not.toContain('schedule')
+  }).pipe(Effect.ensuring(stop(ctx)))
+})
+
+it.effect('registers the complete persistent schedule capability set when enabled', () => {
   const ctx = new Context()
   const service = new TestYokai(ctx, DEFAULT_CONFIG)
 
   return Effect.gen(function* () {
-    expect((yield* Effect.promise(() => service.responseMechanismIds())).sort()).toEqual([
-      'action-completion',
-      'activity',
-      'direct',
-      'engagement',
-    ])
+    const capabilities = yield* Effect.promise(() => service.capabilityIds())
+    expect(capabilities.contextProviders).toContain('schedule.context')
+    expect(capabilities.actionTools).toEqual(
+      expect.arrayContaining(['schedule.create', 'schedule.update', 'schedule.cancel']),
+    )
+    expect(capabilities.feedbackTools).toContain('schedule.query')
+    expect(capabilities.responseMechanisms).toContain('schedule')
   }).pipe(Effect.ensuring(stop(ctx)))
 })
 
@@ -479,6 +594,56 @@ it.effect('uses only the selected model and recovers when it becomes available',
     expect((yield* Effect.promise(() => service.selectModel())).reference.modelId).toBe('selected')
   }).pipe(Effect.ensuring(stop(ctx)))
 })
+
+it.effect(
+  'requires an exact online bot and an available selected model before schedule claim',
+  () => {
+    const ctx = new Context()
+    const service = new TestYokai(ctx, {
+      model: 'schedule-ready/model-a',
+      feedbackToolsEnabled: false,
+    })
+    const bot = new ScheduleAvailabilityBot(ctx)
+
+    return Effect.gen(function* () {
+      expect(yield* Effect.promise(() => service.scheduleDeliveryAvailable(scheduleTask()))).toBe(
+        false,
+      )
+
+      bot.status = Universal.Status.ONLINE
+      expect(yield* Effect.promise(() => service.scheduleDeliveryAvailable(scheduleTask()))).toBe(
+        false,
+      )
+
+      const registration = yield* Effect.promise(() =>
+        service.registerAdapter(makeAdapter('schedule-ready')),
+      )
+      const available = yield* Schema.decodeUnknownEffect(AdapterModelSnapshot)({
+        discoveredAt: '2026-08-31T00:00:00.000Z',
+        models: [
+          {
+            id: 'model-a',
+            displayName: 'Model A',
+            availability: 'available',
+            discoveryFreshness: 'fresh',
+          },
+        ],
+      })
+      yield* Effect.promise(() => registration.publishModels(available))
+
+      expect(yield* Effect.promise(() => service.scheduleDeliveryAvailable(scheduleTask()))).toBe(
+        true,
+      )
+      expect(
+        yield* Effect.promise(() => service.scheduleDeliveryAvailable(scheduleTask('other-bot'))),
+      ).toBe(false)
+      bot.status = Universal.Status.OFFLINE
+      expect(yield* Effect.promise(() => service.scheduleDeliveryAvailable(scheduleTask()))).toBe(
+        false,
+      )
+    }).pipe(Effect.ensuring(stop(ctx)))
+  },
+)
 
 it.effect('interrupts every owned fiber when the Koishi service is disposed', () => {
   const ctx = new Context()

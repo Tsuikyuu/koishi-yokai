@@ -10,6 +10,8 @@ import {
   HostSession,
   PresetRegistry,
   RoleState,
+  ScheduledDelivery,
+  ScheduledTask,
   ThreadTracker,
   WakeArbiter,
 } from '@yokai-internal/core'
@@ -35,6 +37,8 @@ export type Services =
   | Notebook.Service
   | PresetRegistry.Service
   | RoleState.Service
+  | ScheduledDelivery.Service
+  | ScheduledTask.Service
   | ThreadTracker.Service
   | WakeArbiter.Service
 

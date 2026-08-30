@@ -18,7 +18,6 @@ import {
   type ResolvedModel,
   WakeArbiter,
   WakeMessage,
-  WakeProposal,
   WakeTurn,
 } from '@yokai-internal/core'
 import { MessageArchive, MessageArchiveEvent } from '@yokai-internal/memory'
@@ -41,7 +40,7 @@ import type {
   YokaiAdapter,
   YokaiCapabilityHost,
 } from 'yokai-protocol'
-import { Clock, Effect, Option } from 'effect'
+import { Effect, Option } from 'effect'
 import { Context, Service, type Session } from 'koishi'
 
 import type { Config } from './config'
@@ -184,35 +183,7 @@ export class Yokai extends Service<Config> implements YokaiCapabilityHost {
         if (Option.isNone(selected)) return false
 
         const arbiter = yield* WakeArbiter.Service
-        const executeTurn: WakeArbiter.Executor<YokaiRuntime.Services> = (
-          proposal,
-          markDispatched,
-          withLogicalCallReservation,
-        ) =>
-          Effect.gen(function* () {
-            const environment = yield* Effect.context<YokaiRuntime.Services>()
-            const onDeferredWake = () =>
-              Clock.currentTimeMillis.pipe(
-                Effect.map((now) => WakeProposal.deferredCompletion(proposal, now)),
-                Effect.flatMap((completion) => arbiter.submit(completion, executeTurn)),
-                Effect.asVoid,
-                Effect.provide(environment),
-              )
-            yield* WakeTurn.run({
-              scope: proposal.scope,
-              focus: proposal.focus,
-              kind: proposal.kind,
-              submittedAt: proposal.submittedAt,
-              markDispatched,
-              withLogicalCallReservation,
-              sendText,
-              onDeferredWake,
-            }).pipe(
-              Effect.scoped,
-              Effect.asVoid,
-              Effect.catch((error) => Effect.die(error)),
-            )
-          })
+        const executeTurn = yield* WakeTurn.makeExecutor(sendText)
         const outcome = Option.isSome(direct)
           ? yield* arbiter.submit(direct.value, executeTurn)
           : Option.isSome(engagement)

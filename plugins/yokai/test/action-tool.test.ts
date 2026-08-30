@@ -477,7 +477,8 @@ it.effect('bounds visible ActionTools without silencing a turn', () =>
 
       expect(request.systemInstruction).toContain('notebook.write')
       expect(request.systemInstruction).toContain('test.limit-00')
-      expect(request.systemInstruction).toContain('test.limit-14')
+      expect(request.systemInstruction).toContain('test.limit-11')
+      expect(request.systemInstruction).not.toContain('test.limit-12')
       expect(request.systemInstruction).not.toContain('test.limit-15')
       expect(request.systemInstruction).not.toContain('test.limit-16')
       expect(yield* Queue.take(harness.sentMessages)).toBe('bounded tools')
@@ -514,6 +515,59 @@ it.effect('runs after-send actions after a successful silent send phase', () =>
       expect(execution.request.input).toEqual({ count: 7 })
       expect(yield* Queue.size(harness.sentMessages)).toBe(0)
       expect(yield* generationStarts(harness.subject)).toHaveLength(1)
+    }),
+  ),
+)
+
+it.effect('persists a built-in schedule before sending and deduplicates a replayed action', () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const scheduled = `<output><message>scheduled</message><actions>
+        <action tool="schedule.create">
+          <source-message-id>schedule-source</source-message-id>
+          <time>2099-01-02T03:04:05</time>
+          <reason>Attend the scheduled class</reason>
+          <dedupe-key>schedule-source:class</dedupe-key>
+        </action>
+      </actions></output>`
+      const harness = yield* makeHarness([textGeneration(scheduled), textGeneration(scheduled)])
+
+      yield* dispatchDirectMention(harness, 'schedule-source')
+      const firstRequest = yield* Queue.take(harness.requests)
+      expect(yield* Queue.take(harness.sentMessages)).toBe('scheduled')
+      const firstRows = yield* Effect.promise(() => harness.ctx.database.get('yokai_schedule', {}))
+
+      yield* dispatchDirectMention(harness, 'schedule-replay')
+      const replayRequest = yield* Queue.take(harness.requests)
+      expect(yield* Queue.take(harness.sentMessages)).toBe('scheduled')
+      const replayedRows = yield* Effect.promise(() =>
+        harness.ctx.database.get('yokai_schedule', {}),
+      )
+
+      expect(firstRequest.systemInstruction).toContain('ActionTool schedule.create')
+      expect(replayRequest.messages.map((message) => message.content).join('\n')).toContain(
+        '[Host schedule context.',
+      )
+      expect(replayRequest.messages.map((message) => message.content).join('\n')).toContain(
+        '"timeZone":"UTC"',
+      )
+      expect(firstRows).toHaveLength(1)
+      expect(firstRows[0]).toMatchObject({
+        instanceId: 'default',
+        platform: 'test',
+        guildId: 'guild',
+        channelId: 'channel',
+        dedupeKey: 'schedule-source:class',
+        createdMessageId: 'schedule-source',
+        creatorId: 'user',
+        selfId: 'bot',
+        reason: 'Attend the scheduled class',
+        status: 'pending',
+        occurrence: 0,
+        revision: 1,
+      })
+      expect(replayedRows).toEqual(firstRows)
+      expect(yield* generationStarts(harness.subject)).toHaveLength(2)
     }),
   ),
 )

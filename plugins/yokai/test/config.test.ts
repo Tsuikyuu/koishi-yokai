@@ -32,6 +32,10 @@ import {
   DEFAULT_RELEVANCE_THRESHOLD,
   DEFAULT_RESERVED_DAY_CALLS,
   DEFAULT_RESERVED_MINUTE_CALLS,
+  DEFAULT_SCHEDULE_CONTEXT_LIMIT,
+  DEFAULT_SCHEDULE_ENABLED,
+  DEFAULT_SCHEDULE_GRACE_PERIOD_MS,
+  DEFAULT_SCHEDULE_TIME_ZONE,
   DEFAULT_STATE_ENERGY_RECOVERY_HALF_LIFE_MS,
   DEFAULT_STATE_MAX_INTERACTION_DELTA,
   DEFAULT_STATE_MOOD_HALF_LIFE_MS,
@@ -41,7 +45,7 @@ import {
 } from '../src/config'
 import { schemaForCatalog } from '../src/model-catalog/schema-projection'
 
-it('keeps model, local wake gating, engagement, budgets, instance, retention, and notebook in main config', () => {
+it('keeps model, wake gating, engagement, schedules, budgets, storage, and notebook in main config', () => {
   expect(
     Config({
       model: 'gemini/gemini-2.5-flash',
@@ -62,6 +66,12 @@ it('keeps model, local wake gating, engagement, budgets, instance, retention, an
       maxNotesPerReply: DEFAULT_NOTEBOOK_MAX_NOTES_PER_REPLY,
       recallLimit: DEFAULT_NOTEBOOK_RECALL_LIMIT,
       defaultExpirationDays: DEFAULT_NOTEBOOK_EXPIRATION_DAYS,
+    },
+    schedule: {
+      enabled: DEFAULT_SCHEDULE_ENABLED,
+      timeZone: DEFAULT_SCHEDULE_TIME_ZONE,
+      gracePeriodMs: DEFAULT_SCHEDULE_GRACE_PERIOD_MS,
+      contextLimit: DEFAULT_SCHEDULE_CONTEXT_LIMIT,
     },
     presetReloadDebounceMs: DEFAULT_PRESET_RELOAD_DEBOUNCE_MS,
     state: {
@@ -103,6 +113,7 @@ it('keeps model, local wake gating, engagement, budgets, instance, retention, an
   const messageRetentionDays = fields.messageRetentionDays
   const engagement = fields.engagement
   const notebook = fields.notebook
+  const schedule = fields.schedule
   const presetId = fields.presetId
   const presetDirectory = fields.presetDirectory
   const presetReloadDebounceMs = fields.presetReloadDebounceMs
@@ -116,6 +127,7 @@ it('keeps model, local wake gating, engagement, budgets, instance, retention, an
     messageRetentionDays === undefined ||
     engagement === undefined ||
     notebook === undefined ||
+    schedule === undefined ||
     presetId === undefined ||
     presetDirectory === undefined ||
     presetReloadDebounceMs === undefined ||
@@ -198,6 +210,39 @@ it('keeps model, local wake gating, engagement, budgets, instance, retention, an
     min: 1,
     max: 3_650,
   })
+  expect(schedule({ timeZone: 'Asia/Shanghai', contextLimit: 12 })).toEqual({
+    enabled: DEFAULT_SCHEDULE_ENABLED,
+    timeZone: 'Asia/Shanghai',
+    gracePeriodMs: DEFAULT_SCHEDULE_GRACE_PERIOD_MS,
+    contextLimit: 12,
+  })
+  const scheduleFields = schedule.dict
+  if (scheduleFields === undefined) throw new Error('Expected a schedule configuration schema')
+  const scheduleEnabled = scheduleFields.enabled
+  const scheduleTimeZone = scheduleFields.timeZone
+  const gracePeriodMs = scheduleFields.gracePeriodMs
+  const contextLimit = scheduleFields.contextLimit
+  if (
+    scheduleEnabled === undefined ||
+    scheduleTimeZone === undefined ||
+    gracePeriodMs === undefined ||
+    contextLimit === undefined
+  ) {
+    throw new Error('Expected all schedule configuration fields')
+  }
+  expect(scheduleEnabled.meta.default).toBe(DEFAULT_SCHEDULE_ENABLED)
+  expect(scheduleTimeZone.meta.default).toBe(DEFAULT_SCHEDULE_TIME_ZONE)
+  expect(gracePeriodMs.meta).toMatchObject({
+    default: DEFAULT_SCHEDULE_GRACE_PERIOD_MS,
+    min: 0,
+  })
+  expect(contextLimit.meta).toMatchObject({
+    default: DEFAULT_SCHEDULE_CONTEXT_LIMIT,
+    min: 1,
+    max: 32,
+  })
+  expect(() => schedule({ gracePeriodMs: -1 })).toThrow()
+  expect(() => schedule({ contextLimit: 0 })).toThrow()
   expect(presetId.meta.default).toBeUndefined()
   expect(presetDirectory.meta.role).toBe('path')
   expect(presetReloadDebounceMs.meta.default).toBe(DEFAULT_PRESET_RELOAD_DEBOUNCE_MS)
