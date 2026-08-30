@@ -11,6 +11,7 @@ import {
   AdapterId,
   AdapterModelId,
   AdapterModelSnapshot,
+  CapabilityDurationMilliseconds,
   CapabilityProtocolVersion,
   type CapabilityRegistration,
   ContextProvider,
@@ -44,6 +45,8 @@ const makeContextProvider = (id: string): ContextProvider =>
     protocolVersion: VERSION,
     description: 'Test context provider',
     maxTokens: TokenLimit.make(128),
+    maxDurationMs: CapabilityDurationMilliseconds.make(250),
+    isAvailable: () => true,
     provide: () => Effect.succeed(Option.none()),
   })
 
@@ -173,6 +176,7 @@ it.effect('registers direct and activity as built-in response mechanisms', () =>
 
   return Effect.gen(function* () {
     expect((yield* Effect.promise(() => service.responseMechanismIds())).sort()).toEqual([
+      'action-completion',
       'activity',
       'direct',
     ])

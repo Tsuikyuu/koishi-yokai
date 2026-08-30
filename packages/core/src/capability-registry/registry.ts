@@ -12,8 +12,8 @@ import { Context, Effect, FiberMap, Layer, Option, Schema, Stream, SubscriptionR
 
 import {
   type ActionTool,
-  type ContextProvider,
-  type FeedbackTool,
+  ContextProvider,
+  FeedbackTool,
   type McpServer,
   type PresetSource,
   type ResponseMechanism,
@@ -45,6 +45,13 @@ export type CapabilityDomain = typeof CapabilityDomain.Type
 export class CapabilityConflictError extends Schema.TaggedError<CapabilityConflictError>(
   '@yokai/core/CapabilityConflictError',
 )('CapabilityConflictError', {
+  domain: CapabilityDomain,
+  id: Schema.String,
+}) {}
+
+export class CapabilityRegistrationValidationError extends Schema.TaggedError<CapabilityRegistrationValidationError>(
+  '@yokai/core/CapabilityRegistrationValidationError',
+)('CapabilityRegistrationValidationError', {
   domain: CapabilityDomain,
   id: Schema.String,
 }) {}
@@ -104,7 +111,10 @@ export interface Interface {
   >
   readonly registerContextProvider: (
     capability: ContextProvider,
-  ) => Effect.Effect<CapabilityRegistration, CapabilityConflictError>
+  ) => Effect.Effect<
+    CapabilityRegistration,
+    CapabilityConflictError | CapabilityRegistrationValidationError
+  >
   readonly registerActionTool: (
     capability: ActionTool,
   ) => Effect.Effect<
@@ -113,7 +123,10 @@ export interface Interface {
   >
   readonly registerFeedbackTool: (
     capability: FeedbackTool,
-  ) => Effect.Effect<CapabilityRegistration, CapabilityConflictError>
+  ) => Effect.Effect<
+    CapabilityRegistration,
+    CapabilityConflictError | CapabilityRegistrationValidationError
+  >
   readonly registerSkill: (
     capability: Skill,
   ) => Effect.Effect<CapabilityRegistration, CapabilityConflictError>
@@ -525,6 +538,11 @@ const turnSnapshot = (state: RegistryState): TurnCapabilitySnapshot => ({
   modelCatalog: state.modelCatalog,
 })
 
+const candidateId = (candidate: ContextProvider | FeedbackTool): string =>
+  typeof candidate === 'object' && candidate !== null && typeof candidate.id === 'string'
+    ? candidate.id
+    : 'registry'
+
 const make = Effect.fn('CapabilityRegistry.make')(function* () {
   const stateRef = yield* SubscriptionRef.make(initialState())
   const refreshFibers = yield* FiberMap.make<number>()
@@ -566,11 +584,22 @@ const make = Effect.fn('CapabilityRegistry.make')(function* () {
 
   const registerContextProvider = Effect.fn('CapabilityRegistry.registerContextProvider')(
     function* (capability: ContextProvider) {
+      const validatedCapability = yield* Schema.decodeUnknownEffect(ContextProvider)(
+        capability,
+      ).pipe(
+        Effect.mapError(
+          () =>
+            new CapabilityRegistrationValidationError({
+              domain: 'context-provider',
+              id: candidateId(capability),
+            }),
+        ),
+      )
       const key = yield* registerEntry(
         stateRef,
         'context-provider',
-        capability.id,
-        capability,
+        validatedCapability.id,
+        validatedCapability,
         (state) => state.contextProviders,
         (entry) => entry.id,
         (state, contextProviders) => ({ ...state, contextProviders }),
@@ -615,11 +644,20 @@ const make = Effect.fn('CapabilityRegistry.make')(function* () {
   const registerFeedbackTool = Effect.fn('CapabilityRegistry.registerFeedbackTool')(function* (
     capability: FeedbackTool,
   ) {
+    const validatedCapability = yield* Schema.decodeUnknownEffect(FeedbackTool)(capability).pipe(
+      Effect.mapError(
+        () =>
+          new CapabilityRegistrationValidationError({
+            domain: 'feedback-tool',
+            id: candidateId(capability),
+          }),
+      ),
+    )
     const key = yield* registerEntry(
       stateRef,
       'feedback-tool',
-      capability.id,
-      capability,
+      validatedCapability.id,
+      validatedCapability,
       (state) => state.feedbackTools,
       (entry) => entry.id,
       (state, feedbackTools) => ({ ...state, feedbackTools }),

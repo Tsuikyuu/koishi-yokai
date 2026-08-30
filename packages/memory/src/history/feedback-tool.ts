@@ -1,5 +1,6 @@
 import {
   CapabilityProtocolVersion,
+  CapabilityDurationMilliseconds,
   FeedbackTool,
   FeedbackToolExecutionError,
   FeedbackToolValidationError,
@@ -25,6 +26,7 @@ import {
 const VERSION = CapabilityProtocolVersion.make({ major: 0, minor: 1 })
 const TOOL_MAX_RESULT_TOKENS = TokenLimit.make(2_048)
 const TOOL_PAGE_TOKEN_BUDGET = TokenLimit.make(1_792)
+const TOOL_MAX_DURATION_MS = CapabilityDurationMilliseconds.make(1_000)
 
 const HistorySearchInput = Schema.Struct({
   before: Schema.optionalKey(HistoryCursor),
@@ -93,6 +95,49 @@ const INPUT_SCHEMA = {
         maximum: 100,
         description: 'Page size; defaults to 40 and cannot exceed 100.',
       },
+    },
+  ],
+} as const
+
+const OUTPUT_SCHEMA = {
+  _tag: 'Object',
+  properties: [
+    {
+      name: 'untrusted',
+      required: true,
+      schema: { _tag: 'Boolean' },
+    },
+    {
+      name: 'messages',
+      required: true,
+      schema: {
+        _tag: 'Array',
+        minItems: 0,
+        maxItems: 100,
+        items: {
+          _tag: 'Object',
+          properties: [
+            { name: 'messageId', required: true, schema: { _tag: 'String' } },
+            { name: 'authorId', required: true, schema: { _tag: 'String' } },
+            {
+              name: 'timestamp',
+              required: true,
+              schema: { _tag: 'Integer', minimum: 0 },
+            },
+            { name: 'content', required: true, schema: { _tag: 'String' } },
+          ],
+        },
+      },
+    },
+    {
+      name: 'hasMore',
+      required: true,
+      schema: { _tag: 'Boolean' },
+    },
+    {
+      name: 'nextCursor',
+      required: false,
+      schema: { _tag: 'String' },
     },
   ],
 } as const
@@ -177,7 +222,10 @@ export const make = (history: MessageHistory.Interface): FeedbackTool =>
     description:
       'Search read-only messages in the host-locked current channel by author, keyword, time, and stable cursor.',
     inputSchema: INPUT_SCHEMA,
+    outputSchema: OUTPUT_SCHEMA,
     maxResultTokens: TOOL_MAX_RESULT_TOKENS,
+    maxDurationMs: TOOL_MAX_DURATION_MS,
+    isAvailable: () => true,
     prepare: Effect.fn('HistorySearchFeedbackTool.prepare')(function* (request) {
       const rawLimit = request.input.limit
       if (typeof rawLimit === 'number' && rawLimit > 100) {

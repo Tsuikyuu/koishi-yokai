@@ -1,5 +1,6 @@
 import {
   ActivityResponseMechanism,
+  BackgroundTasks,
   CallBudget,
   CapabilityRegistry,
   ChannelMessageBuffer,
@@ -19,6 +20,7 @@ import { makeLayer as makeSessionLayer, type SessionBoundary } from './session'
 
 export type Services =
   | ActivityResponseMechanism.Service
+  | BackgroundTasks.Service
   | CallBudget.Service
   | CapabilityRegistry.Service
   | ChannelMessageBuffer.Service

@@ -279,6 +279,7 @@ const makePortableValueLayer = (
 const PortableValueDepth2 = makePortableValueLayer(PortableLeafSchema)
 const PortableValueDepth3 = makePortableValueLayer(PortableValueDepth2)
 const PortableValueDepth4 = makePortableValueLayer(PortableValueDepth3)
+const PortableValueDepth5 = makePortableValueLayer(PortableValueDepth4)
 
 interface PortableSchemaMetrics {
   readonly depth: number
@@ -317,18 +318,85 @@ const measurePortableSchema = (root: PortableValueSchema): PortableSchemaMetrics
  * The only schema shape accepted at the provider boundary. Object properties
  * are closed: adapters must compile them with `additionalProperties: false`.
  */
+const portableSchemaWithinLimits = Schema.makeFilter((schema: PortableValueSchema) => {
+  const metrics = measurePortableSchema(schema)
+  if (metrics.depth > MAX_PORTABLE_SCHEMA_DEPTH) {
+    return `Expected portable schema depth <= ${MAX_PORTABLE_SCHEMA_DEPTH}`
+  }
+  return metrics.properties <= MAX_PORTABLE_SCHEMA_PROPERTIES
+    ? true
+    : `Expected portable schema properties <= ${MAX_PORTABLE_SCHEMA_PROPERTIES}`
+})
+
 export const PortableToolInputSchema = makePortableObjectSchema(PortableValueDepth4).check(
-  Schema.makeFilter((schema: PortableObjectSchema) => {
-    const metrics = measurePortableSchema(schema)
-    if (metrics.depth > MAX_PORTABLE_SCHEMA_DEPTH) {
-      return `Expected portable schema depth <= ${MAX_PORTABLE_SCHEMA_DEPTH}`
-    }
-    return metrics.properties <= MAX_PORTABLE_SCHEMA_PROPERTIES
-      ? true
-      : `Expected portable schema properties <= ${MAX_PORTABLE_SCHEMA_PROPERTIES}`
-  }),
+  portableSchemaWithinLimits,
 )
 
 export interface PortableToolInputSchema extends Schema.Schema.Type<
   typeof PortableToolInputSchema
 > {}
+
+/** FeedbackTool output may be any JSON value described by the portable subset. */
+export const PortableToolOutputSchema = PortableValueDepth5.check(portableSchemaWithinLimits)
+
+export type PortableToolOutputSchema = typeof PortableToolOutputSchema.Type
+
+const JsonArray = Schema.Array(Schema.Json)
+const JsonObject = Schema.Record(Schema.String, Schema.Json)
+const isJsonArray = Schema.is(JsonArray)
+const isJsonObject = Schema.is(JsonObject)
+
+const withinBounds = (value: number, minimum?: number, maximum?: number): boolean =>
+  (minimum === undefined || value >= minimum) && (maximum === undefined || value <= maximum)
+
+const validatePortableObject = (schema: PortableObjectSchema, value: Schema.Json): boolean => {
+  if (!isJsonObject(value)) return false
+
+  const propertyNames = schema.properties.map((property) => property.name)
+  if (Object.keys(value).some((name) => !propertyNames.includes(name))) return false
+
+  return schema.properties.every((property) => {
+    if (!Object.hasOwn(value, property.name)) return !property.required
+    const propertyValue = value[property.name]
+    return propertyValue !== undefined && validatePortableValue(property.schema, propertyValue)
+  })
+}
+
+/** Validates an already-decoded JSON value against the portable schema AST. */
+export const validatePortableValue = (schema: PortableValueSchema, value: Schema.Json): boolean => {
+  switch (schema._tag) {
+    case 'String':
+      return typeof value === 'string'
+    case 'StringEnum':
+      return typeof value === 'string' && schema.values.includes(value)
+    case 'Boolean':
+      return typeof value === 'boolean'
+    case 'Number':
+      return (
+        typeof value === 'number' &&
+        Number.isFinite(value) &&
+        withinBounds(value, schema.minimum, schema.maximum)
+      )
+    case 'Integer':
+      return (
+        typeof value === 'number' &&
+        Number.isSafeInteger(value) &&
+        withinBounds(value, schema.minimum, schema.maximum)
+      )
+    case 'Array':
+      return (
+        isJsonArray(value) &&
+        value.length >= schema.minItems &&
+        value.length <= schema.maxItems &&
+        value.every((item) => validatePortableValue(schema.items, item))
+      )
+    case 'Object':
+      return validatePortableObject(schema, value)
+  }
+}
+
+/** Validates the closed JSON object supplied for a FeedbackTool or ActionTool call. */
+export const validatePortableToolInput = (
+  schema: PortableToolInputSchema,
+  input: Readonly<Record<string, Schema.Json>>,
+): boolean => validatePortableObject(schema, input)

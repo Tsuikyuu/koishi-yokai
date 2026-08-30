@@ -13,6 +13,7 @@ import {
   type ResolvedModel,
   WakeArbiter,
   WakeMessage,
+  WakeProposal,
   WakeTurn,
 } from '@yokai-internal/core'
 import { MessageArchive, MessageArchiveEvent } from '@yokai-internal/memory'
@@ -34,7 +35,7 @@ import type {
   YokaiAdapter,
   YokaiCapabilityHost,
 } from 'yokai-protocol'
-import { Effect, Option } from 'effect'
+import { Clock, Effect, Option } from 'effect'
 import { Context, Service, type Session } from 'koishi'
 
 import type { Config } from './config'
@@ -134,17 +135,35 @@ export class Yokai extends Service<Config> implements YokaiCapabilityHost {
         if (Option.isNone(selected)) return false
 
         const arbiter = yield* WakeArbiter.Service
-        const outcome = yield* arbiter.submit(selected.value, (proposal, markDispatched) =>
-          WakeTurn.run({
-            scope: proposal.scope,
-            focus: proposal.focus,
-            markDispatched,
-            sendText,
-          }).pipe(
-            Effect.scoped,
-            Effect.catch(() => Effect.void),
-          ),
-        )
+        const executeTurn: WakeArbiter.Executor<YokaiRuntime.Services> = (
+          proposal,
+          markDispatched,
+          withLogicalCallReservation,
+        ) =>
+          Effect.gen(function* () {
+            const environment = yield* Effect.context<YokaiRuntime.Services>()
+            const onDeferredWake = () =>
+              Clock.currentTimeMillis.pipe(
+                Effect.map((now) => WakeProposal.deferredCompletion(proposal, now)),
+                Effect.flatMap((completion) => arbiter.submit(completion, executeTurn)),
+                Effect.asVoid,
+                Effect.provide(environment),
+              )
+            yield* WakeTurn.run({
+              scope: proposal.scope,
+              focus: proposal.focus,
+              kind: proposal.kind,
+              markDispatched,
+              withLogicalCallReservation,
+              sendText,
+              onDeferredWake,
+            }).pipe(
+              Effect.scoped,
+              Effect.asVoid,
+              Effect.catch((error) => Effect.die(error)),
+            )
+          })
+        const outcome = yield* arbiter.submit(selected.value, executeTurn)
         if (outcome._tag === 'Executed') {
           yield* activityMechanism.consume(outcome.proposal.scopeId)
         }

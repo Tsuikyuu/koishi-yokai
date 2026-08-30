@@ -112,13 +112,39 @@ export interface Batch {
 
 export const DIRECT_MECHANISM_ID = ResponseMechanismId.make('direct')
 export const ACTIVITY_MECHANISM_ID = ResponseMechanismId.make('activity')
+export const ACTION_COMPLETION_MECHANISM_ID = ResponseMechanismId.make('action-completion')
 export const CHANNEL_CONVERSATION_MERGE_KEY = MergeKey.make('channel-conversation')
+export const ACTION_COMPLETION_MERGE_KEY = MergeKey.make('action-completion')
+export const ACTION_COMPLETION_REASON_CODE = ReasonCode.make('deferred-complete')
+export const ACTION_COMPLETION_PRIORITY = Priority.make(5)
+export const ACTION_COMPLETION_DEBOUNCE_MS = DurationMilliseconds.make(250)
+export const ACTION_COMPLETION_TTL_MS = DurationMilliseconds.make(10_000)
 
 export const scopeIdOf = (scope: CapabilityScope): ScopeId =>
   ScopeId.make(JSON.stringify([scope.instanceId, scope.platform, scope.guildId, scope.channelId]))
 
 export const identityOf = (proposal: Proposal): string =>
   JSON.stringify([proposal.scopeId, proposal.mergeKey])
+
+/** Create a separate low-priority turn after deferred actions complete. */
+export const deferredCompletion = (turn: Merged, now: number): Proposal =>
+  Proposal.make({
+    scopeId: turn.scopeId,
+    scope: turn.scope,
+    mergeKey: ACTION_COMPLETION_MERGE_KEY,
+    kind: 'engagement',
+    reason: Reason.make({
+      mechanismId: ACTION_COMPLETION_MECHANISM_ID,
+      code: ACTION_COMPLETION_REASON_CODE,
+      priority: ACTION_COMPLETION_PRIORITY,
+    }),
+    focus: turn.focus,
+    submittedAt: EpochMilliseconds.make(now),
+    expiresAt: EpochMilliseconds.make(now + ACTION_COMPLETION_TTL_MS),
+    debounceMs: ACTION_COMPLETION_DEBOUNCE_MS,
+    budgetCategory: 'background',
+    cooldownPolicy: 'enforce',
+  })
 
 const sameReason = (left: Reason, right: Reason): boolean =>
   left.mechanismId === right.mechanismId && left.code === right.code

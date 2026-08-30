@@ -1,4 +1,4 @@
-export { compile, parse, validateActionToolRegistration } from './compiler'
+export { compile, compileBounded, parse, validateActionToolRegistration } from './compiler'
 export {
   CompileError,
   CompileFailureReason,

@@ -3,6 +3,7 @@ import { resolve } from 'node:path'
 import {
   ActivityGateValue,
   ActivityResponseMechanism,
+  BackgroundTasks,
   ActivityScoring,
   CallBudget,
   CapabilityRegistry,
@@ -206,6 +207,7 @@ const messageHistoryLayer = (config: Config, ctx: Context) =>
 
 export const makeLayer = (config: Config, ctx: Context) => {
   const hostServices = Layer.mergeAll(
+    BackgroundTasks.layer,
     CapabilityRegistry.layer,
     ChannelMessageBuffer.layer,
     configurationLayer(config),

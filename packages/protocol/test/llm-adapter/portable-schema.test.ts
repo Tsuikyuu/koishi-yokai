@@ -5,6 +5,9 @@ import {
   MAX_PORTABLE_ARRAY_ITEMS,
   MAX_PORTABLE_ENUM_VALUE_LENGTH,
   PortableToolInputSchema,
+  PortableToolOutputSchema,
+  validatePortableToolInput,
+  validatePortableValue,
 } from '../../src/llm-adapter/portable-schema'
 
 it.effect('round-trips the closed portable FeedbackTool schema subset', () =>
@@ -69,6 +72,139 @@ it.effect('round-trips the closed portable FeedbackTool schema subset', () =>
 
     const schema = yield* Schema.decodeUnknownEffect(PortableToolInputSchema)(encoded)
     expect(yield* Schema.encodeEffect(PortableToolInputSchema)(schema)).toEqual(encoded)
+  }),
+)
+
+it.effect('accepts any bounded portable value shape for FeedbackTool output', () =>
+  Effect.gen(function* () {
+    const encoded = {
+      _tag: 'Array',
+      minItems: 0,
+      maxItems: 2,
+      items: {
+        _tag: 'Object',
+        properties: [
+          {
+            name: 'score',
+            required: true,
+            schema: { _tag: 'Number', minimum: 0, maximum: 1 },
+          },
+        ],
+      },
+    }
+
+    const schema = yield* Schema.decodeUnknownEffect(PortableToolOutputSchema)(encoded)
+    expect(yield* Schema.encodeEffect(PortableToolOutputSchema)(schema)).toEqual(encoded)
+    expect(
+      yield* Schema.decodeUnknownEffect(PortableToolOutputSchema)({ _tag: 'Boolean' }),
+    ).toEqual({ _tag: 'Boolean' })
+  }),
+)
+
+it.effect('validates closed portable tool inputs including nested values and bounds', () =>
+  Effect.gen(function* () {
+    const schema = yield* Schema.decodeUnknownEffect(PortableToolInputSchema)({
+      _tag: 'Object',
+      properties: [
+        {
+          name: 'mode',
+          required: true,
+          schema: { _tag: 'StringEnum', values: ['brief', 'full'] },
+        },
+        {
+          name: 'limit',
+          required: false,
+          schema: { _tag: 'Integer', minimum: 1, maximum: 3 },
+        },
+        {
+          name: 'filters',
+          required: true,
+          schema: {
+            _tag: 'Array',
+            minItems: 1,
+            maxItems: 2,
+            items: {
+              _tag: 'Object',
+              properties: [
+                {
+                  name: 'enabled',
+                  required: true,
+                  schema: { _tag: 'Boolean' },
+                },
+              ],
+            },
+          },
+        },
+      ],
+    })
+
+    expect(
+      validatePortableToolInput(schema, {
+        mode: 'brief',
+        filters: [{ enabled: true }],
+      }),
+    ).toBe(true)
+    expect(
+      validatePortableToolInput(schema, {
+        mode: 'full',
+        limit: 3,
+        filters: [{ enabled: true }, { enabled: false }],
+      }),
+    ).toBe(true)
+    expect(validatePortableToolInput(schema, { filters: [{ enabled: true }] })).toBe(false)
+    expect(
+      validatePortableToolInput(schema, {
+        mode: 'brief',
+        filters: [{ enabled: true }],
+        extra: true,
+      }),
+    ).toBe(false)
+    expect(
+      validatePortableToolInput(schema, {
+        mode: 'other',
+        filters: [{ enabled: true }],
+      }),
+    ).toBe(false)
+    expect(
+      validatePortableToolInput(schema, {
+        mode: 'brief',
+        limit: 4,
+        filters: [{ enabled: true }],
+      }),
+    ).toBe(false)
+    expect(
+      validatePortableToolInput(schema, {
+        mode: 'brief',
+        filters: [],
+      }),
+    ).toBe(false)
+    expect(
+      validatePortableToolInput(schema, {
+        mode: 'brief',
+        filters: [{ enabled: true, extra: false }],
+      }),
+    ).toBe(false)
+  }),
+)
+
+it.effect('validates portable scalar outputs without coercion', () =>
+  Effect.gen(function* () {
+    const numberSchema = yield* Schema.decodeUnknownEffect(PortableToolOutputSchema)({
+      _tag: 'Number',
+      minimum: -1,
+      maximum: 1,
+    })
+    const integerSchema = yield* Schema.decodeUnknownEffect(PortableToolOutputSchema)({
+      _tag: 'Integer',
+    })
+
+    expect(validatePortableValue(numberSchema, 0.5)).toBe(true)
+    expect(validatePortableValue(numberSchema, 2)).toBe(false)
+    expect(validatePortableValue(numberSchema, Number.POSITIVE_INFINITY)).toBe(false)
+    expect(validatePortableValue(integerSchema, 1)).toBe(true)
+    expect(validatePortableValue(integerSchema, 1.5)).toBe(false)
+    expect(validatePortableValue(integerSchema, Number.MAX_SAFE_INTEGER + 1)).toBe(false)
+    expect(validatePortableValue(integerSchema, '1')).toBe(false)
   }),
 )
 

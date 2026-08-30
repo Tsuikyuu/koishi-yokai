@@ -35,6 +35,7 @@ const makeStringTool = (id: string, template: string) =>
     maxDurationMs: 500,
     isAvailable: () => true,
     isInputAllowed: () => true,
+    execute: () => Effect.void,
   })
 
 it.effect('compiles a stable role-only prompt with exact templates and schema constraints', () =>
@@ -126,6 +127,18 @@ it.effect('rejects duplicate, excessive, and collectively oversized visible tool
     const excessive = yield* RoleResponseEnvelope.compile(many, CONTEXT.scope).pipe(Effect.flip)
     expect(excessive.reason).toBe('too-many-tools')
 
+    const availabilityChecks = many.map(() => vi.fn(() => true))
+    const observed = many.map((tool, index) => ({
+      ...tool,
+      isAvailable:
+        availabilityChecks[index] === undefined ? () => false : availabilityChecks[index],
+    }))
+    const bounded = yield* RoleResponseEnvelope.compileBounded(observed, CONTEXT.scope)
+    expect(availabilityChecks.every((check) => check.mock.calls.length === 1)).toBe(true)
+    expect(bounded.systemInstruction).toContain('<action tool="tool.0">')
+    expect(bounded.systemInstruction).toContain('<action tool="tool.15">')
+    expect(bounded.systemInstruction).not.toContain('<action tool="tool.16">')
+
     const longValue = 'x'.repeat(4_000)
     const large = yield* Effect.forEach(
       Array.from({ length: 5 }, (_, index) => index),
@@ -166,12 +179,23 @@ it.effect('bounds the fully rendered system instruction from legal schema metada
       maxDurationMs: 500,
       isAvailable: () => true,
       isInputAllowed: () => true,
+      execute: () => Effect.void,
     })
 
     const failure = yield* RoleResponseEnvelope.compile([tool], CONTEXT.scope).pipe(Effect.flip)
 
     expect(failure).toMatchObject({ reason: 'prompt-too-large', toolId: 'registry' })
     expect(failure).not.toHaveProperty('systemInstruction')
+
+    const reaction = yield* makeReactionTool()
+    const bounded = yield* RoleResponseEnvelope.compileBounded([tool, reaction], CONTEXT.scope)
+    expect(bounded.systemInstruction).not.toContain('prompt.large')
+    expect(bounded.systemInstruction).toContain('reaction.add')
+
+    const noPromptBudget = yield* RoleResponseEnvelope.compileBounded([], CONTEXT.scope, 0).pipe(
+      Effect.flip,
+    )
+    expect(noPromptBudget).toMatchObject({ reason: 'prompt-too-large', toolId: 'registry' })
   }),
 )
 
@@ -307,6 +331,7 @@ it.effect('rejects an ActionTool array template whose schema permits no items', 
       maxDurationMs: 500,
       isAvailable: () => true,
       isInputAllowed: () => true,
+      execute: () => Effect.void,
     })
 
     const failure = yield* RoleResponseEnvelope.validateActionToolRegistration(tool).pipe(

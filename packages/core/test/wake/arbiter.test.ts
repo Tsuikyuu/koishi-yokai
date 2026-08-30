@@ -292,3 +292,123 @@ it.effect('denies exhausted categories and releases skipped pre-dispatch turns',
     }).pipe(Effect.provide(testLayer(1))),
   ),
 )
+
+it.effect('requires a separate budget reservation for each additional logical call', () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      yield* TestClock.setTime(0)
+      const arbiter = yield* WakeArbiter.Service
+      const budget = yield* CallBudget.Service
+      const continuationAttempts = yield* Ref.make(0)
+
+      const outcome = yield* arbiter.submit(
+        proposal('bounded-feedback', 'bounded-feedback', 100, { debounceMs: 0 }),
+        (_merged, markDispatched, withLogicalCallReservation) =>
+          Effect.gen(function* () {
+            expect(yield* markDispatched()).toBe(true)
+            const error = yield* withLogicalCallReservation(() =>
+              Ref.update(continuationAttempts, (count) => count + 1),
+            ).pipe(Effect.flip)
+            expect(error._tag).toBe('CallBudgetExceededError')
+          }),
+      )
+
+      expect(outcome._tag).toBe('Executed')
+      expect(yield* Ref.get(continuationAttempts)).toBe(0)
+      const snapshot = yield* budget.snapshot()
+      expect(snapshot.minute.usage.reserved.committed).toBe(1)
+      expect(snapshot.minute.usage.reserved.pending).toBe(0)
+      expect(snapshot.minute.usage.reserved.remaining).toBe(0)
+    }).pipe(Effect.provide(testLayer(1))),
+  ),
+)
+
+it.effect('releases an additional reservation when continuation is not dispatched', () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      yield* TestClock.setTime(0)
+      const arbiter = yield* WakeArbiter.Service
+      const budget = yield* CallBudget.Service
+
+      const outcome = yield* arbiter.submit(
+        proposal('failed-feedback', 'failed-feedback', 100, { debounceMs: 0 }),
+        (_merged, markDispatched, withLogicalCallReservation) =>
+          Effect.gen(function* () {
+            expect(yield* markDispatched()).toBe(true)
+            yield* withLogicalCallReservation(() => Effect.fail('before-continuation')).pipe(
+              Effect.catch(() => Effect.void),
+            )
+          }),
+      )
+
+      expect(outcome._tag).toBe('Executed')
+      const snapshot = yield* budget.snapshot()
+      expect(snapshot.minute.usage.reserved.committed).toBe(1)
+      expect(snapshot.minute.usage.reserved.pending).toBe(0)
+      expect(snapshot.minute.usage.reserved.remaining).toBe(1)
+    }).pipe(Effect.provide(testLayer(2))),
+  ),
+)
+
+it.effect('commits an additional reservation once continuation dispatch starts', () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      yield* TestClock.setTime(0)
+      const arbiter = yield* WakeArbiter.Service
+      const budget = yield* CallBudget.Service
+
+      const outcome = yield* arbiter.submit(
+        proposal('dispatched-feedback', 'dispatched-feedback', 100, { debounceMs: 0 }),
+        (_merged, markDispatched, withLogicalCallReservation) =>
+          Effect.gen(function* () {
+            expect(yield* markDispatched()).toBe(true)
+            yield* withLogicalCallReservation((markContinuationDispatched) =>
+              markContinuationDispatched().pipe(
+                Effect.andThen(Effect.fail('after-continuation-dispatch')),
+              ),
+            ).pipe(Effect.catch(() => Effect.void))
+          }),
+      )
+
+      expect(outcome._tag).toBe('Executed')
+      const snapshot = yield* budget.snapshot()
+      expect(snapshot.minute.usage.reserved.committed).toBe(2)
+      expect(snapshot.minute.usage.reserved.pending).toBe(0)
+      expect(snapshot.minute.usage.reserved.remaining).toBe(0)
+    }).pipe(Effect.provide(testLayer(2))),
+  ),
+)
+
+it.effect('classifies typed executor failures without leaking them through submit', () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      yield* TestClock.setTime(0)
+      const arbiter = yield* WakeArbiter.Service
+      const budget = yield* CallBudget.Service
+
+      const beforeDispatch = yield* arbiter.submit(
+        proposal('failed-before-dispatch', 'failed-before-dispatch', 100, { debounceMs: 0 }),
+        () => Effect.fail('expected-before-dispatch'),
+      )
+      expect(beforeDispatch).toMatchObject({
+        _tag: 'ExecutionFailed',
+        dispatched: false,
+      })
+      expect((yield* budget.snapshot()).minute.usage.reserved.remaining).toBe(8)
+
+      const afterDispatch = yield* arbiter.submit(
+        proposal('failed-after-dispatch', 'failed-after-dispatch', 100, { debounceMs: 0 }),
+        (_merged, markDispatched) =>
+          markDispatched().pipe(Effect.andThen(Effect.fail('expected-after-dispatch'))),
+      )
+      expect(afterDispatch).toMatchObject({
+        _tag: 'ExecutionFailed',
+        dispatched: true,
+      })
+      expect((yield* budget.snapshot()).minute.usage.reserved.remaining).toBe(7)
+      expect(
+        Option.isSome((yield* arbiter.gateStatus(WakeProposal.scopeIdOf(SCOPE))).lastWakeAt),
+      ).toBe(true)
+    }).pipe(Effect.provide(testLayer())),
+  ),
+)

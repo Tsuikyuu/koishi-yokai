@@ -19,9 +19,17 @@ export const layer = Layer.effectDiscard(
         protocolVersion: VERSION,
       }),
     )
+    const actionCompletion = yield* registry.registerResponseMechanism(
+      ResponseMechanism.make({
+        id: WakeProposal.ACTION_COMPLETION_MECHANISM_ID,
+        protocolVersion: VERSION,
+      }),
+    )
 
     yield* Effect.addFinalizer(() =>
-      Effect.all([direct.unregister(), activity.unregister()], { discard: true }),
+      Effect.all([direct.unregister(), activity.unregister(), actionCompletion.unregister()], {
+        discard: true,
+      }),
     )
   }),
 )

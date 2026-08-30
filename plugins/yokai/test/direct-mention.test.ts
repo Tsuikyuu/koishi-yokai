@@ -10,11 +10,15 @@ import { makeFakeAdapter, type FakeAdapterSubject } from 'yokai-adapter-conforma
 import {
   AdapterId,
   AdapterModelId,
+  CapabilityDurationMilliseconds,
   CapabilityProtocolVersion,
+  FeedbackTool,
+  FeedbackToolId,
   type GenerateRequest,
   GenerationUsage,
   PresetSource,
   PresetSourceId,
+  TokenLimit,
   type YokaiAdapter,
 } from 'yokai-protocol'
 import { Deferred, Effect, Fiber, Queue } from 'effect'
@@ -83,6 +87,27 @@ const presetCandidate = (name: string) => ({
   },
 })
 
+const oversizedPresetCandidate = () => {
+  const statements = Array.from({ length: 64 }, (_, index) => {
+    const prefix = `statement-${String(index)}-`
+    return prefix + 'x'.repeat(2_048 - prefix.length)
+  })
+  return {
+    id: 'koharu',
+    persona: {
+      name: 'Koharu',
+      selfConcept: 'x'.repeat(8_192),
+      background: 'x'.repeat(8_192),
+      values: statements,
+      interests: statements,
+      opinions: statements,
+      speakingStyle: 'x'.repeat(8_192),
+      socialBoundaries: statements,
+      knowledgeBoundaries: statements,
+    },
+  }
+}
+
 class TestBot extends Bot<Context, {}> {
   constructor(
     ctx: Context,
@@ -129,6 +154,7 @@ const observeAdapter = (
 const makeHarness = Effect.fn('DirectMentionTest.makeHarness')(function* (
   generationSteps: ReadonlyArray<AdapterGenerationStepType>,
   config: Config = CONFIG,
+  feedbackTools = false,
 ) {
   const ctx = yield* Effect.acquireRelease(
     Effect.sync(() => {
@@ -156,7 +182,7 @@ const makeHarness = Effect.fn('DirectMentionTest.makeHarness')(function* (
   const subject = yield* makeFakeAdapter(
     {
       adapterId: ADAPTER_ID,
-      feedbackTools: false,
+      feedbackTools,
       tokenNamespace: 'yk012',
     },
     AdapterConformanceSetup.make({ discoverySteps: [discovery], generationSteps }),
@@ -255,6 +281,91 @@ it.effect('turns one direct mention into one generic generation and one group me
       expect(request.feedbackTools).toEqual([])
       expect(yield* Queue.take(harness.sentMessages)).toBe('三点见')
       expect(yield* Queue.size(harness.sentMessages)).toBe(0)
+      expect(yield* generationStarts(harness.subject)).toHaveLength(1)
+    }),
+  ),
+)
+
+it.effect('keeps FeedbackTools hidden when the selected adapter lacks the transport contract', () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const harness = yield* makeHarness(
+        [textGeneration('<output><message>single pass</message></output>')],
+        { ...CONFIG, feedbackToolsEnabled: true },
+      )
+      yield* dispatchMessage(
+        harness,
+        'message-unsupported-feedback',
+        h.at('bot').toString() + ' use the normal path',
+      )
+
+      const request = yield* Queue.take(harness.requests)
+      expect(request.feedbackTools).toEqual([])
+      expect(yield* Queue.take(harness.sentMessages)).toBe('single pass')
+      expect(yield* generationStarts(harness.subject)).toHaveLength(1)
+    }),
+  ),
+)
+
+it.effect('keeps FeedbackTools hidden when the host switch is disabled', () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const harness = yield* makeHarness(
+        [textGeneration('<output><message>switch disabled</message></output>')],
+        CONFIG,
+        true,
+      )
+      yield* dispatchMessage(
+        harness,
+        'message-feedback-disabled',
+        h.at('bot').toString() + ' keep tools disabled',
+      )
+
+      const request = yield* Queue.take(harness.requests)
+      expect(request.feedbackTools).toEqual([])
+      expect(yield* Queue.take(harness.sentMessages)).toBe('switch disabled')
+      expect(yield* generationStarts(harness.subject)).toHaveLength(1)
+    }),
+  ),
+)
+
+it.effect('selects visible FeedbackTools before applying the per-turn cap', () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const harness = yield* makeHarness(
+        [textGeneration('<output><message>bounded feedback tools</message></output>')],
+        { ...CONFIG, feedbackToolsEnabled: true },
+        true,
+      )
+      const makeFeedbackTool = (id: string, available: boolean): FeedbackTool =>
+        FeedbackTool.make({
+          id: FeedbackToolId.make(id),
+          protocolVersion: CAPABILITY_VERSION,
+          description: `Test ${id}`,
+          inputSchema: { _tag: 'Object', properties: [] },
+          outputSchema: { _tag: 'Object', properties: [] },
+          maxResultTokens: TokenLimit.make(32),
+          maxDurationMs: CapabilityDurationMilliseconds.make(50),
+          isAvailable: () => available,
+          prepare: () => Effect.succeed({ execute: () => Effect.succeed({}) }),
+        })
+      const unavailable = Array.from({ length: 16 }, (_, index) =>
+        makeFeedbackTool(`test.hidden-${index.toString().padStart(2, '0')}`, false),
+      )
+      const lateVisible = makeFeedbackTool('test.late-visible', true)
+      yield* Effect.forEach([...unavailable, lateVisible], (tool) =>
+        Effect.promise(() => harness.ctx.yokai.registerFeedbackTool(tool)),
+      )
+
+      yield* dispatchMessage(
+        harness,
+        'message-feedback-visible-cap',
+        h.at('bot').toString() + ' select visible tools',
+      )
+      const request = yield* Queue.take(harness.requests)
+
+      expect(request.feedbackTools.map((tool) => tool.id)).toContain('test.late-visible')
+      expect(yield* Queue.take(harness.sentMessages)).toBe('bounded feedback tools')
       expect(yield* generationStarts(harness.subject)).toHaveLength(1)
     }),
   ),
@@ -475,6 +586,35 @@ it.effect('keeps the current preset frozen while the next turn sees a hot update
       const secondRequest = yield* Queue.take(harness.requests)
       expect(secondRequest.systemInstruction).toContain('Name:\nHaru')
       expect(secondRequest.systemInstruction).not.toContain('Name:\nKoharu')
+    }),
+  ),
+)
+
+it.effect('keeps an oversized legal preset out of the final model request', () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const harness = yield* makeHarness([], { ...CONFIG, presetId: 'koharu' })
+      const presetSource = yield* Effect.promise(() =>
+        harness.ctx.yokai.registerPresetSource(
+          PresetSource.make({
+            id: PresetSourceId.make('oversized-turn-test'),
+            protocolVersion: CAPABILITY_VERSION,
+          }),
+        ),
+      )
+      expect(yield* Effect.promise(() => presetSource.publish(oversizedPresetCandidate()))).toBe(
+        true,
+      )
+
+      yield* dispatchMessage(
+        harness,
+        'preset-oversized',
+        h.at('bot').toString() + ' oversized preset turn',
+      )
+
+      expect(yield* Queue.size(harness.requests)).toBe(0)
+      expect(yield* Queue.size(harness.sentMessages)).toBe(0)
+      expect(yield* generationStarts(harness.subject)).toHaveLength(0)
     }),
   ),
 )
