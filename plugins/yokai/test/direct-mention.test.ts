@@ -278,6 +278,12 @@ it.effect('turns one direct mention into one generic generation and one group me
       const request = yield* Queue.take(harness.requests)
       expect(request.modelId).toBe(MODEL_ID)
       expectFocusMessage(request.messages.at(-1), 'message-reply', '下午三点可以吗')
+      const scene = request.messages.find((entry) =>
+        entry.content.includes('[Untrusted derived group scene:'),
+      )
+      if (scene === undefined) return yield* Effect.die('Expected derived scene context')
+      expect(scene.content).toContain('"threadId":"thread:message-reply"')
+      expect(scene.content).toContain('"direction":"yokai"')
       expect(request.feedbackTools).toEqual([])
       expect(yield* Queue.take(harness.sentMessages)).toBe('三点见')
       expect(yield* Queue.size(harness.sentMessages)).toBe(0)

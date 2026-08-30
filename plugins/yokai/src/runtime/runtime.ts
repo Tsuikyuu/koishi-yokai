@@ -8,6 +8,7 @@ import {
   HostConfiguration,
   HostSession,
   PresetRegistry,
+  ThreadTracker,
   WakeArbiter,
 } from '@yokai-internal/core'
 import { MessageArchive, MessageHistory } from '@yokai-internal/memory'
@@ -29,6 +30,7 @@ export type Services =
   | MessageArchive.Service
   | MessageHistory.Service
   | PresetRegistry.Service
+  | ThreadTracker.Service
   | WakeArbiter.Service
 
 export interface Interface {

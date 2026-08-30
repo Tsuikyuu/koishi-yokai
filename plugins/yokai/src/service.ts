@@ -8,6 +8,7 @@ import {
   HostModelSelection,
   HostSession,
   PresetRegistry,
+  ThreadTracker,
   type AvailableCapabilities,
   type PresetSourceRegistration as CorePresetSourceRegistration,
   type ResolvedModel,
@@ -126,6 +127,11 @@ export class Yokai extends Service<Config> implements YokaiCapabilityHost {
           session,
           archived.value.message,
           archived.value.isDuplicate,
+        )
+        const threadTracker = yield* ThreadTracker.Service
+        yield* threadTracker.observe(
+          archived.value.message,
+          observation.explicitMention || observation.replyToSelf || observation.nameHit,
         )
         const directMechanism = yield* DirectResponseMechanism.Service
         const activityMechanism = yield* ActivityResponseMechanism.Service

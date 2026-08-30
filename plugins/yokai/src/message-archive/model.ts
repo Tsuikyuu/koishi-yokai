@@ -12,6 +12,7 @@ export interface YokaiMessageRow {
   kind: 'created' | 'updated'
   authorId: string
   selfId: string
+  replyToMessageId: string | null
   timestamp: Date
   eventTimestamp: Date
   recordedAt: Date
@@ -40,6 +41,7 @@ export const define = (ctx: Context): void => {
       kind: 'string(16)',
       authorId: 'string(512)',
       selfId: 'string(512)',
+      replyToMessageId: { type: 'string', length: 512, nullable: true, initial: null },
       timestamp: 'timestamp',
       eventTimestamp: 'timestamp',
       recordedAt: 'timestamp',

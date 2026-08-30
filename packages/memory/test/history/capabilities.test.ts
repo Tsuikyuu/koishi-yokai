@@ -36,6 +36,7 @@ const message = (index: number) =>
     kind: 'created',
     authorId: AUTHOR_ID,
     selfId: SELF_ID,
+    replyToMessageId: Option.none(),
     timestamp: MessageArchiveEvent.Timestamp.make(index),
     eventTimestamp: MessageArchiveEvent.Timestamp.make(index),
     recordedAt: MessageArchiveEvent.Timestamp.make(index),

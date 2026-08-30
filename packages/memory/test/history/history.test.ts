@@ -84,6 +84,7 @@ const message = (id: string, timestamp: number, content = `message-${id}`) =>
     kind: 'created',
     authorId: AUTHOR_ID,
     selfId: SELF_ID,
+    replyToMessageId: Option.none(),
     timestamp: MessageArchiveEvent.Timestamp.make(timestamp),
     eventTimestamp: MessageArchiveEvent.Timestamp.make(timestamp),
     recordedAt: MessageArchiveEvent.Timestamp.make(timestamp),

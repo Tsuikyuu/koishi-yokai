@@ -31,12 +31,14 @@ const created = (
   channelScope: MessageArchiveEvent.ChannelScope,
   content: string,
   timestamp: number,
+  replyToMessageId: Option.Option<MessageArchiveEvent.MessageId> = Option.none(),
 ): MessageArchiveEvent.NormalizedEvent =>
   MessageArchiveEvent.NormalizedEvent.cases.MessageCreated.make({
     ...channelScope,
     messageId: MESSAGE_ID,
     authorId: AUTHOR_ID,
     selfId: SELF_ID,
+    replyToMessageId,
     timestamp: MessageArchiveEvent.Timestamp.make(timestamp),
     content,
     isSelf: false,
@@ -52,6 +54,7 @@ const updated = (
     messageId: MESSAGE_ID,
     authorId: AUTHOR_ID,
     selfId: SELF_ID,
+    replyToMessageId: Option.none(),
     timestamp: MessageArchiveEvent.Timestamp.make(timestamp),
     content,
     isSelf: false,
@@ -94,7 +97,12 @@ it.effect('defines stable message indexes and persists idempotent linked version
         const storage = yield* MessageArchiveStorage.Service
         const channelScope = scope(PRIMARY_INSTANCE, 'channel')
         const first = yield* storage.store(
-          created(channelScope, 'original', 1_000),
+          created(
+            channelScope,
+            'original',
+            1_000,
+            Option.some(MessageArchiveEvent.MessageId.make('parent-message')),
+          ),
           MessageArchiveEvent.Timestamp.make(1_100),
         )
         const replay = yield* storage.store(
@@ -109,6 +117,7 @@ it.effect('defines stable message indexes and persists idempotent linked version
         const versions = yield* storage.versions(channelScope, MESSAGE_ID)
         const latest = yield* storage.latest(channelScope, MESSAGE_ID)
         expect(first._tag).toBe('Stored')
+        expect(Option.getOrUndefined(first.message.replyToMessageId)).toBe('parent-message')
         expect(replay._tag).toBe('Replay')
         expect(edit._tag).toBe('Stored')
         expect(versions).toHaveLength(2)
@@ -117,6 +126,7 @@ it.effect('defines stable message indexes and persists idempotent linked version
         if (edited === undefined) return yield* Effect.die('Expected an edited version')
         expect(Option.getOrUndefined(edited.sourceVersion)).toBe(1)
         expect(Option.getOrUndefined(edited.previousVersion)).toBe(1)
+        expect(Option.getOrUndefined(edited.replyToMessageId)).toBe('parent-message')
         if (Option.isNone(latest)) return yield* Effect.die('Expected a latest version')
         expect(latest.value.content).toBe('edited')
       }).pipe(Effect.provide(KoishiMessageArchiveStorage.layer(ctx)))

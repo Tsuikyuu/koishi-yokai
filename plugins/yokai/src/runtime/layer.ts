@@ -11,6 +11,7 @@ import {
   DirectResponseMechanism,
   HostConfiguration,
   PresetRegistry,
+  ThreadTracker,
   WakeArbiter,
   WakeProposal,
 } from '@yokai-internal/core'
@@ -212,6 +213,7 @@ export const makeLayer = (config: Config, ctx: Context) => {
     ChannelMessageBuffer.layer,
     configurationLayer(config),
     PresetRegistry.layer,
+    ThreadTracker.layer,
     wakeServicesLayer(config),
   )
   const presetDirectory =

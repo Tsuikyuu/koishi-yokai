@@ -18,6 +18,7 @@ export const decode = Effect.fn('KoishiMessageArchiveRow.decode')(function* (row
     kind: row.kind,
     authorId: row.authorId,
     selfId: row.selfId,
+    replyToMessageId: row.replyToMessageId,
     timestamp: row.timestamp.getTime(),
     eventTimestamp: row.eventTimestamp.getTime(),
     recordedAt: row.recordedAt.getTime(),
@@ -28,6 +29,12 @@ export const decode = Effect.fn('KoishiMessageArchiveRow.decode')(function* (row
 
 const nullableVersion = (version: Option.Option<MessageArchiveEvent.MessageVersion>) =>
   Option.match(version, {
+    onNone: () => null,
+    onSome: (value) => value,
+  })
+
+const nullableMessageId = (messageId: Option.Option<MessageArchiveEvent.MessageId>) =>
+  Option.match(messageId, {
     onNone: () => null,
     onSome: (value) => value,
   })
@@ -44,6 +51,7 @@ export const encode = (message: MessageArchiveEvent.ArchivedMessage): YokaiMessa
   kind: message.kind,
   authorId: message.authorId,
   selfId: message.selfId,
+  replyToMessageId: nullableMessageId(message.replyToMessageId),
   timestamp: new Date(message.timestamp),
   eventTimestamp: new Date(message.eventTimestamp),
   recordedAt: new Date(message.recordedAt),
