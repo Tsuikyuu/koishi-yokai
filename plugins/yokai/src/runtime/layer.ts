@@ -16,7 +16,13 @@ import {
   WakeArbiter,
   WakeProposal,
 } from '@yokai-internal/core'
-import { MessageArchive, MessageArchiveEvent, MessageHistory } from '@yokai-internal/memory'
+import {
+  MessageArchive,
+  MessageArchiveEvent,
+  MessageHistory,
+  Notebook,
+  NotebookModel,
+} from '@yokai-internal/memory'
 import { RoleStateModel } from '@yokai-internal/mind'
 import { ModelReference, PresetId } from 'yokai-protocol'
 import { DateTime, Effect, Layer, Option, Schema } from 'effect'
@@ -33,6 +39,9 @@ import {
   DEFAULT_DIRECT_DEBOUNCE_MS,
   DEFAULT_INSTANCE_ID,
   DEFAULT_MESSAGE_RETENTION_DAYS,
+  DEFAULT_NOTEBOOK_EXPIRATION_DAYS,
+  DEFAULT_NOTEBOOK_MAX_NOTES_PER_REPLY,
+  DEFAULT_NOTEBOOK_RECALL_LIMIT,
   DEFAULT_NORMAL_DAY_CALLS,
   DEFAULT_NORMAL_MINUTE_CALLS,
   DEFAULT_PRESET_RELOAD_DEBOUNCE_MS,
@@ -50,6 +59,8 @@ import { HistoryCapabilityRegistration } from '../history/capabilities'
 import { KoishiMessageHistoryStorage } from '../history/storage'
 import { KoishiMessageArchiveStorage } from '../message-archive/storage'
 import { ModelCatalogSchemaProjection } from '../model-catalog/schema-projection'
+import { NotebookCapabilityRegistration } from '../notebook/capabilities'
+import { KoishiNotebookStorage } from '../notebook/index'
 import { FilePresetSource } from '../preset/file-source'
 import { FilePresetStore } from '../preset/file-store'
 import { PresetEvents } from '../preset/events'
@@ -260,6 +271,52 @@ const messageHistoryLayer = (config: Config, ctx: Context) =>
     ),
   ).pipe(Layer.provide(KoishiMessageHistoryStorage.layer(ctx)))
 
+const decodeNotebookOptions = Effect.fn('YokaiRuntime.decodeNotebookOptions')(function* (
+  config: Config,
+) {
+  const configured = config.notebook
+  const instanceId = yield* Schema.decodeUnknownEffect(MessageArchiveEvent.InstanceId)(
+    config.instanceId === undefined ? DEFAULT_INSTANCE_ID : config.instanceId,
+  )
+  const maxNotesPerReply = yield* Schema.decodeUnknownEffect(NotebookModel.NotesPerReply)(
+    configuredNumber(
+      configured === undefined ? undefined : configured.maxNotesPerReply,
+      DEFAULT_NOTEBOOK_MAX_NOTES_PER_REPLY,
+    ),
+  )
+  const recallLimit = yield* Schema.decodeUnknownEffect(NotebookModel.RecallLimit)(
+    configuredNumber(
+      configured === undefined ? undefined : configured.recallLimit,
+      DEFAULT_NOTEBOOK_RECALL_LIMIT,
+    ),
+  )
+  const defaultExpirationDays = yield* Schema.decodeUnknownEffect(NotebookModel.ExpirationDays)(
+    configuredNumber(
+      configured === undefined ? undefined : configured.defaultExpirationDays,
+      DEFAULT_NOTEBOOK_EXPIRATION_DAYS,
+    ),
+  )
+
+  return {
+    instanceId,
+    maxNotesPerReply,
+    recallLimit,
+    defaultExpirationDays: Option.some(defaultExpirationDays),
+  } satisfies Notebook.Options
+})
+
+const notebookLayer = (config: Config, ctx: Context) =>
+  Layer.unwrap(
+    decodeNotebookOptions(config).pipe(Effect.map((options) => Notebook.layer(options))),
+  ).pipe(Layer.provide(KoishiNotebookStorage.layer(ctx)))
+
+const notebookCapabilitiesLayer = (config: Config) =>
+  Layer.unwrap(
+    decodeNotebookOptions(config).pipe(
+      Effect.map((options) => NotebookCapabilityRegistration.layer(options)),
+    ),
+  )
+
 export const makeLayer = (config: Config, ctx: Context) => {
   const roleStateServices = RoleState.layer({ parameters: stateParameters(config) }).pipe(
     Layer.provide(KoishiRoleStateStorage.layer(ctx)),
@@ -287,12 +344,16 @@ export const makeLayer = (config: Config, ctx: Context) => {
     messageArchiveLayer(config, ctx),
     messageHistoryLayer(config, ctx),
   )
-  const services = Layer.merge(hostServices, archiveServices)
+  const notebookServices = notebookLayer(config, ctx).pipe(Layer.provideMerge(archiveServices))
+  const services = Layer.merge(hostServices, notebookServices)
   const servicesWithBuiltins = HistoryCapabilityRegistration.layer.pipe(
     Layer.provideMerge(services),
   )
-  const servicesWithAllBuiltins = BuiltinResponseCapabilities.layer.pipe(
+  const servicesWithNotebook = notebookCapabilitiesLayer(config).pipe(
     Layer.provideMerge(servicesWithBuiltins),
+  )
+  const servicesWithAllBuiltins = BuiltinResponseCapabilities.layer.pipe(
+    Layer.provideMerge(servicesWithNotebook),
   )
   const servicesWithPresets = presetIntegrations.pipe(Layer.provideMerge(servicesWithAllBuiltins))
   return ModelCatalogSchemaProjection.layer(ctx, config).pipe(

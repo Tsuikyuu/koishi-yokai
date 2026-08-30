@@ -669,7 +669,7 @@ it.effect('sends ordered message segments and applies quotes only to their own s
       expect(firstRequest.systemInstruction).toContain('zero to four <message> elements')
       expect(firstRequest.systemInstruction).toContain('<message quote="VISIBLE MESSAGE ID">')
       expect(firstRequest.systemInstruction).not.toContain('<decision')
-      expect(firstRequest.systemInstruction).toContain('No ActionTool is visible in this turn')
+      expect(firstRequest.systemInstruction).toContain('ActionTool notebook.write')
       expect(firstRequest.systemInstruction).toContain('training data')
       expect(firstRequest.systemInstruction).toContain('context window')
       expect(firstRequest.systemInstruction).toContain('focus message')

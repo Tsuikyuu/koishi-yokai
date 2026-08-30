@@ -2,6 +2,9 @@ import { Schema } from 'koishi'
 
 export const DEFAULT_INSTANCE_ID = 'default'
 export const DEFAULT_MESSAGE_RETENTION_DAYS = 90
+export const DEFAULT_NOTEBOOK_MAX_NOTES_PER_REPLY = 4
+export const DEFAULT_NOTEBOOK_RECALL_LIMIT = 8
+export const DEFAULT_NOTEBOOK_EXPIRATION_DAYS = 365
 export const DEFAULT_PRESET_RELOAD_DEBOUNCE_MS = 250
 export const DEFAULT_DIRECT_DEBOUNCE_MS = 500
 export const DEFAULT_ACTIVITY_DEBOUNCE_MS = 3_000
@@ -50,6 +53,12 @@ export interface StateConfig {
   energyRecoveryHalfLifeMs?: number
 }
 
+export interface NotebookConfig {
+  maxNotesPerReply?: number
+  recallLimit?: number
+  defaultExpirationDays?: number
+}
+
 export interface Config {
   instanceId?: string
   presetId?: string
@@ -58,6 +67,7 @@ export interface Config {
   model?: string
   feedbackToolsEnabled: boolean
   messageRetentionDays?: number
+  notebook?: NotebookConfig
   state?: StateConfig
   wake?: WakeConfig
   callBudget?: CallBudgetConfig
@@ -168,6 +178,28 @@ const StateConfigSchema = Schema.object({
   energyRecoveryHalfLifeMs: DEFAULT_STATE_ENERGY_RECOVERY_HALF_LIFE_MS,
 })
 
+const NotebookConfigSchema = Schema.object({
+  maxNotesPerReply: Schema.natural()
+    .min(1)
+    .max(8)
+    .default(DEFAULT_NOTEBOOK_MAX_NOTES_PER_REPLY)
+    .description('单次成功回复最多允许 notebook.write 提出的长期笔记数。'),
+  recallLimit: Schema.natural()
+    .min(1)
+    .max(32)
+    .default(DEFAULT_NOTEBOOK_RECALL_LIMIT)
+    .description('每次上下文召回的长期笔记上限。'),
+  defaultExpirationDays: Schema.natural()
+    .min(1)
+    .max(3_650)
+    .default(DEFAULT_NOTEBOOK_EXPIRATION_DAYS)
+    .description('未显式指定 expiresAt 时长期笔记的默认过期天数。'),
+}).default({
+  maxNotesPerReply: DEFAULT_NOTEBOOK_MAX_NOTES_PER_REPLY,
+  recallLimit: DEFAULT_NOTEBOOK_RECALL_LIMIT,
+  defaultExpirationDays: DEFAULT_NOTEBOOK_EXPIRATION_DAYS,
+})
+
 export const Config: Schema<Config> = Schema.object({
   instanceId: Schema.string()
     .pattern(/^[A-Za-z][A-Za-z0-9._-]*$/)
@@ -196,6 +228,7 @@ export const Config: Schema<Config> = Schema.object({
     .max(3_650)
     .default(DEFAULT_MESSAGE_RETENTION_DAYS)
     .description('原始群聊消息的本地保留天数。'),
+  notebook: NotebookConfigSchema.description('长期记事本的写入、召回和默认过期参数。'),
   state: StateConfigSchema.description('角色心境、社交精力、近期参与和成员关系的本地状态参数。'),
   wake: WakeConfigSchema.description('本地活跃度门控、合并窗口和冷却设置。'),
   callBudget: CallBudgetConfigSchema.description('分类逻辑调用预算。'),

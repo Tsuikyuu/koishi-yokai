@@ -5,6 +5,7 @@ import {
   SceneUnderstanding,
   ThreadScene,
 } from '@yokai-internal/mind'
+import { NotebookTurnPolicy } from '@yokai-internal/memory'
 import {
   GenerateRequest,
   TokenLimit,
@@ -318,6 +319,7 @@ export const run = Effect.fn('WakeTurn.run')(function* (input: Input) {
   const response = yield* responseProtocol.parse(generation.result.text, {
     quotableMessageIds: quotableMessageIds(turnSnapshot, assembledContext),
   })
+  yield* NotebookTurnPolicy.validate(response.actions)
   const beforeSend = yield* ActionExecution.runBeforeSend(response.actions, scope)
   if (beforeSend.blockReply) {
     return yield* complete({
@@ -354,7 +356,10 @@ export const run = Effect.fn('WakeTurn.run')(function* (input: Input) {
     messages: response.messages,
     sendText,
   })
-  yield* ActionExecution.scheduleAfterSend(response.actions, scope)
+  yield* ActionExecution.scheduleAfterSend(
+    NotebookTurnPolicy.afterSuccessfulSend(response.actions, sending.sentSegments),
+    scope,
+  )
 
   return yield* complete({
     path: generation.path,

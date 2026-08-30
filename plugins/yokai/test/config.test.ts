@@ -15,6 +15,9 @@ import {
   DEFAULT_BACKGROUND_MINUTE_CALLS,
   DEFAULT_BUDGET_TIME_ZONE,
   DEFAULT_DIRECT_DEBOUNCE_MS,
+  DEFAULT_NOTEBOOK_EXPIRATION_DAYS,
+  DEFAULT_NOTEBOOK_MAX_NOTES_PER_REPLY,
+  DEFAULT_NOTEBOOK_RECALL_LIMIT,
   DEFAULT_NORMAL_DAY_CALLS,
   DEFAULT_NORMAL_MINUTE_CALLS,
   DEFAULT_PRESET_RELOAD_DEBOUNCE_MS,
@@ -29,7 +32,7 @@ import {
 } from '../src/config'
 import { schemaForCatalog } from '../src/model-catalog/schema-projection'
 
-it('keeps model, local wake gating, budgets, instance, and retention in main config', () => {
+it('keeps model, local wake gating, budgets, instance, retention, and notebook in main config', () => {
   expect(
     Config({
       model: 'gemini/gemini-2.5-flash',
@@ -40,6 +43,11 @@ it('keeps model, local wake gating, budgets, instance, and retention in main con
     model: 'gemini/gemini-2.5-flash',
     feedbackToolsEnabled: true,
     messageRetentionDays: 90,
+    notebook: {
+      maxNotesPerReply: DEFAULT_NOTEBOOK_MAX_NOTES_PER_REPLY,
+      recallLimit: DEFAULT_NOTEBOOK_RECALL_LIMIT,
+      defaultExpirationDays: DEFAULT_NOTEBOOK_EXPIRATION_DAYS,
+    },
     presetReloadDebounceMs: DEFAULT_PRESET_RELOAD_DEBOUNCE_MS,
     state: {
       maxInteractionDelta: DEFAULT_STATE_MAX_INTERACTION_DELTA,
@@ -74,6 +82,7 @@ it('keeps model, local wake gating, budgets, instance, and retention in main con
   const feedbackToolsEnabled = fields.feedbackToolsEnabled
   const instanceId = fields.instanceId
   const messageRetentionDays = fields.messageRetentionDays
+  const notebook = fields.notebook
   const presetId = fields.presetId
   const presetDirectory = fields.presetDirectory
   const presetReloadDebounceMs = fields.presetReloadDebounceMs
@@ -85,6 +94,7 @@ it('keeps model, local wake gating, budgets, instance, and retention in main con
     feedbackToolsEnabled === undefined ||
     instanceId === undefined ||
     messageRetentionDays === undefined ||
+    notebook === undefined ||
     presetId === undefined ||
     presetDirectory === undefined ||
     presetReloadDebounceMs === undefined ||
@@ -105,6 +115,38 @@ it('keeps model, local wake gating, budgets, instance, and retention in main con
   expect(messageRetentionDays.meta.default).toBe(90)
   expect(messageRetentionDays.meta.min).toBe(1)
   expect(messageRetentionDays.meta.max).toBe(3_650)
+  expect(notebook({ recallLimit: 12 })).toEqual({
+    maxNotesPerReply: DEFAULT_NOTEBOOK_MAX_NOTES_PER_REPLY,
+    recallLimit: 12,
+    defaultExpirationDays: DEFAULT_NOTEBOOK_EXPIRATION_DAYS,
+  })
+  const notebookFields = notebook.dict
+  if (notebookFields === undefined) throw new Error('Expected a notebook configuration schema')
+  const maxNotesPerReply = notebookFields.maxNotesPerReply
+  const recallLimit = notebookFields.recallLimit
+  const defaultExpirationDays = notebookFields.defaultExpirationDays
+  if (
+    maxNotesPerReply === undefined ||
+    recallLimit === undefined ||
+    defaultExpirationDays === undefined
+  ) {
+    throw new Error('Expected all notebook configuration fields')
+  }
+  expect(maxNotesPerReply.meta).toMatchObject({
+    default: DEFAULT_NOTEBOOK_MAX_NOTES_PER_REPLY,
+    min: 1,
+    max: 8,
+  })
+  expect(recallLimit.meta).toMatchObject({
+    default: DEFAULT_NOTEBOOK_RECALL_LIMIT,
+    min: 1,
+    max: 32,
+  })
+  expect(defaultExpirationDays.meta).toMatchObject({
+    default: DEFAULT_NOTEBOOK_EXPIRATION_DAYS,
+    min: 1,
+    max: 3_650,
+  })
   expect(presetId.meta.default).toBeUndefined()
   expect(presetDirectory.meta.role).toBe('path')
   expect(presetReloadDebounceMs.meta.default).toBe(DEFAULT_PRESET_RELOAD_DEBOUNCE_MS)
