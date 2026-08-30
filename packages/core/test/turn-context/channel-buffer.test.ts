@@ -53,6 +53,7 @@ const message = (
     kind: options.version === undefined || options.version === 1 ? 'created' : 'updated',
     authorId: AUTHOR_ID,
     selfId: SELF_ID,
+    replyToMessageId: Option.none(),
     timestamp,
     eventTimestamp: timestamp,
     recordedAt: timestamp,

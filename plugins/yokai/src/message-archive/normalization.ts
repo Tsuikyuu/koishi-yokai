@@ -28,6 +28,7 @@ export const normalize = Effect.fn('KoishiMessageArchive.normalize')(function* (
     messageId: session.messageId,
     authorId: session.userId,
     selfId: session.selfId,
+    replyToMessageId: session.quote === undefined ? null : session.quote.id,
     timestamp: session.timestamp,
     content: session.content,
     isSelf: session.userId === session.selfId,

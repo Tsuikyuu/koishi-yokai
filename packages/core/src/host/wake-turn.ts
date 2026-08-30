@@ -1,4 +1,4 @@
-import { RoleResponseEnvelope } from '@yokai-internal/mind'
+import { RoleResponseEnvelope, SceneUnderstanding, ThreadScene } from '@yokai-internal/mind'
 import {
   GenerateRequest,
   TokenLimit,
@@ -16,6 +16,7 @@ import { Clock, Duration, Effect, Option, Schema } from 'effect'
 
 import { CapabilityRegistry } from '../capability-registry/index'
 import { PresetRegistry } from '../preset/index'
+import { ThreadTracker } from '../scene/index'
 import { ChannelMessageBuffer, TurnSnapshot } from '../turn-context/index'
 import type { WakeArbiter } from '../wake/index'
 import { WakeProposal } from '../wake/index'
@@ -89,7 +90,13 @@ const renderFocusMessage = (focus: FocusMessage): string =>
 const requestMessages = (
   snapshot: TurnSnapshot.Snapshot,
   context: ContextAssembly.Assembly,
+  scene: Option.Option<ThreadScene.Scene>,
 ): readonly [UserMessage, ...UserMessage[]] => {
+  const sceneContext = Option.match(scene, {
+    onNone: () => [] as const,
+    onSome: (value) =>
+      [UserMessage.make({ role: 'user', content: SceneUnderstanding.render(value) })] as const,
+  })
   const supplemental = Option.match(context.content, {
     onNone: () => [] as const,
     onSome: (content) => [UserMessage.make({ role: 'user', content })] as const,
@@ -98,7 +105,7 @@ const requestMessages = (
     onNone: () => [] as const,
     onSome: (content) => [UserMessage.make({ role: 'user', content })] as const,
   })
-  const contextMessages: ReadonlyArray<UserMessage> = [...supplemental, ...recent]
+  const contextMessages: ReadonlyArray<UserMessage> = [...sceneContext, ...supplemental, ...recent]
   const focus = UserMessage.make({ role: 'user', content: renderFocusMessage(snapshot.focus) })
   const first = contextMessages[0]
   return first === undefined ? [focus] : [first, ...contextMessages.slice(1), focus]
@@ -225,7 +232,9 @@ export const run = Effect.fn('WakeTurn.run')(function* (input: Input) {
     }),
     turnSnapshot,
   )
-  const messages = requestMessages(turnSnapshot, assembledContext)
+  const threadTracker = yield* ThreadTracker.Service
+  const scene = yield* threadTracker.scene(scope, focus.messageId)
+  const messages = requestMessages(turnSnapshot, assembledContext, scene)
   const selected = yield* HostModelSelection.resolveSnapshot(capabilitySnapshot)
   const feedbackTools = yield* selectedFeedbackTools(
     configuration.feedbackToolsEnabled,

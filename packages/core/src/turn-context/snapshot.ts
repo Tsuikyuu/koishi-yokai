@@ -15,6 +15,7 @@ export type MessageCount = typeof MessageCount.Type
 
 export const Message = Schema.Struct({
   ...FocusMessage.fields,
+  replyToMessageId: Schema.OptionFromNullOr(Schema.String),
   isSelf: Schema.Boolean,
 })
 
@@ -51,6 +52,7 @@ const messageOf = (message: MessageArchiveEvent.ArchivedMessage): Message =>
     authorId: message.authorId,
     timestamp: message.timestamp,
     content: message.content,
+    replyToMessageId: message.replyToMessageId,
     isSelf: message.isSelf,
   })
 
@@ -68,6 +70,7 @@ const renderRecent = (messages: ReadonlyArray<Message>): string =>
         authorId: message.authorId,
         timestamp: message.timestamp,
         content: message.content,
+        replyToMessageId: Option.getOrNull(message.replyToMessageId),
         isSelf: message.isSelf,
       }),
     ),
