@@ -16,6 +16,11 @@ export const DEFAULT_NORMAL_MINUTE_CALLS = 2
 export const DEFAULT_NORMAL_DAY_CALLS = 100
 export const DEFAULT_BACKGROUND_MINUTE_CALLS = 1
 export const DEFAULT_BACKGROUND_DAY_CALLS = 20
+export const DEFAULT_STATE_MAX_INTERACTION_DELTA = 0.2
+export const DEFAULT_STATE_MOOD_HALF_LIFE_MS = 4 * 60 * 60 * 1_000
+export const DEFAULT_STATE_PARTICIPATION_HALF_LIFE_MS = 30 * 60 * 1_000
+export const DEFAULT_STATE_ENERGY_RECOVERY_HALF_LIFE_MS = 2 * 60 * 60 * 1_000
+export const MAX_STATE_HALF_LIFE_MS = 365 * 24 * 60 * 60 * 1_000
 
 export interface WakeConfig {
   directDebounceMs?: number
@@ -38,6 +43,13 @@ export interface CallBudgetConfig {
   background?: BudgetClassConfig
 }
 
+export interface StateConfig {
+  maxInteractionDelta?: number
+  moodHalfLifeMs?: number
+  participationHalfLifeMs?: number
+  energyRecoveryHalfLifeMs?: number
+}
+
 export interface Config {
   instanceId?: string
   presetId?: string
@@ -46,6 +58,7 @@ export interface Config {
   model?: string
   feedbackToolsEnabled: boolean
   messageRetentionDays?: number
+  state?: StateConfig
   wake?: WakeConfig
   callBudget?: CallBudgetConfig
 }
@@ -124,12 +137,43 @@ const CallBudgetConfigSchema = Schema.object({
   },
 })
 
+const StateConfigSchema = Schema.object({
+  maxInteractionDelta: Schema.number()
+    .min(0.001)
+    .max(0.5)
+    .default(DEFAULT_STATE_MAX_INTERACTION_DELTA)
+    .description('一次互动对任一角色状态或关系数值维度造成的最大变化。'),
+  moodHalfLifeMs: Schema.natural()
+    .min(1)
+    .max(MAX_STATE_HALF_LIFE_MS)
+    .role('ms')
+    .default(DEFAULT_STATE_MOOD_HALF_LIFE_MS)
+    .description('短期心境偏移回归中性的半衰期。'),
+  participationHalfLifeMs: Schema.natural()
+    .min(1)
+    .max(MAX_STATE_HALF_LIFE_MS)
+    .role('ms')
+    .default(DEFAULT_STATE_PARTICIPATION_HALF_LIFE_MS)
+    .description('近期参与压力的半衰期。'),
+  energyRecoveryHalfLifeMs: Schema.natural()
+    .min(1)
+    .max(MAX_STATE_HALF_LIFE_MS)
+    .role('ms')
+    .default(DEFAULT_STATE_ENERGY_RECOVERY_HALF_LIFE_MS)
+    .description('社交精力向休息状态恢复的半衰期。'),
+}).default({
+  maxInteractionDelta: DEFAULT_STATE_MAX_INTERACTION_DELTA,
+  moodHalfLifeMs: DEFAULT_STATE_MOOD_HALF_LIFE_MS,
+  participationHalfLifeMs: DEFAULT_STATE_PARTICIPATION_HALF_LIFE_MS,
+  energyRecoveryHalfLifeMs: DEFAULT_STATE_ENERGY_RECOVERY_HALF_LIFE_MS,
+})
+
 export const Config: Schema<Config> = Schema.object({
   instanceId: Schema.string()
     .pattern(/^[A-Za-z][A-Za-z0-9._-]*$/)
     .max(128)
     .default(DEFAULT_INSTANCE_ID)
-    .description('Yokai 实例 ID，用于隔离本地历史和状态。'),
+    .description('Yokai 实例 ID，用于隔离本地历史和状态；每个活跃写入实例必须唯一。'),
   presetId: Schema.string()
     .pattern(/^[A-Za-z_][A-Za-z0-9._-]*$/)
     .max(128)
@@ -152,6 +196,7 @@ export const Config: Schema<Config> = Schema.object({
     .max(3_650)
     .default(DEFAULT_MESSAGE_RETENTION_DAYS)
     .description('原始群聊消息的本地保留天数。'),
+  state: StateConfigSchema.description('角色心境、社交精力、近期参与和成员关系的本地状态参数。'),
   wake: WakeConfigSchema.description('本地活跃度门控、合并窗口和冷却设置。'),
   callBudget: CallBudgetConfigSchema.description('分类逻辑调用预算。'),
 })

@@ -21,6 +21,11 @@ import {
   DEFAULT_RELEVANCE_THRESHOLD,
   DEFAULT_RESERVED_DAY_CALLS,
   DEFAULT_RESERVED_MINUTE_CALLS,
+  DEFAULT_STATE_ENERGY_RECOVERY_HALF_LIFE_MS,
+  DEFAULT_STATE_MAX_INTERACTION_DELTA,
+  DEFAULT_STATE_MOOD_HALF_LIFE_MS,
+  DEFAULT_STATE_PARTICIPATION_HALF_LIFE_MS,
+  MAX_STATE_HALF_LIFE_MS,
 } from '../src/config'
 import { schemaForCatalog } from '../src/model-catalog/schema-projection'
 
@@ -36,6 +41,12 @@ it('keeps model, local wake gating, budgets, instance, and retention in main con
     feedbackToolsEnabled: true,
     messageRetentionDays: 90,
     presetReloadDebounceMs: DEFAULT_PRESET_RELOAD_DEBOUNCE_MS,
+    state: {
+      maxInteractionDelta: DEFAULT_STATE_MAX_INTERACTION_DELTA,
+      moodHalfLifeMs: DEFAULT_STATE_MOOD_HALF_LIFE_MS,
+      participationHalfLifeMs: DEFAULT_STATE_PARTICIPATION_HALF_LIFE_MS,
+      energyRecoveryHalfLifeMs: DEFAULT_STATE_ENERGY_RECOVERY_HALF_LIFE_MS,
+    },
     wake: {
       directDebounceMs: DEFAULT_DIRECT_DEBOUNCE_MS,
       activityDebounceMs: DEFAULT_ACTIVITY_DEBOUNCE_MS,
@@ -66,6 +77,7 @@ it('keeps model, local wake gating, budgets, instance, and retention in main con
   const presetId = fields.presetId
   const presetDirectory = fields.presetDirectory
   const presetReloadDebounceMs = fields.presetReloadDebounceMs
+  const state = fields.state
   const wake = fields.wake
   const callBudget = fields.callBudget
   if (
@@ -76,6 +88,7 @@ it('keeps model, local wake gating, budgets, instance, and retention in main con
     presetId === undefined ||
     presetDirectory === undefined ||
     presetReloadDebounceMs === undefined ||
+    state === undefined ||
     wake === undefined ||
     callBudget === undefined
   ) {
@@ -95,6 +108,36 @@ it('keeps model, local wake gating, budgets, instance, and retention in main con
   expect(presetId.meta.default).toBeUndefined()
   expect(presetDirectory.meta.role).toBe('path')
   expect(presetReloadDebounceMs.meta.default).toBe(DEFAULT_PRESET_RELOAD_DEBOUNCE_MS)
+  expect(state({ maxInteractionDelta: 0.05, moodHalfLifeMs: 60_000 })).toEqual({
+    maxInteractionDelta: 0.05,
+    moodHalfLifeMs: 60_000,
+    participationHalfLifeMs: DEFAULT_STATE_PARTICIPATION_HALF_LIFE_MS,
+    energyRecoveryHalfLifeMs: DEFAULT_STATE_ENERGY_RECOVERY_HALF_LIFE_MS,
+  })
+  const stateFields = state.dict
+  if (stateFields === undefined) throw new Error('Expected a role-state configuration schema')
+  const maxInteractionDelta = stateFields.maxInteractionDelta
+  const moodHalfLifeMs = stateFields.moodHalfLifeMs
+  const participationHalfLifeMs = stateFields.participationHalfLifeMs
+  const energyRecoveryHalfLifeMs = stateFields.energyRecoveryHalfLifeMs
+  if (
+    maxInteractionDelta === undefined ||
+    moodHalfLifeMs === undefined ||
+    participationHalfLifeMs === undefined ||
+    energyRecoveryHalfLifeMs === undefined
+  ) {
+    throw new Error('Expected all role-state configuration fields')
+  }
+  expect(maxInteractionDelta.meta).toMatchObject({ min: 0.001, max: 0.5 })
+  expect(moodHalfLifeMs.meta).toMatchObject({ min: 1, max: MAX_STATE_HALF_LIFE_MS })
+  expect(participationHalfLifeMs.meta).toMatchObject({
+    min: 1,
+    max: MAX_STATE_HALF_LIFE_MS,
+  })
+  expect(energyRecoveryHalfLifeMs.meta).toMatchObject({
+    min: 1,
+    max: MAX_STATE_HALF_LIFE_MS,
+  })
   expect(wake({ directDebounceMs: 800 })).toEqual({
     directDebounceMs: 800,
     activityDebounceMs: DEFAULT_ACTIVITY_DEBOUNCE_MS,

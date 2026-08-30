@@ -284,10 +284,24 @@ it.effect('turns one direct mention into one generic generation and one group me
       if (scene === undefined) return yield* Effect.die('Expected derived scene context')
       expect(scene.content).toContain('"threadId":"thread:message-reply"')
       expect(scene.content).toContain('"direction":"yokai"')
+      const roleState = request.messages.find((entry) =>
+        entry.content.includes('[Untrusted derived role state and member relationships:'),
+      )
+      if (roleState === undefined) return yield* Effect.die('Expected derived role-state context')
+      expect(roleState.content).toContain('"memberId":"user"')
+      expect(roleState.content).toContain('"familiarity"')
       expect(request.feedbackTools).toEqual([])
       expect(yield* Queue.take(harness.sentMessages)).toBe('三点见')
       expect(yield* Queue.size(harness.sentMessages)).toBe(0)
       expect(yield* generationStarts(harness.subject)).toHaveLength(1)
+      const stateRows = yield* Effect.promise(() =>
+        harness.ctx.database.get('yokai_channel_state', {}),
+      )
+      const stateRow = stateRows[0]
+      if (stateRow === undefined) return yield* Effect.die('Expected persisted channel state')
+      expect(JSON.parse(stateRow.payload)).toMatchObject({
+        roleState: { socialEnergy: 0.85, recentParticipation: 0.2 },
+      })
     }),
   ),
 )
@@ -693,6 +707,14 @@ it.effect('keeps silence and malformed XML out of group chat', () =>
 
       expect(yield* Queue.size(harness.sentMessages)).toBe(0)
       expect(yield* generationStarts(harness.subject)).toHaveLength(2)
+      const stateRows = yield* Effect.promise(() =>
+        harness.ctx.database.get('yokai_channel_state', {}),
+      )
+      const stateRow = stateRows[0]
+      if (stateRow === undefined) return yield* Effect.die('Expected persisted channel state')
+      expect(JSON.parse(stateRow.payload)).toMatchObject({
+        roleState: { socialEnergy: 1, recentParticipation: 0 },
+      })
     }),
   ),
 )
