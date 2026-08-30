@@ -59,6 +59,7 @@ export const fromSession = (
     isQuestionOrHelp: questionOrHelp(content),
     hasQuote: session.quote !== undefined,
     hasMedia: hasMedia(session),
+    localState: WakeMessage.emptyLocalStateSignals(),
   })
 }
 

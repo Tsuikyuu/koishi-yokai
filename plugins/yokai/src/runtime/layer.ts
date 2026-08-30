@@ -11,11 +11,13 @@ import {
   DirectResponseMechanism,
   HostConfiguration,
   PresetRegistry,
+  RoleState,
   ThreadTracker,
   WakeArbiter,
   WakeProposal,
 } from '@yokai-internal/core'
 import { MessageArchive, MessageArchiveEvent, MessageHistory } from '@yokai-internal/memory'
+import { RoleStateModel } from '@yokai-internal/mind'
 import { ModelReference, PresetId } from 'yokai-protocol'
 import { DateTime, Effect, Layer, Option, Schema } from 'effect'
 import type { Context } from 'koishi'
@@ -37,6 +39,10 @@ import {
   DEFAULT_RELEVANCE_THRESHOLD,
   DEFAULT_RESERVED_DAY_CALLS,
   DEFAULT_RESERVED_MINUTE_CALLS,
+  DEFAULT_STATE_ENERGY_RECOVERY_HALF_LIFE_MS,
+  DEFAULT_STATE_MAX_INTERACTION_DELTA,
+  DEFAULT_STATE_MOOD_HALF_LIFE_MS,
+  DEFAULT_STATE_PARTICIPATION_HALF_LIFE_MS,
   type BudgetClassConfig,
   type Config,
 } from '../config'
@@ -47,6 +53,7 @@ import { ModelCatalogSchemaProjection } from '../model-catalog/schema-projection
 import { FilePresetSource } from '../preset/file-source'
 import { FilePresetStore } from '../preset/file-store'
 import { PresetEvents } from '../preset/events'
+import { KoishiRoleStateStorage } from '../role-state/index'
 import { BuiltinResponseCapabilities } from '../response/capabilities'
 
 const decodeModelReference = Schema.decodeUnknownEffect(ModelReference)
@@ -77,6 +84,53 @@ const configurationLayer = (config: Config) =>
 
 const configuredNumber = (value: number | undefined, fallback: number): number =>
   value === undefined ? fallback : value
+
+const stateParameters = (config: Config): RoleStateModel.Parameters => {
+  const configured = config.state
+  const defaults = RoleStateModel.defaultParameters()
+  const maximumDelta = configuredNumber(
+    configured === undefined ? undefined : configured.maxInteractionDelta,
+    DEFAULT_STATE_MAX_INTERACTION_DELTA,
+  )
+  return RoleStateModel.Parameters.make({
+    moodHalfLifeMs: RoleStateModel.DecayHalfLifeMilliseconds.make(
+      configuredNumber(
+        configured === undefined ? undefined : configured.moodHalfLifeMs,
+        DEFAULT_STATE_MOOD_HALF_LIFE_MS,
+      ),
+    ),
+    recentParticipationHalfLifeMs: RoleStateModel.DecayHalfLifeMilliseconds.make(
+      configuredNumber(
+        configured === undefined ? undefined : configured.participationHalfLifeMs,
+        DEFAULT_STATE_PARTICIPATION_HALF_LIFE_MS,
+      ),
+    ),
+    socialEnergyRecoveryHalfLifeMs: RoleStateModel.DecayHalfLifeMilliseconds.make(
+      configuredNumber(
+        configured === undefined ? undefined : configured.energyRecoveryHalfLifeMs,
+        DEFAULT_STATE_ENERGY_RECOVERY_HALF_LIFE_MS,
+      ),
+    ),
+    maxMoodValenceDelta: RoleStateModel.Level.make(
+      Math.min(defaults.maxMoodValenceDelta, maximumDelta),
+    ),
+    maxMoodArousalDelta: RoleStateModel.Level.make(
+      Math.min(defaults.maxMoodArousalDelta, maximumDelta),
+    ),
+    maxSocialEnergyDelta: RoleStateModel.Level.make(
+      Math.min(defaults.maxSocialEnergyDelta, maximumDelta),
+    ),
+    maxRecentParticipationDelta: RoleStateModel.Level.make(
+      Math.min(defaults.maxRecentParticipationDelta, maximumDelta),
+    ),
+    maxFamiliarityDelta: RoleStateModel.Level.make(
+      Math.min(defaults.maxFamiliarityDelta, maximumDelta),
+    ),
+    maxInteractionDepthDelta: RoleStateModel.Level.make(
+      Math.min(defaults.maxInteractionDepthDelta, maximumDelta),
+    ),
+  })
+}
 
 const configuredBudgetClass = (
   configured: BudgetClassConfig | undefined,
@@ -207,12 +261,16 @@ const messageHistoryLayer = (config: Config, ctx: Context) =>
   ).pipe(Layer.provide(KoishiMessageHistoryStorage.layer(ctx)))
 
 export const makeLayer = (config: Config, ctx: Context) => {
+  const roleStateServices = RoleState.layer({ parameters: stateParameters(config) }).pipe(
+    Layer.provide(KoishiRoleStateStorage.layer(ctx)),
+  )
   const hostServices = Layer.mergeAll(
     BackgroundTasks.layer,
     CapabilityRegistry.layer,
     ChannelMessageBuffer.layer,
     configurationLayer(config),
     PresetRegistry.layer,
+    roleStateServices,
     ThreadTracker.layer,
     wakeServicesLayer(config),
   )

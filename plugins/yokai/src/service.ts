@@ -8,6 +8,8 @@ import {
   HostModelSelection,
   HostSession,
   PresetRegistry,
+  RoleState,
+  RoleStateSignals,
   ThreadTracker,
   type AvailableCapabilities,
   type PresetSourceRegistration as CorePresetSourceRegistration,
@@ -18,6 +20,7 @@ import {
   WakeTurn,
 } from '@yokai-internal/core'
 import { MessageArchive, MessageArchiveEvent } from '@yokai-internal/memory'
+import { ThreadScene } from '@yokai-internal/mind'
 import type {
   ActionTool,
   AdapterId,
@@ -129,14 +132,32 @@ export class Yokai extends Service<Config> implements YokaiCapabilityHost {
           archived.value.isDuplicate,
         )
         const threadTracker = yield* ThreadTracker.Service
-        yield* threadTracker.observe(
+        const scene = yield* threadTracker.observe(
           archived.value.message,
           observation.explicitMention || observation.replyToSelf || observation.nameHit,
         )
+        const roleState = yield* RoleState.Service
+        const localState = yield* Effect.gen(function* () {
+          const priorState = yield* roleState.snapshot(observation.scope, [
+            observation.focus.authorId,
+          ])
+          const signals = RoleStateSignals.localSignals(priorState, scene)
+          if (observation.isEffective && !observation.isOtherBot && !observation.isSelf) {
+            yield* roleState.observe({
+              scope: observation.scope,
+              messageId: observation.focus.messageId,
+              memberId: ThreadScene.ParticipantId.make(observation.focus.authorId),
+              scene,
+            })
+          }
+          return signals
+        }).pipe(Effect.option)
+        if (Option.isNone(localState)) return false
+        const observedMessage = WakeMessage.withLocalState(observation, localState.value)
         const directMechanism = yield* DirectResponseMechanism.Service
         const activityMechanism = yield* ActivityResponseMechanism.Service
-        const direct = yield* directMechanism.observe(observation)
-        const activity = yield* activityMechanism.observe(observation)
+        const direct = yield* directMechanism.observe(observedMessage)
+        const activity = yield* activityMechanism.observe(observedMessage)
         const selected = Option.isSome(direct) ? direct : activity
         if (Option.isNone(selected)) return false
 
@@ -159,6 +180,7 @@ export class Yokai extends Service<Config> implements YokaiCapabilityHost {
               scope: proposal.scope,
               focus: proposal.focus,
               kind: proposal.kind,
+              submittedAt: proposal.submittedAt,
               markDispatched,
               withLogicalCallReservation,
               sendText,
@@ -173,7 +195,7 @@ export class Yokai extends Service<Config> implements YokaiCapabilityHost {
         if (outcome._tag === 'Executed') {
           yield* activityMechanism.consume(outcome.proposal.scopeId)
         }
-        return WakeMessage.isHardTrigger(observation)
+        return WakeMessage.isHardTrigger(observedMessage)
       }),
     )
   }

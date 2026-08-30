@@ -4,6 +4,7 @@ import { DateTime, Duration, Effect, Layer, Option } from 'effect'
 import { TestClock } from 'effect/testing'
 
 import {
+  ActivityGateValue,
   ActivityResponseMechanism,
   CallBudget,
   DirectResponseMechanism,
@@ -41,6 +42,7 @@ const message = (
     isQuestionOrHelp: false,
     hasQuote: false,
     hasMedia: false,
+    localState: WakeMessage.emptyLocalStateSignals(),
     ...overrides,
   })
 
@@ -150,5 +152,46 @@ it.effect('excludes duplicate, self, and other-bot messages from activity propos
       expect(Option.isNone(yield* activity.observe(candidate))).toBe(true)
     }
     expect((yield* activity.snapshot(WakeProposal.scopeIdOf(SCOPE))).activity).toBe(0)
+  }).pipe(Effect.provide(mechanismLayer)),
+)
+
+it.effect('applies persisted participation pressure and unfinished-item evidence locally', () =>
+  Effect.gen(function* () {
+    yield* TestClock.setTime(0)
+    const activity = yield* ActivityResponseMechanism.Service
+    const pressured = WakeMessage.LocalStateSignals.make({
+      unfinishedItemEvidence: ActivityGateValue.Score.make(0),
+      threadOrInterestEvidence: ActivityGateValue.Score.make(0),
+      recentParticipationPressure: ActivityGateValue.Pressure.make(1),
+      sufficientResponsePressure: ActivityGateValue.Pressure.make(0),
+    })
+
+    for (let index = 1; index <= 6; index += 1) {
+      expect(
+        Option.isNone(
+          yield* activity.observe(
+            message(`pressured-${index}`, {
+              isQuestionOrHelp: true,
+              localState: pressured,
+            }),
+          ),
+        ),
+      ).toBe(true)
+    }
+
+    const unfinished = WakeMessage.LocalStateSignals.make({
+      ...pressured,
+      unfinishedItemEvidence: ActivityGateValue.Score.make(3),
+    })
+    expect(
+      Option.isSome(
+        yield* activity.observe(
+          message('unfinished-follow-up', {
+            isQuestionOrHelp: true,
+            localState: unfinished,
+          }),
+        ),
+      ),
+    ).toBe(true)
   }).pipe(Effect.provide(mechanismLayer)),
 )

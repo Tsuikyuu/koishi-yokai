@@ -184,10 +184,10 @@ export const layer = (options: Options = DEFAULT_OPTIONS) =>
               questionOrHelpEvidence: ActivityGateValue.Score.make(
                 message.isQuestionOrHelp ? 2 : 0,
               ),
-              unfinishedItemEvidence: ActivityGateValue.Score.make(0),
-              threadOrInterestEvidence: ActivityGateValue.Score.make(0),
-              recentParticipationPressure: ActivityGateValue.Pressure.make(0),
-              sufficientResponsePressure: ActivityGateValue.Pressure.make(0),
+              unfinishedItemEvidence: message.localState.unfinishedItemEvidence,
+              threadOrInterestEvidence: message.localState.threadOrInterestEvidence,
+              recentParticipationPressure: message.localState.recentParticipationPressure,
+              sufficientResponsePressure: message.localState.sufficientResponsePressure,
               cooldownPressure,
               budgetPressure,
             }),
@@ -197,7 +197,7 @@ export const layer = (options: Options = DEFAULT_OPTIONS) =>
               baseThreshold: options.activityThreshold,
               recentCallPressure,
               dailyBudgetPressure,
-              recentParticipationPressure: ActivityGateValue.Pressure.make(0),
+              recentParticipationPressure: message.localState.recentParticipationPressure,
             }),
           )
           const relevanceThreshold = DynamicThreshold.calculate(
@@ -205,7 +205,7 @@ export const layer = (options: Options = DEFAULT_OPTIONS) =>
               baseThreshold: options.relevanceThreshold,
               recentCallPressure,
               dailyBudgetPressure,
-              recentParticipationPressure: ActivityGateValue.Pressure.make(0),
+              recentParticipationPressure: message.localState.recentParticipationPressure,
             }),
           )
           const budgetAvailable = minuteUsage.remaining > 0 && dayUsage.remaining > 0

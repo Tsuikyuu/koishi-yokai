@@ -1,4 +1,10 @@
-import { RoleResponseEnvelope, SceneUnderstanding, ThreadScene } from '@yokai-internal/mind'
+import {
+  RoleResponseEnvelope,
+  RoleStateModel,
+  RoleStateRendering,
+  SceneUnderstanding,
+  ThreadScene,
+} from '@yokai-internal/mind'
 import {
   GenerateRequest,
   TokenLimit,
@@ -16,6 +22,7 @@ import { Clock, Duration, Effect, Option, Schema } from 'effect'
 
 import { CapabilityRegistry } from '../capability-registry/index'
 import { PresetRegistry } from '../preset/index'
+import { RoleState } from '../role-state/index'
 import { ThreadTracker } from '../scene/index'
 import { ChannelMessageBuffer, TurnSnapshot } from '../turn-context/index'
 import type { WakeArbiter } from '../wake/index'
@@ -50,6 +57,7 @@ export interface Input {
   readonly scope: CapabilityScope
   readonly focus: FocusMessage
   readonly kind: WakeProposal.Kind
+  readonly submittedAt: WakeProposal.EpochMilliseconds
   readonly markDispatched: WakeArbiter.MarkDispatched
   readonly withLogicalCallReservation: WakeArbiter.WithLogicalCallReservation
   readonly sendText: HostSession.SendText
@@ -91,7 +99,12 @@ const requestMessages = (
   snapshot: TurnSnapshot.Snapshot,
   context: ContextAssembly.Assembly,
   scene: Option.Option<ThreadScene.Scene>,
+  roleState: RoleStateModel.Snapshot,
 ): readonly [UserMessage, ...UserMessage[]] => {
+  const roleStateContext = UserMessage.make({
+    role: 'user',
+    content: RoleStateRendering.render(roleState),
+  })
   const sceneContext = Option.match(scene, {
     onNone: () => [] as const,
     onSome: (value) =>
@@ -105,10 +118,29 @@ const requestMessages = (
     onNone: () => [] as const,
     onSome: (content) => [UserMessage.make({ role: 'user', content })] as const,
   })
-  const contextMessages: ReadonlyArray<UserMessage> = [...sceneContext, ...supplemental, ...recent]
+  const contextMessages: ReadonlyArray<UserMessage> = [
+    roleStateContext,
+    ...sceneContext,
+    ...supplemental,
+    ...recent,
+  ]
   const focus = UserMessage.make({ role: 'user', content: renderFocusMessage(snapshot.focus) })
   const first = contextMessages[0]
   return first === undefined ? [focus] : [first, ...contextMessages.slice(1), focus]
+}
+
+const relevantMemberIds = (
+  focus: FocusMessage,
+  scene: Option.Option<ThreadScene.Scene>,
+): ReadonlyArray<string> => {
+  const participants = Option.match(scene, {
+    onNone: () => [] as const,
+    onSome: (value) => value.thread.participants,
+  })
+  return [focus.authorId, ...participants.filter((memberId) => memberId !== focus.authorId)].slice(
+    0,
+    RoleState.MAX_SNAPSHOT_MEMBERS,
+  )
 }
 
 const removeFullyBufferedContext = (
@@ -234,7 +266,9 @@ export const run = Effect.fn('WakeTurn.run')(function* (input: Input) {
   )
   const threadTracker = yield* ThreadTracker.Service
   const scene = yield* threadTracker.scene(scope, focus.messageId)
-  const messages = requestMessages(turnSnapshot, assembledContext, scene)
+  const roleState = yield* RoleState.Service
+  const roleStateSnapshot = yield* roleState.snapshot(scope, relevantMemberIds(focus, scene))
+  const messages = requestMessages(turnSnapshot, assembledContext, scene, roleStateSnapshot)
   const selected = yield* HostModelSelection.resolveSnapshot(capabilitySnapshot)
   const feedbackTools = yield* selectedFeedbackTools(
     configuration.feedbackToolsEnabled,
@@ -300,10 +334,25 @@ export const run = Effect.fn('WakeTurn.run')(function* (input: Input) {
   }
 
   yield* ActionExecution.scheduleDeferred(response.actions, scope, input.onDeferredWake)
+  const sendText: HostSession.SendText = (content, quoteMessageId) =>
+    input.sendText(content, quoteMessageId).pipe(
+      Effect.tap(() =>
+        roleState
+          .recordSuccessfulTurn({
+            scope,
+            focusMessageId: focus.messageId,
+            kind: input.kind,
+            submittedAt: input.submittedAt,
+            threadId: Option.map(scene, (value) => value.thread.id),
+            sentSegments: RoleStateModel.SentSegmentCount.make(1),
+          })
+          .pipe(Effect.catch(() => Effect.void)),
+      ),
+    )
   const sending = yield* MessageSending.send({
     kind: input.kind,
     messages: response.messages,
-    sendText: input.sendText,
+    sendText,
   })
   yield* ActionExecution.scheduleAfterSend(response.actions, scope)
 

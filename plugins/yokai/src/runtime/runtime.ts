@@ -8,6 +8,7 @@ import {
   HostConfiguration,
   HostSession,
   PresetRegistry,
+  RoleState,
   ThreadTracker,
   WakeArbiter,
 } from '@yokai-internal/core'
@@ -30,6 +31,7 @@ export type Services =
   | MessageArchive.Service
   | MessageHistory.Service
   | PresetRegistry.Service
+  | RoleState.Service
   | ThreadTracker.Service
   | WakeArbiter.Service
 
