@@ -22,11 +22,15 @@ export type ContextProviderId = typeof ContextProviderId.Type
 
 export const HISTORY_CONTEXT_PROVIDER_ID = ContextProviderId.make('history.context')
 
+export const NOTEBOOK_CONTEXT_PROVIDER_ID = ContextProviderId.make('notebook.context')
+
 export const ActionToolId = Schema.String.check(...capabilityIdChecks).pipe(
   Schema.brand('@yokai/protocol/ActionToolId'),
 )
 
 export type ActionToolId = typeof ActionToolId.Type
+
+export const NOTEBOOK_WRITE_ACTION_TOOL_ID = ActionToolId.make('notebook.write')
 
 export const SkillId = Schema.String.check(...capabilityIdChecks).pipe(
   Schema.brand('@yokai/protocol/SkillId'),

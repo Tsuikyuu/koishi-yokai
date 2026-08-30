@@ -12,7 +12,7 @@ import {
   ThreadTracker,
   WakeArbiter,
 } from '@yokai-internal/core'
-import { MessageArchive, MessageHistory } from '@yokai-internal/memory'
+import { MessageArchive, MessageHistory, Notebook } from '@yokai-internal/memory'
 import { Effect, ManagedRuntime } from 'effect'
 import type { Context } from 'koishi'
 
@@ -30,6 +30,7 @@ export type Services =
   | HostConfiguration.Service
   | MessageArchive.Service
   | MessageHistory.Service
+  | Notebook.Service
   | PresetRegistry.Service
   | RoleState.Service
   | ThreadTracker.Service

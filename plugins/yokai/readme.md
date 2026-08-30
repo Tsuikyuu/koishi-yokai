@@ -46,6 +46,13 @@
 `instanceId` 同时是状态的单写者边界；并行部署时，每个活跃 Yokai 实例必须使用不同的 ID。
 若必需状态无法读取或本次有效互动无法持久化，本轮会保持静默，不会用伪造的空状态放宽唤醒。
 
+长期记事本按实例与群聊作用域持久化 `episode`、`fact`、`relationship` 和 `self` 四类笔记。
+每次生成前会按当前消息的话题和成员召回有界笔记，并把中等置信度内容明确标为不确定；低置信度、
+已过期或已被纠正的笔记不会进入上下文。模型只能在最终 XML 中通过内置 `notebook.write`
+选择性提出笔记，且必须引用当前作用域内已存档的来源消息；该动作只在本回合全部待发角色消息成功且至少发送一段后执行，
+结果不回灌模型，也不会触发额外生成。`notebook.maxNotesPerReply` 默认 `4`、最大 `8`，
+`notebook.recallLimit` 默认 `8`、最大 `32`，`notebook.defaultExpirationDays` 默认 `365`。
+
 当前消息、焦点消息、群聊消息和用户消息都按不可信数据处理。角色回合把焦点消息放进带明确
 不可信标签的 JSON block，固定包含 `messageId`、`authorId`、`timestamp` 和 `content`；其中的
 `messageId` 同时进入冻结回合的 quote 白名单，因此模型能看到并安全引用焦点消息。

@@ -475,8 +475,10 @@ it.effect('bounds visible ActionTools without silencing a turn', () =>
       yield* dispatchDirectMention(harness, 'actions-visible-limit')
       const request = yield* Queue.take(harness.requests)
 
+      expect(request.systemInstruction).toContain('notebook.write')
       expect(request.systemInstruction).toContain('test.limit-00')
-      expect(request.systemInstruction).toContain('test.limit-15')
+      expect(request.systemInstruction).toContain('test.limit-14')
+      expect(request.systemInstruction).not.toContain('test.limit-15')
       expect(request.systemInstruction).not.toContain('test.limit-16')
       expect(yield* Queue.take(harness.sentMessages)).toBe('bounded tools')
       expect(yield* generationStarts(harness.subject)).toHaveLength(1)

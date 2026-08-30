@@ -77,6 +77,9 @@ ActionTool 注册快照固定以下字段：
     <item>
       <kind>fact</kind>
       <content>需要记住的内容</content>
+      <source-message-ids>
+        <item>message-id</item>
+      </source-message-ids>
     </item>
   </notes>
 </action>

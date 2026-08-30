@@ -334,9 +334,13 @@ FeedbackTool 使用 adapter 的原生 function calling；无需结果的 ActionT
       <dedupe-key>message-id:class</dedupe-key>
     </action>
     <action tool="notebook.write">
-      <kind>self</kind>
-      <content>我答应记住下午三点上课</content>
-      <source-message-id>message-id</source-message-id>
+      <notes>
+        <item>
+          <kind>self</kind>
+          <content>我答应记住下午三点上课</content>
+          <source-message-ids><item>message-id</item></source-message-ids>
+        </item>
+      </notes>
     </action>
   </actions>
 </output>
