@@ -37,6 +37,7 @@ const CAPABILITY_VERSION = CapabilityProtocolVersion.make({ major: 0, minor: 1 }
 const CONFIG: Config = {
   model: MODEL_REFERENCE,
   feedbackToolsEnabled: false,
+  engagement: { enabled: false },
   wake: { directDebounceMs: 100 },
 }
 
@@ -155,10 +156,11 @@ const makeHarness = Effect.fn('DirectMentionTest.makeHarness')(function* (
   generationSteps: ReadonlyArray<AdapterGenerationStepType>,
   config: Config = CONFIG,
   feedbackTools = false,
+  contextConfig: Context.Config = {},
 ) {
   const ctx = yield* Effect.acquireRelease(
     Effect.sync(() => {
-      const context = new Context()
+      const context = new Context(contextConfig)
       context.plugin(SQLiteDriver, { path: ':memory:' })
       apply(context, config)
       return context
@@ -198,6 +200,7 @@ const dispatchMessage = Effect.fn('DirectMentionTest.dispatchMessage')(function*
   messageId: string,
   content: string,
   replyToSelf = false,
+  channelId = 'channel',
 ) {
   const completed = yield* Deferred.make<void>()
   const removeListener = harness.ctx.on('middleware', (session) => {
@@ -207,7 +210,7 @@ const dispatchMessage = Effect.fn('DirectMentionTest.dispatchMessage')(function*
   })
   const session = harness.bot.session({
     user: { id: 'user', name: 'User' },
-    channel: { id: 'channel', type: Universal.Channel.Type.TEXT },
+    channel: { id: channelId, type: Universal.Channel.Type.TEXT },
     guild: { id: 'guild' },
     timestamp: 1_777_000_000_000,
   })
@@ -283,7 +286,8 @@ it.effect('turns one direct mention into one generic generation and one group me
       )
       if (scene === undefined) return yield* Effect.die('Expected derived scene context')
       expect(scene.content).toContain('"threadId":"thread:message-reply"')
-      expect(scene.content).toContain('"direction":"yokai"')
+      expect(scene.content).toContain('"direction":"self"')
+      expect(scene.content).not.toContain('"direction":"yokai"')
       const roleState = request.messages.find((entry) =>
         entry.content.includes('[Untrusted derived role state and member relationships:'),
       )
@@ -302,6 +306,113 @@ it.effect('turns one direct mention into one generic generation and one group me
       expect(JSON.parse(stateRow.payload)).toMatchObject({
         roleState: { socialEnergy: 0.85, recentParticipation: 0.2 },
       })
+    }),
+  ),
+)
+
+it.effect('recognizes an explicit self mention outside the start of a message', () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const harness = yield* makeHarness([
+        textGeneration('<output><message>mid-message mention</message></output>'),
+      ])
+      yield* dispatchMessage(
+        harness,
+        'middle-mention',
+        `please ${h.at('bot').toString()}check this`,
+      )
+
+      expectFocusMessage(
+        (yield* Queue.take(harness.requests)).messages.at(-1),
+        'middle-mention',
+        'please check this',
+      )
+      expect(yield* Queue.take(harness.sentMessages)).toBe('mid-message mention')
+    }),
+  ),
+)
+
+it.effect('keeps reply-to-self enabled when only the @ hard reply switch is disabled', () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const harness = yield* makeHarness(
+        [textGeneration('<output><message>quoted reply</message></output>')],
+        {
+          ...CONFIG,
+          wake: {
+            directDebounceMs: 100,
+            hardReplyAtMention: false,
+            hardReplyOnReplyToSelf: true,
+            activityThreshold: 1_000,
+            relevanceThreshold: 1_000,
+          },
+        },
+      )
+
+      yield* dispatchMessage(
+        harness,
+        'disabled-mention',
+        `${h.at('bot').toString()} should stay local`,
+        false,
+        'disabled-mention-channel',
+      )
+      expect(yield* Queue.size(harness.requests)).toBe(0)
+      expect(yield* Queue.size(harness.sentMessages)).toBe(0)
+
+      yield* dispatchMessage(
+        harness,
+        'enabled-reply',
+        'continue the quoted conversation',
+        true,
+        'reply-channel',
+      )
+      expect(yield* Queue.size(harness.requests)).toBe(1)
+      yield* Queue.take(harness.requests)
+      expect(yield* Queue.take(harness.sentMessages)).toBe('quoted reply')
+    }),
+  ),
+)
+
+it.effect('lets the reply-to-self hard switch disable quoted replies without disabling @', () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const harness = yield* makeHarness(
+        [textGeneration('<output><message>mention remains enabled</message></output>')],
+        {
+          ...CONFIG,
+          wake: {
+            directDebounceMs: 100,
+            hardReplyAtMention: true,
+            hardReplyOnReplyToSelf: false,
+            activityThreshold: 1_000,
+            relevanceThreshold: 1_000,
+          },
+        },
+      )
+
+      yield* dispatchMessage(
+        harness,
+        'disabled-reply',
+        'quoted reply should stay local',
+        true,
+        'disabled-reply-channel',
+      )
+      expect(yield* Queue.size(harness.requests)).toBe(0)
+      expect(yield* Queue.size(harness.sentMessages)).toBe(0)
+
+      yield* dispatchMessage(
+        harness,
+        'enabled-mention',
+        `${h.at('bot').toString()} mention still works`,
+        false,
+        'enabled-mention-channel',
+      )
+      expectFocusMessage(
+        (yield* Queue.take(harness.requests)).messages.at(-1),
+        'enabled-mention',
+        'mention still works',
+      )
+      expect(yield* Queue.take(harness.sentMessages)).toBe('mention remains enabled')
     }),
   ),
 )
@@ -391,7 +502,7 @@ it.effect('selects visible FeedbackTools before applying the per-turn cap', () =
   ),
 )
 
-it.effect('treats a reply to Yokai as a direct wake without requiring an @', () =>
+it.effect("treats a reply to the bot's own message as a direct wake without requiring an @", () =>
   Effect.scoped(
     Effect.gen(function* () {
       const harness = yield* makeHarness([
@@ -560,6 +671,154 @@ it.effect('keeps messages arriving during generation out of the frozen turn snap
       expect(recent.content).toContain('message-during')
       expect(recent.content).toContain('arrived during generation')
       expectFocusMessage(secondRequest.messages.at(-1), 'message-second', 'second focus')
+    }),
+  ),
+)
+
+it.effect(
+  'uses the current preset role-name prefix for hard replies instead of the plugin name',
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const harness = yield* makeHarness(
+          [
+            textGeneration('<output><message>role name reply</message></output>'),
+            textGeneration('<output><message>updated role name reply</message></output>'),
+          ],
+          {
+            ...CONFIG,
+            presetId: 'koharu',
+            callBudget: { normal: { minute: 100, day: 100 } },
+            state: { maxInteractionDelta: 0.001 },
+            wake: {
+              directDebounceMs: 100,
+              hardReplyRoleNamePrefix: true,
+              hardReplyRoleNameContains: false,
+              activityDebounceMs: 500,
+              cooldownMs: 0,
+              activityThreshold: 1_000,
+              relevanceThreshold: 1_000,
+            },
+          },
+          false,
+          { nickname: ['Yokai'] },
+        )
+        const presetSource = yield* Effect.promise(() =>
+          harness.ctx.yokai.registerPresetSource(
+            PresetSource.make({
+              id: PresetSourceId.make('role-name-test'),
+              protocolVersion: CAPABILITY_VERSION,
+            }),
+          ),
+        )
+        yield* Effect.promise(() => presetSource.publish(presetCandidate('Koharu')))
+
+        yield* dispatchMessage(
+          harness,
+          'plugin-name',
+          'Yokai, plugin label',
+          false,
+          'plugin-name-channel',
+        )
+        expect(yield* Queue.size(harness.requests)).toBe(0)
+        expect(yield* Queue.size(harness.sentMessages)).toBe(0)
+
+        yield* dispatchMessage(
+          harness,
+          'role-name-prefix-boundary',
+          'Koharuka is a different name',
+          false,
+          'role-name-prefix-boundary-channel',
+        )
+        expect(yield* Queue.size(harness.requests)).toBe(0)
+        expect(yield* Queue.size(harness.sentMessages)).toBe(0)
+
+        yield* dispatchMessage(
+          harness,
+          'role-name',
+          'Koharu, hello there',
+          false,
+          'role-name-channel',
+        )
+        expect(yield* Queue.size(harness.requests)).toBe(1)
+        expectFocusMessage(
+          (yield* Queue.take(harness.requests)).messages.at(-1),
+          'role-name',
+          'hello there',
+        )
+        expect(yield* Queue.take(harness.sentMessages)).toBe('role name reply')
+
+        yield* Effect.promise(() => presetSource.publish(presetCandidate('Haru')))
+        yield* dispatchMessage(
+          harness,
+          'stale-role-name',
+          'Koharu, stale name',
+          false,
+          'stale-role-name-channel',
+        )
+        expect(yield* Queue.size(harness.requests)).toBe(0)
+        expect(yield* Queue.size(harness.sentMessages)).toBe(0)
+
+        yield* dispatchMessage(
+          harness,
+          'updated-role-name',
+          'Haru, hello again',
+          false,
+          'updated-role-name-channel',
+        )
+        expect(yield* Queue.size(harness.requests)).toBe(1)
+        expectFocusMessage(
+          (yield* Queue.take(harness.requests)).messages.at(-1),
+          'updated-role-name',
+          'hello again',
+        )
+        expect(yield* Queue.take(harness.sentMessages)).toBe('updated role name reply')
+        expect(yield* generationStarts(harness.subject)).toHaveLength(2)
+      }),
+    ),
+)
+
+it.effect('supports the opt-in role-name contains hard reply', () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const harness = yield* makeHarness(
+        [textGeneration('<output><message>contains reply</message></output>')],
+        {
+          ...CONFIG,
+          presetId: 'koharu',
+          wake: {
+            directDebounceMs: 100,
+            hardReplyAtMention: false,
+            hardReplyRoleNamePrefix: false,
+            hardReplyRoleNameContains: true,
+            activityThreshold: 1_000,
+            relevanceThreshold: 1_000,
+          },
+        },
+      )
+      const presetSource = yield* Effect.promise(() =>
+        harness.ctx.yokai.registerPresetSource(
+          PresetSource.make({
+            id: PresetSourceId.make('role-name-contains-test'),
+            protocolVersion: CAPABILITY_VERSION,
+          }),
+        ),
+      )
+      yield* Effect.promise(() => presetSource.publish(presetCandidate('Koharu')))
+
+      yield* dispatchMessage(
+        harness,
+        'role-name-contains',
+        'we should ask Koharu about this',
+        false,
+        'role-name-contains-channel',
+      )
+      expectFocusMessage(
+        (yield* Queue.take(harness.requests)).messages.at(-1),
+        'role-name-contains',
+        'we should ask Koharu about this',
+      )
+      expect(yield* Queue.take(harness.sentMessages)).toBe('contains reply')
     }),
   ),
 )

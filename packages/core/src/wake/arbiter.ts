@@ -55,6 +55,8 @@ export interface GateStatus {
 
 export type MarkDispatched = () => Effect.Effect<boolean>
 
+export type Admission<R = never> = (proposal: Merged) => Effect.Effect<boolean, never, R>
+
 export type WithLogicalCallReservation = <A, E, R>(
   use: (markDispatched: MarkDispatched) => Effect.Effect<A, E, R>,
 ) => Effect.Effect<A, E | CallBudget.BudgetExceededError, R>
@@ -70,6 +72,11 @@ export interface Interface {
     proposal: Proposal,
     execute: Executor<R, E>,
   ) => Effect.Effect<Outcome, never, R>
+  readonly submitWithAdmission: <R, E>(
+    proposal: Proposal,
+    admission: Admission<R>,
+    execute: Executor<R, E>,
+  ) => Effect.Effect<Outcome, never, R>
   readonly gateStatus: (scopeId: ScopeId) => Effect.Effect<GateStatus>
 }
 
@@ -79,6 +86,8 @@ interface PendingEntry {
   readonly sequence: number
   readonly revision: number
   readonly batch: Batch
+  readonly admission: Admission
+  readonly executor: Executor
   readonly completion: Deferred.Deferred<Outcome>
 }
 
@@ -158,9 +167,10 @@ export const layer = (options: Options = { cooldownMs: DEFAULT_COOLDOWN_MS }) =>
         }))
       })
 
-      const executeClaimed = <E>(
+      const executeClaimed = (
         proposal: Merged,
-        execute: Executor<never, E>,
+        admission: Admission,
+        execute: Executor,
       ): Effect.Effect<Outcome> =>
         Effect.gen(function* () {
           const now = yield* Clock.currentTimeMillis
@@ -179,58 +189,70 @@ export const layer = (options: Options = { cooldownMs: DEFAULT_COOLDOWN_MS }) =>
           const reservation = yield* budget.reserve(proposal.budgetCategory).pipe(Effect.option)
           if (Option.isNone(reservation)) return Outcome.BudgetDenied({ proposal })
 
-          const dispatched = yield* Ref.make(false)
-          const markDispatched = Effect.fn('WakeArbiter.markDispatched')(function* () {
-            const alreadyDispatched = yield* Ref.getAndSet(dispatched, true)
-            if (alreadyDispatched) return false
-            return yield* budget.commit(reservation.value.id)
-          })
-
-          const withLogicalCallReservation: WithLogicalCallReservation = (use) =>
-            Effect.acquireUseRelease(
-              Effect.gen(function* () {
-                const logicalCallReservation = yield* budget.reserve(proposal.budgetCategory)
-                const logicalCallDispatched = yield* Ref.make(false)
-                const markLogicalCallDispatched = Effect.fn(
-                  'WakeArbiter.markLogicalCallDispatched',
-                )(function* () {
-                  const alreadyDispatched = yield* Ref.getAndSet(logicalCallDispatched, true)
-                  if (alreadyDispatched) return false
-                  return yield* budget.commit(logicalCallReservation.id)
-                })
-                return { logicalCallReservation, markLogicalCallDispatched }
-              }),
-              ({ markLogicalCallDispatched }) => use(markLogicalCallDispatched),
-              ({ logicalCallReservation }) =>
-                budget.release(logicalCallReservation.id).pipe(Effect.asVoid),
+          return yield* Effect.gen(function* () {
+            const admitted = yield* admission(proposal).pipe(
+              Effect.map(Option.some),
+              Effect.catchCause((cause) =>
+                Cause.hasInterrupts(cause)
+                  ? Effect.interrupt
+                  : Effect.logError('WakeArbiter.admission_failed', cause).pipe(
+                      Effect.as(Option.none<boolean>()),
+                    ),
+              ),
             )
+            if (Option.isNone(admitted)) {
+              return Outcome.ExecutionFailed({ proposal, dispatched: false })
+            }
+            if (!admitted.value) return Outcome.Skipped({ proposal })
 
-          const executionFailed = yield* execute(
-            proposal,
-            markDispatched,
-            withLogicalCallReservation,
-          ).pipe(
-            Effect.as(false),
-            Effect.catchCause((cause) =>
-              Cause.hasInterrupts(cause)
-                ? Effect.interrupt
-                : Effect.logError('WakeArbiter.turn_failed', cause).pipe(Effect.as(true)),
-            ),
-            Effect.ensuring(budget.release(reservation.value.id).pipe(Effect.asVoid)),
-          )
-          const wasDispatched = yield* Ref.get(dispatched)
-          if (wasDispatched) yield* markWake(proposal.scopeId)
-          if (executionFailed) {
-            return Outcome.ExecutionFailed({ proposal, dispatched: wasDispatched })
-          }
-          return wasDispatched ? Outcome.Executed({ proposal }) : Outcome.Skipped({ proposal })
+            const dispatched = yield* Ref.make(false)
+            const markDispatched = Effect.fn('WakeArbiter.markDispatched')(function* () {
+              const alreadyDispatched = yield* Ref.getAndSet(dispatched, true)
+              if (alreadyDispatched) return false
+              return yield* budget.commit(reservation.value.id)
+            })
+
+            const withLogicalCallReservation: WithLogicalCallReservation = (use) =>
+              Effect.acquireUseRelease(
+                Effect.gen(function* () {
+                  const logicalCallReservation = yield* budget.reserve(proposal.budgetCategory)
+                  const logicalCallDispatched = yield* Ref.make(false)
+                  const markLogicalCallDispatched = Effect.fn(
+                    'WakeArbiter.markLogicalCallDispatched',
+                  )(function* () {
+                    const alreadyDispatched = yield* Ref.getAndSet(logicalCallDispatched, true)
+                    if (alreadyDispatched) return false
+                    return yield* budget.commit(logicalCallReservation.id)
+                  })
+                  return { logicalCallReservation, markLogicalCallDispatched }
+                }),
+                ({ markLogicalCallDispatched }) => use(markLogicalCallDispatched),
+                ({ logicalCallReservation }) =>
+                  budget.release(logicalCallReservation.id).pipe(Effect.asVoid),
+              )
+
+            const executionFailed = yield* execute(
+              proposal,
+              markDispatched,
+              withLogicalCallReservation,
+            ).pipe(
+              Effect.as(false),
+              Effect.catchCause((cause) =>
+                Cause.hasInterrupts(cause)
+                  ? Effect.interrupt
+                  : Effect.logError('WakeArbiter.turn_failed', cause).pipe(Effect.as(true)),
+              ),
+            )
+            const wasDispatched = yield* Ref.get(dispatched)
+            if (wasDispatched) yield* markWake(proposal.scopeId)
+            if (executionFailed) {
+              return Outcome.ExecutionFailed({ proposal, dispatched: wasDispatched })
+            }
+            return wasDispatched ? Outcome.Executed({ proposal }) : Outcome.Skipped({ proposal })
+          }).pipe(Effect.ensuring(budget.release(reservation.value.id).pipe(Effect.asVoid)))
         }).pipe(Effect.withSpan('WakeArbiter.executeClaimed'))
 
-      const runPending = <E>(
-        identity: string,
-        entry: PendingEntry,
-        execute: Executor<never, E>,
-      ): Effect.Effect<void> =>
+      const runPending = (identity: string, entry: PendingEntry): Effect.Effect<void> =>
         Effect.gen(function* () {
           yield* Effect.sleep(Duration.millis(entry.batch.primary.debounceMs))
           const claimed = yield* claim(identity, entry.sequence, entry.revision)
@@ -238,12 +260,15 @@ export const layer = (options: Options = { cooldownMs: DEFAULT_COOLDOWN_MS }) =>
 
           const merged = resolve(claimed.value.batch)
           const lock = yield* channelLock(merged.scopeId)
-          const outcome = yield* lock.withPermit(executeClaimed(merged, execute))
+          const outcome = yield* lock.withPermit(
+            executeClaimed(merged, claimed.value.admission, claimed.value.executor),
+          )
           yield* Deferred.succeed(claimed.value.completion, outcome)
         }).pipe(Effect.withSpan('WakeArbiter.runPending'))
 
-      const submit = <R, E>(
+      const submitWithAdmission = <R, E>(
         proposal: Proposal,
+        admission: Admission<R>,
         execute: Executor<R, E>,
       ): Effect.Effect<Outcome, never, R> =>
         Effect.gen(function* () {
@@ -253,13 +278,12 @@ export const layer = (options: Options = { cooldownMs: DEFAULT_COOLDOWN_MS }) =>
           }
 
           const environment = yield* Effect.context<R>()
-          const providedExecutor: Executor<never, E> = (
-            merged,
-            markDispatched,
-            withLogicalCallReservation,
-          ) =>
+          const providedAdmission: Admission = (merged) =>
+            admission(merged).pipe(Effect.provide(environment))
+          const providedExecutor: Executor = (merged, markDispatched, withLogicalCallReservation) =>
             execute(merged, markDispatched, withLogicalCallReservation).pipe(
               Effect.provide(environment),
+              Effect.orDie,
             )
           const candidateCompletion = yield* Deferred.make<Outcome>()
           const identity = identityOf(proposal)
@@ -269,10 +293,15 @@ export const layer = (options: Options = { cooldownMs: DEFAULT_COOLDOWN_MS }) =>
               const pending = yield* SynchronizedRef.modify(state, (current) => {
                 const existing = HashMap.get(current.pending, identity)
                 if (Option.isSome(existing)) {
+                  const batch = merge(existing.value.batch, proposal)
                   const updated: PendingEntry = {
                     ...existing.value,
                     revision: existing.value.revision + 1,
-                    batch: merge(existing.value.batch, proposal),
+                    batch,
+                    admission:
+                      batch.primary === proposal ? providedAdmission : existing.value.admission,
+                    executor:
+                      batch.primary === proposal ? providedExecutor : existing.value.executor,
                   }
                   return [
                     updated,
@@ -284,6 +313,8 @@ export const layer = (options: Options = { cooldownMs: DEFAULT_COOLDOWN_MS }) =>
                   sequence: current.nextSequence,
                   revision: 1,
                   batch: begin(proposal),
+                  admission: providedAdmission,
+                  executor: providedExecutor,
                   completion: candidateCompletion,
                 }
                 return [
@@ -299,7 +330,7 @@ export const layer = (options: Options = { cooldownMs: DEFAULT_COOLDOWN_MS }) =>
               yield* FiberMap.run(
                 workers,
                 workerKey(identity, pending.sequence),
-                runPending(identity, pending, providedExecutor),
+                runPending(identity, pending),
               )
               return pending
             }),
@@ -307,6 +338,12 @@ export const layer = (options: Options = { cooldownMs: DEFAULT_COOLDOWN_MS }) =>
 
           return yield* Deferred.await(entry.completion)
         })
+
+      const submit = <R, E>(
+        proposal: Proposal,
+        execute: Executor<R, E>,
+      ): Effect.Effect<Outcome, never, R> =>
+        submitWithAdmission(proposal, () => Effect.succeed(true), execute)
 
       const gateStatus = Effect.fn('WakeArbiter.gateStatus')(function* (scopeId: ScopeId) {
         const now = yield* Clock.currentTimeMillis
@@ -320,7 +357,7 @@ export const layer = (options: Options = { cooldownMs: DEFAULT_COOLDOWN_MS }) =>
         } satisfies GateStatus
       })
 
-      return Service.of({ submit, gateStatus })
+      return Service.of({ submit, submitWithAdmission, gateStatus })
     }),
   )
 

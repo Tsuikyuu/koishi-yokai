@@ -112,6 +112,7 @@ export interface Batch {
 
 export const DIRECT_MECHANISM_ID = ResponseMechanismId.make('direct')
 export const ACTIVITY_MECHANISM_ID = ResponseMechanismId.make('activity')
+export const ENGAGEMENT_MECHANISM_ID = ResponseMechanismId.make('engagement')
 export const ACTION_COMPLETION_MECHANISM_ID = ResponseMechanismId.make('action-completion')
 export const CHANNEL_CONVERSATION_MERGE_KEY = MergeKey.make('channel-conversation')
 export const ACTION_COMPLETION_MERGE_KEY = MergeKey.make('action-completion')

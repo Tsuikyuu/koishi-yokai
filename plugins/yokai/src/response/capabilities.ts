@@ -19,6 +19,12 @@ export const layer = Layer.effectDiscard(
         protocolVersion: VERSION,
       }),
     )
+    const engagement = yield* registry.registerResponseMechanism(
+      ResponseMechanism.make({
+        id: WakeProposal.ENGAGEMENT_MECHANISM_ID,
+        protocolVersion: VERSION,
+      }),
+    )
     const actionCompletion = yield* registry.registerResponseMechanism(
       ResponseMechanism.make({
         id: WakeProposal.ACTION_COMPLETION_MECHANISM_ID,
@@ -27,9 +33,15 @@ export const layer = Layer.effectDiscard(
     )
 
     yield* Effect.addFinalizer(() =>
-      Effect.all([direct.unregister(), activity.unregister(), actionCompletion.unregister()], {
-        discard: true,
-      }),
+      Effect.all(
+        [
+          direct.unregister(),
+          activity.unregister(),
+          engagement.unregister(),
+          actionCompletion.unregister(),
+        ],
+        { discard: true },
+      ),
     )
   }),
 )

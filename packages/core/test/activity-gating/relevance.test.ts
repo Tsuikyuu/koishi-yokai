@@ -7,9 +7,9 @@ const baseSignals = LocalRelevance.Signals.make({
   isDuplicate: false,
   isOtherBot: false,
   isSelf: false,
-  explicitMention: false,
-  replyToSelf: false,
+  hardTrigger: false,
   mentionDegree: ActivityGateValue.Score.make(0),
+  replyToSelfEvidence: ActivityGateValue.Score.make(0),
   nameOrAliasEvidence: ActivityGateValue.Score.make(0),
   questionOrHelpEvidence: ActivityGateValue.Score.make(0),
   unfinishedItemEvidence: ActivityGateValue.Score.make(0),
@@ -28,6 +28,7 @@ it.effect('combines only local positive evidence and pressure', () =>
     const result = LocalRelevance.calculate(
       signals({
         mentionDegree: ActivityGateValue.Score.make(0.5),
+        replyToSelfEvidence: ActivityGateValue.Score.make(0.5),
         nameOrAliasEvidence: ActivityGateValue.Score.make(0.5),
         questionOrHelpEvidence: ActivityGateValue.Score.make(0.75),
         unfinishedItemEvidence: ActivityGateValue.Score.make(1),
@@ -39,14 +40,26 @@ it.effect('combines only local positive evidence and pressure', () =>
       }),
     )
 
-    expect(result.positiveEvidence).toBe(3.5)
+    expect(result.positiveEvidence).toBe(4)
     expect(result.totalPressure).toBe(1.5)
-    expect(result.relevance).toBe(2)
+    expect(result.relevance).toBe(2.5)
     expect(result.hardTrigger).toBe(false)
   }),
 )
 
-it.effect('keeps explicit mentions and replies at relevance ten or above', () =>
+it.effect('keeps a disabled reply-to-self hard match as local relevance evidence', () =>
+  Effect.sync(() => {
+    const result = LocalRelevance.calculate(
+      signals({ replyToSelfEvidence: ActivityGateValue.Score.make(10) }),
+    )
+
+    expect(result.positiveEvidence).toBe(10)
+    expect(result.relevance).toBe(10)
+    expect(result.hardTrigger).toBe(false)
+  }),
+)
+
+it.effect('keeps configured hard replies at relevance ten or above', () =>
   Effect.sync(() => {
     const maximumPressure = {
       recentParticipationPressure: ActivityGateValue.Pressure.make(1),
@@ -55,25 +68,18 @@ it.effect('keeps explicit mentions and replies at relevance ten or above', () =>
       budgetPressure: ActivityGateValue.Pressure.make(1),
     }
 
-    const cases = [
-      signals({ ...maximumPressure, explicitMention: true }),
-      signals({ ...maximumPressure, replyToSelf: true }),
-    ]
-
-    for (const candidate of cases) {
-      const result = LocalRelevance.calculate(candidate)
-      expect(result.hardTrigger).toBe(true)
-      expect(result.relevance).toBe(10)
-    }
+    const result = LocalRelevance.calculate(signals({ ...maximumPressure, hardTrigger: true }))
+    expect(result.hardTrigger).toBe(true)
+    expect(result.relevance).toBe(10)
   }),
 )
 
 it.effect('gives no relevance to duplicate, other-bot, or self messages', () =>
   Effect.sync(() => {
     const cases = [
-      signals({ isDuplicate: true, explicitMention: true }),
-      signals({ isOtherBot: true, explicitMention: true }),
-      signals({ isSelf: true, explicitMention: true }),
+      signals({ isDuplicate: true, hardTrigger: true }),
+      signals({ isOtherBot: true, hardTrigger: true }),
+      signals({ isSelf: true, hardTrigger: true }),
     ]
 
     for (const candidate of cases) {

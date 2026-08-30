@@ -20,6 +20,20 @@ export const emptyLocalStateSignals = (): LocalStateSignals =>
     sufficientResponsePressure: Pressure.make(0),
   })
 
+export const PresetNameMatch = Schema.Literals(['none', 'prefix', 'contains'])
+
+export type PresetNameMatch = typeof PresetNameMatch.Type
+
+export const HardReplyKind = Schema.Literals([
+  'none',
+  'explicit-mention',
+  'reply-to-self',
+  'role-name-prefix',
+  'role-name-contains',
+])
+
+export type HardReplyKind = typeof HardReplyKind.Type
+
 export const Message = Schema.Struct({
   scope: CapabilityScope,
   focus: FocusMessage,
@@ -29,7 +43,8 @@ export const Message = Schema.Struct({
   isEffective: Schema.Boolean,
   explicitMention: Schema.Boolean,
   replyToSelf: Schema.Boolean,
-  nameHit: Schema.Boolean,
+  presetNameMatch: PresetNameMatch,
+  hardReplyKind: HardReplyKind,
   isQuestionOrHelp: Schema.Boolean,
   hasQuote: Schema.Boolean,
   hasMedia: Schema.Boolean,
@@ -43,7 +58,17 @@ export const isHardTrigger = (message: Message): boolean =>
   !message.isOtherBot &&
   !message.isSelf &&
   message.isEffective &&
-  (message.explicitMention || message.replyToSelf || message.nameHit)
+  message.hardReplyKind !== 'none'
+
+export const isLeaseAnchorTrigger = (message: Message): boolean =>
+  isHardTrigger(message) &&
+  (message.hardReplyKind === 'explicit-mention' || message.hardReplyKind === 'reply-to-self')
+
+export const isDirectedToSelf = (message: Message): boolean =>
+  message.explicitMention ||
+  message.replyToSelf ||
+  message.presetNameMatch === 'prefix' ||
+  message.hardReplyKind === 'role-name-contains'
 
 export const withLocalState = (message: Message, localState: LocalStateSignals): Message =>
   Message.make({ ...message, localState })

@@ -40,10 +40,18 @@ export class Service extends Context.Service<Service, Interface>()(
 ) {}
 
 const reasonCode = (message: Message): ReasonCode => {
-  if (message.explicitMention) return ReasonCode.make('explicit-mention')
-  if (message.replyToSelf) return ReasonCode.make('reply-to-yokai')
-  if (message.nameHit) return ReasonCode.make('name-hit')
-  return ReasonCode.make('supplement')
+  switch (message.hardReplyKind) {
+    case 'explicit-mention':
+      return ReasonCode.make('explicit-mention')
+    case 'reply-to-self':
+      return ReasonCode.make('reply-to-self')
+    case 'role-name-prefix':
+      return ReasonCode.make('role-name-prefix')
+    case 'role-name-contains':
+      return ReasonCode.make('role-name-contains')
+    case 'none':
+      return ReasonCode.make('supplement')
+  }
 }
 
 const proposal = (message: Message, options: Options, now: number, priority: Priority): Proposal =>

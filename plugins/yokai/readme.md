@@ -17,15 +17,28 @@
 扩展可通过 `ctx.yokai.getModelCatalog()` 读取包含 revision 与 adapter 状态的完整快照，
 并通过 `ctx.yokai.refreshModels()` 刷新全部 adapter，或传入 adapter ID 仅刷新一个实例。
 
-群聊中的直接 `@`、回复 Yokai 或名字称呼使用默认 500 ms 的短 debounce；同一用户紧随其后的
-补充消息会合并成一个角色回合。普通群聊只在本地累计活跃度和相关度，默认等待 3 秒消息簇窗口，
+群聊硬回复有四个独立开关：`wake.hardReplyAtMention` 控制真实 `@` 当前机器人，
+`wake.hardReplyOnReplyToSelf` 控制回复当前机器人发送的消息，`wake.hardReplyRoleNamePrefix` 控制消息以当前
+preset 的完整 `persona.name` 开头（后接消息结束、空白、标点或符号），`wake.hardReplyRoleNameContains`
+控制消息任意位置包含该角色名。默认分别为 `true/true/false/false`。启用的硬触发使用默认 500 ms 的短 debounce，
+同一用户紧随其后的补充消息会合并成一个角色回合。关闭任一硬回复开关不会抹去原始的 @、回复或角色名事实，
+这些事实仍可作为本地指向性或参与相关度证据并经过普通社会
+触发门控；角色名绝不回退到插件名 `Yokai` 或 Koishi 全局昵称。普通群聊默认等待 3 秒消息簇窗口，
 并且必须同时通过动态阈值、45 秒频道冷却和 `normal` 调用预算才会创建回合。未达到门槛、仍在
 冷却或预算不足的消息只做本地存档，不调用模型。
 
 所有唤醒都经过统一的 WakeArbiter：同频道同合并键的爆发只创建一轮，同频道的不同回合不会并发；
 直接触发使用独立 `reserved` 额度并绕过活跃度与社会冷却，社会触发不能借用该额度。`wake` 配置组
-控制两类 debounce、半衰期、基础阈值和冷却，`callBudget` 配置组控制 IANA 日切时区，以及
+控制四个硬回复开关、两类 debounce、半衰期、基础阈值和冷却，`callBudget` 配置组控制 IANA 日切时区，以及
 `reserved/normal/background` 各自的 minute/day 上限。
+
+启用的真实 @ 当前机器人或回复其消息硬回复，会为当前参与者和话题建立宿主本地的持续讨论租约；角色名
+前缀/包含硬回复本身不开租。租约有效时，该参与者在同一
+话题中的后续消息无需重复 @，并继续使用 `wake.directDebounceMs` 的短合并窗口与 `reserved` 额度；
+只有 WakeArbiter 接受合并后的 engagement 提案时才扣减一个剩余轮次并续期。租约状态不会进入角色
+XML，空闲到期、达到绝对期限、轮数用尽、转话题、插件停止或显式关闭后恢复普通门控。
+`engagement.enabled` 默认开启，`idleTtlMs` 默认 `90000`、`maxDurationMs` 默认 `300000`、
+`maxRounds` 默认 `8`，并要求两个时间均为正整数且空闲 TTL 不大于绝对期限。
 
 创建回合后会冻结焦点消息和当前频道的近期消息；近期缓冲最多保留 80 条，每回合默认携带 40 条，
 并同时受 token 预算约束。达到上限时优先保留焦点和最新消息；生成期间到达的消息只进入下一回合，
