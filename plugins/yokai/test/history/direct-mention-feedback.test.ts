@@ -33,6 +33,7 @@ const CONFIG: Config = {
   model: MODEL_REFERENCE,
   feedbackToolsEnabled: true,
   messageRetentionDays: 90,
+  schedule: { enabled: false },
   wake: { directDebounceMs: 100 },
 }
 

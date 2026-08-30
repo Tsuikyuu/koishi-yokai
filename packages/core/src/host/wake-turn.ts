@@ -27,8 +27,9 @@ import { RoleState } from '../role-state/index'
 import { ThreadTracker } from '../scene/index'
 import { ChannelMessageBuffer, TurnSnapshot } from '../turn-context/index'
 import type { WakeArbiter } from '../wake/index'
-import { WakeProposal } from '../wake/index'
+import { WakeArbiter as WakeArbiterService, WakeProposal } from '../wake/index'
 import { ActionExecution } from './action-execution'
+import { BackgroundTasks } from './background-tasks'
 import { HostConfiguration } from './configuration'
 import { ContextAssembly } from './context-assembly'
 import { FeedbackGeneration } from './feedback-generation'
@@ -76,6 +77,16 @@ export interface Report {
   readonly replyBlocked: boolean
   readonly sentSegments: number
 }
+
+export type Services =
+  | BackgroundTasks.Service
+  | CapabilityRegistry.Service
+  | ChannelMessageBuffer.Service
+  | HostConfiguration.Service
+  | PresetRegistry.Service
+  | RoleState.Service
+  | ThreadTracker.Service
+  | WakeArbiterService.Service
 
 interface GenerationReport {
   readonly result: FinalTextResult
@@ -372,6 +383,44 @@ export const run = Effect.fn('WakeTurn.run')(function* (input: Input) {
     replyBlocked: false,
     sentSegments: sending.sentSegments,
   })
+})
+
+/** Capture the host runtime once and build the recursive executor shared by all wake sources. */
+export const makeExecutor = Effect.fn('WakeTurn.makeExecutor')(function* (
+  sendText: HostSession.SendText,
+) {
+  const arbiter = yield* WakeArbiterService.Service
+  const environment = yield* Effect.context<Services>()
+  const executeTurn: WakeArbiter.Executor = (
+    proposal,
+    markDispatched,
+    withLogicalCallReservation,
+  ) =>
+    Effect.gen(function* () {
+      const onDeferredWake = () =>
+        Clock.currentTimeMillis.pipe(
+          Effect.map((now) => WakeProposal.deferredCompletion(proposal, now)),
+          Effect.flatMap((completion) => arbiter.submit(completion, executeTurn)),
+          Effect.asVoid,
+          Effect.provide(environment),
+        )
+      yield* run({
+        scope: proposal.scope,
+        focus: proposal.focus,
+        kind: proposal.kind,
+        submittedAt: proposal.submittedAt,
+        markDispatched,
+        withLogicalCallReservation,
+        sendText,
+        onDeferredWake,
+      }).pipe(
+        Effect.scoped,
+        Effect.asVoid,
+        Effect.catch((error) => Effect.die(error)),
+      )
+    }).pipe(Effect.provide(environment))
+
+  return executeTurn
 })
 
 export * as WakeTurn from './wake-turn'

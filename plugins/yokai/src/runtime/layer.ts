@@ -13,6 +13,10 @@ import {
   HostConfiguration,
   PresetRegistry,
   RoleState,
+  ScheduledTask,
+  ScheduledTaskCapabilities,
+  ScheduledTaskModel,
+  ScheduledTaskWorker,
   ThreadTracker,
   WakeArbiter,
   WakeProposal,
@@ -53,6 +57,10 @@ import {
   DEFAULT_RELEVANCE_THRESHOLD,
   DEFAULT_RESERVED_DAY_CALLS,
   DEFAULT_RESERVED_MINUTE_CALLS,
+  DEFAULT_SCHEDULE_CONTEXT_LIMIT,
+  DEFAULT_SCHEDULE_ENABLED,
+  DEFAULT_SCHEDULE_GRACE_PERIOD_MS,
+  DEFAULT_SCHEDULE_TIME_ZONE,
   DEFAULT_STATE_ENERGY_RECOVERY_HALF_LIFE_MS,
   DEFAULT_STATE_MAX_INTERACTION_DELTA,
   DEFAULT_STATE_MOOD_HALF_LIFE_MS,
@@ -71,6 +79,9 @@ import { FilePresetStore } from '../preset/file-store'
 import { PresetEvents } from '../preset/events'
 import { KoishiRoleStateStorage } from '../role-state/index'
 import { BuiltinResponseCapabilities } from '../response/capabilities'
+import { ScheduleCapabilityRegistration } from '../schedule/capabilities'
+import { KoishiScheduledDelivery } from '../schedule/delivery'
+import { KoishiScheduledTaskStorage } from '../schedule/index'
 
 const decodeModelReference = Schema.decodeUnknownEffect(ModelReference)
 const decodePresetId = Schema.decodeUnknownEffect(PresetId)
@@ -354,6 +365,68 @@ const notebookCapabilitiesLayer = (config: Config) =>
     ),
   )
 
+const scheduleEnabled = (config: Config): boolean =>
+  config.schedule === undefined || config.schedule.enabled === undefined
+    ? DEFAULT_SCHEDULE_ENABLED
+    : config.schedule.enabled
+
+const decodeScheduleOptions = Effect.fn('YokaiRuntime.decodeScheduleOptions')(function* (
+  config: Config,
+) {
+  const configured = config.schedule
+  const instanceId = yield* Schema.decodeUnknownEffect(MessageArchiveEvent.InstanceId)(
+    config.instanceId === undefined ? DEFAULT_INSTANCE_ID : config.instanceId,
+  )
+  const timeZone = yield* Schema.decodeUnknownEffect(ScheduledTaskModel.TimeZoneId)(
+    configured === undefined || configured.timeZone === undefined
+      ? DEFAULT_SCHEDULE_TIME_ZONE
+      : configured.timeZone,
+  )
+  const contextLimit = yield* Schema.decodeUnknownEffect(ScheduledTaskModel.QueryLimit)(
+    configuredNumber(
+      configured === undefined ? undefined : configured.contextLimit,
+      DEFAULT_SCHEDULE_CONTEXT_LIMIT,
+    ),
+  )
+
+  return {
+    instanceId,
+    timeZone,
+    contextLimit,
+  } satisfies ScheduledTask.Options & ScheduledTaskCapabilities.Options
+})
+
+const scheduledTaskLayer = (config: Config, ctx: Context) =>
+  Layer.unwrap(
+    decodeScheduleOptions(config).pipe(Effect.map((options) => ScheduledTask.layer(options))),
+  ).pipe(Layer.provide(KoishiScheduledTaskStorage.layer(ctx)))
+
+const scheduleCapabilitiesLayer = (config: Config) =>
+  Layer.unwrap(
+    decodeScheduleOptions(config).pipe(
+      Effect.map((options) => ScheduleCapabilityRegistration.layer(options)),
+    ),
+  )
+
+const scheduleWorkerLayer = (config: Config) => {
+  const configured = config.schedule
+  return Layer.unwrap(
+    Schema.decodeUnknownEffect(WakeProposal.DurationMilliseconds)(
+      configuredNumber(
+        configured === undefined ? undefined : configured.gracePeriodMs,
+        DEFAULT_SCHEDULE_GRACE_PERIOD_MS,
+      ),
+    ).pipe(
+      Effect.map((gracePeriodMs) =>
+        ScheduledTaskWorker.layer({
+          ...ScheduledTaskWorker.DEFAULT_OPTIONS,
+          gracePeriodMs,
+        }),
+      ),
+    ),
+  )
+}
+
 export const makeLayer = (config: Config, ctx: Context) => {
   const roleStateServices = RoleState.layer({ parameters: stateParameters(config) }).pipe(
     Layer.provide(KoishiRoleStateStorage.layer(ctx)),
@@ -383,8 +456,14 @@ export const makeLayer = (config: Config, ctx: Context) => {
   )
   const notebookServices = notebookLayer(config, ctx).pipe(Layer.provideMerge(archiveServices))
   const services = Layer.merge(hostServices, notebookServices)
-  const servicesWithBuiltins = HistoryCapabilityRegistration.layer.pipe(
+  const servicesWithScheduledTask = scheduledTaskLayer(config, ctx).pipe(
     Layer.provideMerge(services),
+  )
+  const servicesWithScheduledDelivery = KoishiScheduledDelivery.layer(ctx).pipe(
+    Layer.provideMerge(servicesWithScheduledTask),
+  )
+  const servicesWithBuiltins = HistoryCapabilityRegistration.layer.pipe(
+    Layer.provideMerge(servicesWithScheduledDelivery),
   )
   const servicesWithNotebook = notebookCapabilitiesLayer(config).pipe(
     Layer.provideMerge(servicesWithBuiltins),
@@ -392,7 +471,13 @@ export const makeLayer = (config: Config, ctx: Context) => {
   const servicesWithAllBuiltins = BuiltinResponseCapabilities.layer.pipe(
     Layer.provideMerge(servicesWithNotebook),
   )
-  const servicesWithPresets = presetIntegrations.pipe(Layer.provideMerge(servicesWithAllBuiltins))
+  const servicesWithScheduleCapabilities = scheduleEnabled(config)
+    ? scheduleCapabilitiesLayer(config).pipe(Layer.provideMerge(servicesWithAllBuiltins))
+    : servicesWithAllBuiltins
+  const servicesWithSchedule = scheduleEnabled(config)
+    ? scheduleWorkerLayer(config).pipe(Layer.provideMerge(servicesWithScheduleCapabilities))
+    : servicesWithScheduleCapabilities
+  const servicesWithPresets = presetIntegrations.pipe(Layer.provideMerge(servicesWithSchedule))
   return ModelCatalogSchemaProjection.layer(ctx, config).pipe(
     Layer.provideMerge(servicesWithPresets),
   )

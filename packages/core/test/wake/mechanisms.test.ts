@@ -1,4 +1,5 @@
 import { expect, it } from '@effect/vitest'
+import { MessageArchiveEvent } from '@yokai-internal/memory'
 import { CapabilityScope, FocusMessage } from 'yokai-protocol'
 import { DateTime, Duration, Effect, Layer, Option } from 'effect'
 import { TestClock } from 'effect/testing'
@@ -12,6 +13,7 @@ import {
   WakeMessage,
   WakeProposal,
 } from '../../src/index'
+import { ScheduledTaskModel } from '../../src/schedule/model'
 
 const SCOPE = CapabilityScope.make({
   instanceId: 'test',
@@ -19,6 +21,34 @@ const SCOPE = CapabilityScope.make({
   guildId: 'guild',
   channelId: 'channel',
 })
+
+const scheduledTask = (
+  idCharacter: string,
+  occurrence: number,
+  dueAt = 10_000,
+): ScheduledTaskModel.Task =>
+  ScheduledTaskModel.Task.make({
+    instanceId: MessageArchiveEvent.InstanceId.make('test'),
+    platform: MessageArchiveEvent.PlatformId.make('test'),
+    guildId: MessageArchiveEvent.GuildId.make('guild'),
+    channelId: MessageArchiveEvent.ChannelId.make('channel'),
+    scheduleId: ScheduledTaskModel.ScheduleId.make(`schedule_${idCharacter.repeat(32)}`),
+    dedupeKey: ScheduledTaskModel.DedupeKey.make(`dedupe-${idCharacter}`),
+    creationFingerprint: ScheduledTaskModel.CreationFingerprint.make(idCharacter.repeat(64)),
+    createdMessageId: MessageArchiveEvent.MessageId.make(`message-${idCharacter}`),
+    creatorId: MessageArchiveEvent.ActorId.make('user'),
+    selfId: MessageArchiveEvent.ActorId.make('bot'),
+    reason: ScheduledTaskModel.Reason.make('Attend class'),
+    dueAt: ScheduledTaskModel.EpochMilliseconds.make(dueAt),
+    repeatEveryMs: Option.none(),
+    timeZone: ScheduledTaskModel.TimeZoneId.make('Asia/Shanghai'),
+    status: 'triggered',
+    occurrence: ScheduledTaskModel.Occurrence.make(occurrence),
+    revision: ScheduledTaskModel.Revision.make(occurrence + 1),
+    createdAt: ScheduledTaskModel.EpochMilliseconds.make(0),
+    updatedAt: ScheduledTaskModel.EpochMilliseconds.make(dueAt),
+    lastTriggeredAt: Option.some(ScheduledTaskModel.EpochMilliseconds.make(dueAt)),
+  })
 
 const message = (
   messageId: string,
@@ -148,6 +178,40 @@ it.effect('uses the direct window for all hard reply kinds and following supplem
     expect(Option.isNone(yield* direct.observe(softReply))).toBe(true)
   }).pipe(Effect.provide(DirectResponseMechanism.layer())),
 )
+
+it('creates reserved scheduled proposals that are unique per task occurrence', () => {
+  const atGraceBoundary = scheduledTask('a', 0, 9_000)
+  const nextOccurrence = scheduledTask('a', 1, 12_000)
+  const otherTask = scheduledTask('b', 0, 9_000)
+  const gracePeriodMs = WakeProposal.DurationMilliseconds.make(1_000)
+  const first = WakeProposal.scheduledTask(atGraceBoundary, 10_000, gracePeriodMs)
+  const second = WakeProposal.scheduledTask(nextOccurrence, 12_000, gracePeriodMs)
+  const other = WakeProposal.scheduledTask(otherTask, 10_000, gracePeriodMs)
+
+  expect(first).toMatchObject({
+    kind: 'schedule',
+    submittedAt: 10_000,
+    debounceMs: 0,
+    budgetCategory: 'reserved',
+    cooldownPolicy: 'bypass',
+    reason: {
+      mechanismId: WakeProposal.SCHEDULE_MECHANISM_ID,
+      code: WakeProposal.SCHEDULE_REASON_CODE,
+      priority: WakeProposal.SCHEDULE_PRIORITY,
+    },
+    focus: {
+      messageId: atGraceBoundary.createdMessageId,
+      authorId: atGraceBoundary.creatorId,
+      timestamp: atGraceBoundary.dueAt,
+    },
+  })
+  expect(first.expiresAt).toBeGreaterThan(10_000)
+  expect(first.scopeId).toBe(WakeProposal.scopeIdOf(SCOPE))
+  expect(first.mergeKey).not.toBe(second.mergeKey)
+  expect(first.mergeKey).not.toBe(other.mergeKey)
+  expect(WakeProposal.identityOf(first)).not.toBe(WakeProposal.identityOf(second))
+  expect(WakeProposal.identityOf(first)).not.toBe(WakeProposal.identityOf(other))
+})
 
 it.effect('keeps activity local until both documented thresholds pass', () =>
   Effect.gen(function* () {
