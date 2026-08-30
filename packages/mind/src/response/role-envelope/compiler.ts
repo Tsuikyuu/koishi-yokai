@@ -73,7 +73,12 @@ const visibleTool = Effect.fn('RoleResponseEnvelope.visibleTool')(function* (
   return { tool, available }
 })
 
-export const compile = Effect.fn('RoleResponseEnvelope.compile')(function* (
+interface VisibleToolSelection {
+  readonly scope: CapabilityScope
+  readonly tools: ReadonlyArray<ActionTool>
+}
+
+const resolveVisibleTools = Effect.fn('RoleResponseEnvelope.resolveVisibleTools')(function* (
   actionTools: ReadonlyArray<ActionTool>,
   scope: CapabilityScope,
 ) {
@@ -89,6 +94,17 @@ export const compile = Effect.fn('RoleResponseEnvelope.compile')(function* (
   const visibleTools = visibility
     .filter((entry) => entry.available === true)
     .map((entry) => entry.tool)
+  return { scope: frozenScope, tools: visibleTools } satisfies VisibleToolSelection
+})
+
+const sortedTools = (tools: ReadonlyArray<ActionTool>): ReadonlyArray<ActionTool> =>
+  [...tools].sort((left, right) => (left.id < right.id ? -1 : left.id > right.id ? 1 : 0))
+
+const compileVisibleTools = Effect.fn('RoleResponseEnvelope.compileVisibleTools')(function* (
+  visibleTools: ReadonlyArray<ActionTool>,
+  frozenScope: CapabilityScope,
+  systemInstructionByteLimit: number,
+) {
   if (visibleTools.length > MAX_VISIBLE_ACTION_TOOLS) {
     return yield* Effect.fail(compileError('too-many-tools', 'registry'))
   }
@@ -101,11 +117,9 @@ export const compile = Effect.fn('RoleResponseEnvelope.compile')(function* (
     return yield* Effect.fail(compileError('templates-too-large', 'registry'))
   }
 
-  const frozenTools = [...visibleTools].sort((left, right) =>
-    left.id < right.id ? -1 : left.id > right.id ? 1 : 0,
-  )
+  const frozenTools = sortedTools(visibleTools)
   const systemInstruction = buildSystemInstruction(frozenTools)
-  if (Buffer.byteLength(systemInstruction, 'utf8') > MAX_SYSTEM_INSTRUCTION_BYTES) {
+  if (Buffer.byteLength(systemInstruction, 'utf8') > systemInstructionByteLimit) {
     return yield* Effect.fail(compileError('prompt-too-large', 'registry'))
   }
   const protocol: CompiledProtocol = {
@@ -119,6 +133,60 @@ export const compile = Effect.fn('RoleResponseEnvelope.compile')(function* (
       ),
   }
   return protocol
+})
+
+interface BoundedToolSelection {
+  readonly tools: ReadonlyArray<ActionTool>
+  readonly templateBytes: number
+}
+
+const selectBoundedVisibleTools = (
+  visibleTools: ReadonlyArray<ActionTool>,
+  systemInstructionByteLimit: number,
+): ReadonlyArray<ActionTool> =>
+  visibleTools.reduce<BoundedToolSelection>(
+    (selected, tool) => {
+      if (selected.tools.length >= MAX_VISIBLE_ACTION_TOOLS) return selected
+
+      const templateBytes = selected.templateBytes + Buffer.byteLength(tool.xmlTemplate, 'utf8')
+      if (templateBytes > MAX_ACTION_TEMPLATE_BYTES) return selected
+
+      const tools = [...selected.tools, tool]
+      const systemInstruction = buildSystemInstruction(sortedTools(tools))
+      return Buffer.byteLength(systemInstruction, 'utf8') <= systemInstructionByteLimit
+        ? { tools, templateBytes }
+        : selected
+    },
+    { tools: [], templateBytes: 0 },
+  ).tools
+
+export const compile = Effect.fn('RoleResponseEnvelope.compile')(function* (
+  actionTools: ReadonlyArray<ActionTool>,
+  scope: CapabilityScope,
+) {
+  const visible = yield* resolveVisibleTools(actionTools, scope)
+  return yield* compileVisibleTools(visible.tools, visible.scope, MAX_SYSTEM_INSTRUCTION_BYTES)
+})
+
+/** Select a deterministic legal subset after evaluating each tool's visibility exactly once. */
+export const compileBounded = Effect.fn('RoleResponseEnvelope.compileBounded')(function* (
+  actionTools: ReadonlyArray<ActionTool>,
+  scope: CapabilityScope,
+  systemInstructionByteLimit = MAX_SYSTEM_INSTRUCTION_BYTES,
+) {
+  const boundedByteLimit =
+    Number.isSafeInteger(systemInstructionByteLimit) && systemInstructionByteLimit >= 0
+      ? Math.min(systemInstructionByteLimit, MAX_SYSTEM_INSTRUCTION_BYTES)
+      : 0
+  if (Buffer.byteLength(buildSystemInstruction([]), 'utf8') > boundedByteLimit) {
+    return yield* Effect.fail(compileError('prompt-too-large', 'registry'))
+  }
+  const visible = yield* resolveVisibleTools(actionTools, scope)
+  return yield* compileVisibleTools(
+    selectBoundedVisibleTools(visible.tools, boundedByteLimit),
+    visible.scope,
+    boundedByteLimit,
+  )
 })
 
 export const parse = Effect.fn('RoleResponseEnvelope.parse')(function* (

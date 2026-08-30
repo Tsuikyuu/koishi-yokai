@@ -1,33 +1,39 @@
 import { RoleResponseEnvelope } from '@yokai-internal/mind'
 import {
-  ContextProviderRequest,
   GenerateRequest,
-  HISTORY_CONTEXT_PROVIDER_ID,
-  HISTORY_SEARCH_FEEDBACK_TOOL_ID,
   TokenLimit,
   UserMessage,
+  feedbackToolDeclaration,
   type CapabilityScope,
   type ContextFragment,
-  type ContextProvider,
   type FeedbackTool,
+  type FinalTextResult,
   type FocusMessage,
   type PresetId,
+  type YokaiAdapter,
 } from 'yokai-protocol'
-import { Effect, Option, Schema } from 'effect'
+import { Clock, Duration, Effect, Option, Schema } from 'effect'
 
 import { CapabilityRegistry } from '../capability-registry/index'
 import { PresetRegistry } from '../preset/index'
 import { ChannelMessageBuffer, TurnSnapshot } from '../turn-context/index'
 import type { WakeArbiter } from '../wake/index'
-import { FeedbackGeneration } from './feedback-generation'
+import { WakeProposal } from '../wake/index'
+import { ActionExecution } from './action-execution'
 import { HostConfiguration } from './configuration'
+import { ContextAssembly } from './context-assembly'
+import { FeedbackGeneration } from './feedback-generation'
+import { MessageSending } from './message-sending'
 import { HostModelSelection } from './model-selection'
 import { HostSession } from './session'
 
-const MAX_OUTPUT_TOKENS = TokenLimit.make(1024)
-const HISTORY_CONTEXT_TOKENS = TokenLimit.make(2_048)
+const MAX_OUTPUT_TOKENS = TokenLimit.make(1_024)
 const MAX_FEEDBACK_CALLS = 4
 const MAX_FEEDBACK_RESULT_TOKENS = 8_192
+const MAX_FEEDBACK_CONCURRENCY = 4
+const MAX_VISIBLE_FEEDBACK_TOOLS = 16
+export const MODEL_TURN_DEADLINE_MS = 45_000
+export const MAX_TURN_SYSTEM_INSTRUCTION_BYTES = RoleResponseEnvelope.MAX_SYSTEM_INSTRUCTION_BYTES
 
 export class UnexpectedGenerationResultError extends Schema.TaggedError<UnexpectedGenerationResultError>(
   '@yokai/core/WakeTurn.UnexpectedGenerationResultError',
@@ -42,25 +48,31 @@ export class PresetSelectionUnavailableError extends Schema.TaggedError<PresetSe
 export interface Input {
   readonly scope: CapabilityScope
   readonly focus: FocusMessage
+  readonly kind: WakeProposal.Kind
   readonly markDispatched: WakeArbiter.MarkDispatched
+  readonly withLogicalCallReservation: WakeArbiter.WithLogicalCallReservation
   readonly sendText: HostSession.SendText
+  readonly onDeferredWake: () => Effect.Effect<void>
 }
 
-const historyContext = Effect.fn('WakeTurn.historyContext')(function* (
-  provider: ContextProvider | undefined,
-  input: Input,
-) {
-  if (provider === undefined) return Option.none<ContextFragment>()
-  return yield* provider
-    .provide(
-      ContextProviderRequest.make({
-        scope: input.scope,
-        focus: input.focus,
-        tokenBudget: HISTORY_CONTEXT_TOKENS,
-      }),
-    )
-    .pipe(Effect.catch(() => Effect.succeed(Option.none<ContextFragment>())))
-})
+export interface Report {
+  readonly path: 'single-pass' | 'bounded-feedback'
+  readonly logicalGenerations: 1 | 2
+  readonly modelDurationMs: number
+  readonly artificialWaitMs: WakeProposal.DurationMilliseconds
+  readonly contextFragments: number
+  readonly attemptedBeforeSendActions: number
+  readonly failedBeforeSendActions: number
+  readonly replyBlocked: boolean
+  readonly sentSegments: number
+}
+
+interface GenerationReport {
+  readonly result: FinalTextResult
+  readonly path: 'single-pass' | 'bounded-feedback'
+  readonly logicalGenerations: 1 | 2
+  readonly modelDurationMs: number
+}
 
 const renderFocusMessage = (focus: FocusMessage): string =>
   [
@@ -76,62 +88,112 @@ const renderFocusMessage = (focus: FocusMessage): string =>
 
 const requestMessages = (
   snapshot: TurnSnapshot.Snapshot,
-  context: Option.Option<ContextFragment>,
+  context: ContextAssembly.Assembly,
 ): readonly [UserMessage, ...UserMessage[]] => {
-  const history = Option.match(context, {
+  const supplemental = Option.match(context.content, {
     onNone: () => [] as const,
-    onSome: (fragment) => [UserMessage.make({ role: 'user', content: fragment.content })] as const,
+    onSome: (content) => [UserMessage.make({ role: 'user', content })] as const,
   })
   const recent = Option.match(TurnSnapshot.renderRecentMessages(snapshot), {
     onNone: () => [] as const,
     onSome: (content) => [UserMessage.make({ role: 'user', content })] as const,
   })
-  const contextMessages: ReadonlyArray<UserMessage> = [...history, ...recent]
+  const contextMessages: ReadonlyArray<UserMessage> = [...supplemental, ...recent]
   const focus = UserMessage.make({ role: 'user', content: renderFocusMessage(snapshot.focus) })
   const first = contextMessages[0]
   return first === undefined ? [focus] : [first, ...contextMessages.slice(1), focus]
 }
 
-const removeFullyBufferedHistory = (
-  context: Option.Option<ContextFragment>,
+const removeFullyBufferedContext = (
+  context: ContextAssembly.Assembly,
   snapshot: TurnSnapshot.Snapshot,
-): Option.Option<ContextFragment> => {
+): ContextAssembly.Assembly => {
   const recentIds = snapshot.recentMessages.map((message) => message.messageId)
-  return Option.filter(
-    context,
-    (fragment) =>
+  const fragments = context.fragments.filter(
+    (fragment: ContextFragment) =>
       fragment.sourceRefs.length === 0 ||
       fragment.sourceRefs.some((sourceRef) => !recentIds.includes(sourceRef)),
   )
+  return ContextAssembly.assemble(fragments)
 }
 
 const quotableMessageIds = (
   snapshot: TurnSnapshot.Snapshot,
-  context: Option.Option<ContextFragment>,
+  context: ContextAssembly.Assembly,
 ): ReadonlyArray<string> => {
-  const historyIds = Option.match(context, {
-    onNone: () => [] as const,
-    onSome: (fragment) => fragment.sourceRefs,
-  })
   const candidates = [
     snapshot.focus.messageId,
     ...snapshot.recentMessages.map((message) => message.messageId),
-    ...historyIds,
+    ...context.sourceRefs,
   ]
   return candidates.filter((messageId, index) => candidates.indexOf(messageId) === index)
 }
 
-const selectedFeedbackTools = (
+const selectedFeedbackTools = Effect.fn('WakeTurn.selectedFeedbackTools')(function* (
   enabled: boolean,
   adapterSupportsTools: boolean,
   tools: ReadonlyArray<FeedbackTool>,
-): ReadonlyArray<FeedbackTool> =>
-  enabled && adapterSupportsTools
-    ? tools.filter((tool) => tool.id === HISTORY_SEARCH_FEEDBACK_TOOL_ID)
-    : []
+  scope: CapabilityScope,
+) {
+  if (!enabled || !adapterSupportsTools) return []
+  const visibility = yield* Effect.forEach(tools, (tool) =>
+    Effect.try({
+      try: () => tool.isAvailable(scope),
+      catch: () => false,
+    }).pipe(
+      Effect.match({
+        onFailure: () => false,
+        onSuccess: (available) => available,
+      }),
+      Effect.map((available) => ({ tool, available })),
+    ),
+  )
+  return visibility
+    .filter((entry) => entry.available)
+    .slice(0, MAX_VISIBLE_FEEDBACK_TOOLS)
+    .map((entry) => entry.tool)
+})
+
+const singleGeneration = Effect.fn('WakeTurn.singleGeneration')(function* (
+  adapter: YokaiAdapter,
+  request: GenerateRequest,
+) {
+  const startedAt = yield* Clock.currentTimeMillis
+  const initial = yield* adapter.generate(request)
+  const completedAt = yield* Clock.currentTimeMillis
+  if (initial._tag !== 'Text') {
+    return yield* Effect.fail(new UnexpectedGenerationResultError({}))
+  }
+  return {
+    result: initial,
+    path: 'single-pass',
+    logicalGenerations: 1,
+    modelDurationMs: Math.max(0, completedAt - startedAt),
+  } satisfies GenerationReport
+})
+
+const complete = (report: Report): Effect.Effect<Report> =>
+  Effect.logDebug('WakeTurn.completed').pipe(
+    Effect.annotateLogs({
+      path: report.path,
+      logicalGenerations: report.logicalGenerations,
+      modelDurationMs: report.modelDurationMs,
+      artificialWaitMs: report.artificialWaitMs,
+      contextFragments: report.contextFragments,
+      attemptedBeforeSendActions: report.attemptedBeforeSendActions,
+      failedBeforeSendActions: report.failedBeforeSendActions,
+      replyBlocked: report.replyBlocked,
+      sentSegments: report.sentSegments,
+    }),
+    Effect.as(report),
+  )
 
 export const run = Effect.fn('WakeTurn.run')(function* (input: Input) {
+  const scope: CapabilityScope = Object.freeze({ ...input.scope })
+  const focus: FocusMessage = Object.freeze({ ...input.focus })
   const configuration = yield* HostConfiguration.Service
+  const registry = yield* CapabilityRegistry.Service
+  const capabilitySnapshot = yield* registry.snapshot()
   const presetRegistry = yield* PresetRegistry.Service
   const preset = yield* Option.match(configuration.presetId, {
     onNone: () => Effect.succeed(Option.none()),
@@ -145,75 +207,108 @@ export const run = Effect.fn('WakeTurn.run')(function* (input: Input) {
         ),
       ),
   })
-  const registry = yield* CapabilityRegistry.Service
+
   const channelBuffer = yield* ChannelMessageBuffer.Service
   const turnSnapshot = yield* channelBuffer.snapshot(
     TurnSnapshot.Request.make({
-      scope: input.scope,
-      focus: input.focus,
+      scope,
+      focus,
       messageCount: TurnSnapshot.defaultMessageCount(),
       tokenBudget: TurnSnapshot.DEFAULT_TOKEN_BUDGET,
     }),
   )
-  const capabilitySnapshot = yield* registry.snapshot()
-  const provider = capabilitySnapshot.contextProviders.find(
-    (candidate) => candidate.id === HISTORY_CONTEXT_PROVIDER_ID,
+  const assembledContext = removeFullyBufferedContext(
+    yield* ContextAssembly.collect({
+      providers: capabilitySnapshot.contextProviders,
+      scope,
+      focus: turnSnapshot.focus,
+    }),
+    turnSnapshot,
   )
-  const context = removeFullyBufferedHistory(yield* historyContext(provider, input), turnSnapshot)
-  const messages = requestMessages(turnSnapshot, context)
-  const selected = yield* HostModelSelection.resolve()
-  const feedbackTools = selectedFeedbackTools(
+  const messages = requestMessages(turnSnapshot, assembledContext)
+  const selected = yield* HostModelSelection.resolveSnapshot(capabilitySnapshot)
+  const feedbackTools = yield* selectedFeedbackTools(
     configuration.feedbackToolsEnabled,
     selected.adapter.descriptor.capabilities.feedbackTools,
     capabilitySnapshot.feedbackTools,
+    scope,
   )
-  // YK-020 validates ActionTool plans, but live exposure stays disabled until
-  // YK-021 owns their preparation, execution, and failure semantics.
-  const responseProtocol = yield* RoleResponseEnvelope.compile([], input.scope)
+  const presetInstruction = Option.match(preset, {
+    onNone: () => '',
+    onSome: (snapshot) => `${snapshot.compiledPrompt}\n\n`,
+  })
+  const responseProtocol = yield* RoleResponseEnvelope.compileBounded(
+    capabilitySnapshot.actionTools,
+    scope,
+    Math.max(0, MAX_TURN_SYSTEM_INSTRUCTION_BYTES - Buffer.byteLength(presetInstruction, 'utf8')),
+  )
   const request = GenerateRequest.make({
     modelId: selected.reference.modelId,
-    systemInstruction: Option.match(preset, {
-      onNone: () => responseProtocol.systemInstruction,
-      onSome: (snapshot) => `${snapshot.compiledPrompt}\n\n${responseProtocol.systemInstruction}`,
-    }),
+    systemInstruction: presetInstruction + responseProtocol.systemInstruction,
     messages,
     limits: { maxOutputTokens: MAX_OUTPUT_TOKENS },
-    feedbackTools: feedbackTools.map((tool) => ({
-      id: tool.id,
-      description: tool.description,
-      inputSchema: tool.inputSchema,
-    })),
+    feedbackTools: feedbackTools.map(feedbackToolDeclaration),
   })
 
   yield* input.markDispatched()
-  const result =
-    feedbackTools.length === 0
-      ? yield* selected.adapter
-          .generate(request)
-          .pipe(
-            Effect.flatMap((initial) =>
-              initial._tag === 'Text'
-                ? Effect.succeed(initial)
-                : Effect.fail(new UnexpectedGenerationResultError({})),
-            ),
-          )
-      : yield* FeedbackGeneration.run({
-          adapter: selected.adapter,
-          request,
-          scope: input.scope,
-          tools: feedbackTools,
-          budget: {
-            maxCalls: MAX_FEEDBACK_CALLS,
-            maxResultTokens: MAX_FEEDBACK_RESULT_TOKENS,
-          },
-        })
-
-  const response = yield* responseProtocol.parse(result.text, {
-    quotableMessageIds: quotableMessageIds(turnSnapshot, context),
+  const generate = Effect.gen(function* () {
+    if (feedbackTools.length === 0) {
+      return yield* singleGeneration(selected.adapter, request)
+    }
+    return yield* FeedbackGeneration.runWithReport({
+      adapter: selected.adapter,
+      request,
+      scope,
+      tools: feedbackTools,
+      withContinuationCall: input.withLogicalCallReservation,
+      budget: {
+        maxCalls: MAX_FEEDBACK_CALLS,
+        maxResultTokens: MAX_FEEDBACK_RESULT_TOKENS,
+        maxConcurrency: MAX_FEEDBACK_CONCURRENCY,
+      },
+    })
   })
-  for (const message of response.messages) {
-    yield* input.sendText(message.content, message.quote).pipe(Effect.asVoid)
+  const generation: GenerationReport = yield* generate.pipe(
+    Effect.timeout(Duration.millis(MODEL_TURN_DEADLINE_MS)),
+  )
+
+  const response = yield* responseProtocol.parse(generation.result.text, {
+    quotableMessageIds: quotableMessageIds(turnSnapshot, assembledContext),
+  })
+  const beforeSend = yield* ActionExecution.runBeforeSend(response.actions, scope)
+  if (beforeSend.blockReply) {
+    return yield* complete({
+      path: generation.path,
+      logicalGenerations: generation.logicalGenerations,
+      modelDurationMs: generation.modelDurationMs,
+      artificialWaitMs: WakeProposal.DurationMilliseconds.make(0),
+      contextFragments: assembledContext.fragments.length,
+      attemptedBeforeSendActions: beforeSend.attempted,
+      failedBeforeSendActions: beforeSend.failed,
+      replyBlocked: true,
+      sentSegments: 0,
+    })
   }
+
+  yield* ActionExecution.scheduleDeferred(response.actions, scope, input.onDeferredWake)
+  const sending = yield* MessageSending.send({
+    kind: input.kind,
+    messages: response.messages,
+    sendText: input.sendText,
+  })
+  yield* ActionExecution.scheduleAfterSend(response.actions, scope)
+
+  return yield* complete({
+    path: generation.path,
+    logicalGenerations: generation.logicalGenerations,
+    modelDurationMs: generation.modelDurationMs,
+    artificialWaitMs: sending.artificialWaitMs,
+    contextFragments: assembledContext.fragments.length,
+    attemptedBeforeSendActions: beforeSend.attempted,
+    failedBeforeSendActions: beforeSend.failed,
+    replyBlocked: false,
+    sentSegments: sending.sentSegments,
+  })
 })
 
 export * as WakeTurn from './wake-turn'

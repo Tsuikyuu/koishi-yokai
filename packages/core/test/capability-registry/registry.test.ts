@@ -6,8 +6,10 @@ import {
   AdapterTransportError,
   ActionToolDurationMilliseconds,
   ActionToolXmlTemplate,
+  CapabilityDurationMilliseconds,
   CURRENT_ADAPTER_PROTOCOL_VERSION,
   FeedbackToolId,
+  MAX_FEEDBACK_TOOL_DESCRIPTION_LENGTH,
   ModelReference,
   TokenLimit,
   type ModelCatalogSnapshot,
@@ -71,6 +73,8 @@ const makeContextProvider = (id: string, minor = 1): ContextProvider =>
     protocolVersion: { major: 0, minor },
     description: 'Test context provider',
     maxTokens: TokenLimit.make(128),
+    maxDurationMs: CapabilityDurationMilliseconds.make(250),
+    isAvailable: () => true,
     provide: () => Effect.succeed(Option.none()),
   })
 
@@ -98,6 +102,7 @@ const makeActionTool = (id: string, minor = 1): ActionTool =>
     maxDurationMs: ActionToolDurationMilliseconds.make(250),
     isAvailable: () => true,
     isInputAllowed: () => true,
+    execute: () => Effect.void,
   })
 
 const makeFeedbackTool = (id: string): FeedbackTool =>
@@ -106,7 +111,10 @@ const makeFeedbackTool = (id: string): FeedbackTool =>
     protocolVersion: VERSION,
     description: 'Test feedback tool',
     inputSchema: { _tag: 'Object', properties: [] },
+    outputSchema: { _tag: 'Object', properties: [] },
     maxResultTokens: TokenLimit.make(128),
+    maxDurationMs: CapabilityDurationMilliseconds.make(250),
+    isAvailable: () => true,
     prepare: () => Effect.succeed({ execute: () => Effect.succeed(null) }),
   })
 
@@ -224,6 +232,25 @@ it.effect('rejects an invalid ActionTool template without poisoning other regist
     const snapshot = yield* registry.snapshot()
     expect(snapshot.revision).toBe(1)
     expect(snapshot.actionTools.map((tool) => tool.id)).toEqual(['valid-template'])
+  }).pipe(Effect.provide(CapabilityRegistry.layer)),
+)
+
+it.effect('validates FeedbackTools at the public registration boundary', () =>
+  Effect.gen(function* () {
+    const registry = yield* CapabilityRegistry.Service
+    const invalid = {
+      ...makeFeedbackTool('invalid-feedback'),
+      description: 'x'.repeat(MAX_FEEDBACK_TOOL_DESCRIPTION_LENGTH + 1),
+    }
+
+    const failure = yield* registry.registerFeedbackTool(invalid).pipe(Effect.flip)
+
+    expect(failure).toMatchObject({
+      _tag: 'CapabilityRegistrationValidationError',
+      domain: 'feedback-tool',
+      id: 'invalid-feedback',
+    })
+    expect((yield* registry.snapshot()).revision).toBe(0)
   }).pipe(Effect.provide(CapabilityRegistry.layer)),
 )
 

@@ -1,4 +1,4 @@
-import { Schema } from 'effect'
+import { Effect, Schema } from 'effect'
 import {
   ActionTool,
   type ActionToolIsAvailable,
@@ -49,6 +49,7 @@ export const makeReactionTool = (
     maxDurationMs: 250,
     isAvailable,
     isInputAllowed,
+    execute: () => Effect.void,
   })
 
 export const RICH_TEMPLATE = `<action tool="schedule.create">
@@ -134,6 +135,7 @@ export const makeRichTool = (
     maxDurationMs: 1_000,
     isAvailable,
     isInputAllowed,
+    execute: () => Effect.void,
   })
 
 export const makeTextBundleTool = () =>
@@ -157,4 +159,5 @@ export const makeTextBundleTool = () =>
     maxDurationMs: 1_000,
     isAvailable: () => true,
     isInputAllowed: () => true,
+    execute: () => Effect.void,
   })

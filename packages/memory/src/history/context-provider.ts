@@ -1,5 +1,6 @@
 import {
   CapabilityProtocolVersion,
+  CapabilityDurationMilliseconds,
   ContextFragment,
   ContextProvider,
   ContextProviderError,
@@ -21,6 +22,7 @@ import {
 
 const VERSION = CapabilityProtocolVersion.make({ major: 0, minor: 1 })
 const CONTEXT_MAX_TOKENS = TokenLimit.make(2_048)
+const CONTEXT_MAX_DURATION_MS = CapabilityDurationMilliseconds.make(250)
 const CONTEXT_RENDER_RESERVE = 96
 const MAX_RELEVANT_MESSAGES = 20
 
@@ -108,6 +110,8 @@ export const make = (history: MessageHistory.Interface): ContextProvider =>
     protocolVersion: VERSION,
     description: 'Select bounded relevant history from the current channel before generation.',
     maxTokens: CONTEXT_MAX_TOKENS,
+    maxDurationMs: CONTEXT_MAX_DURATION_MS,
+    isAvailable: () => true,
     provide: Effect.fn('HistoryContextProvider.provide')(function* (request) {
       if (
         request.tokenBudget > CONTEXT_MAX_TOKENS ||

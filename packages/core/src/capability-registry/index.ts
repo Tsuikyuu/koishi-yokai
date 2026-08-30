@@ -2,6 +2,7 @@ export * from './capability'
 export * from './model-catalog'
 export {
   AdapterNotFoundError,
+  CapabilityRegistrationValidationError,
   CapabilityRegistry,
   ModelSelectionUnavailableError,
 } from './registry'

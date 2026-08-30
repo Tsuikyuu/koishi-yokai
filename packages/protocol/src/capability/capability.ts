@@ -1,8 +1,11 @@
 import { Effect, Schema, type Option } from 'effect'
 
-import { FeedbackToolDeclaration } from '../llm-adapter/feedback-tool'
+import {
+  FeedbackToolDeclaration,
+  MAX_FEEDBACK_TOOL_DESCRIPTION_LENGTH,
+} from '../llm-adapter/feedback-tool'
 import { FeedbackToolId } from '../llm-adapter/identity'
-import { PortableToolInputSchema } from '../llm-adapter/portable-schema'
+import { PortableToolInputSchema, PortableToolOutputSchema } from '../llm-adapter/portable-schema'
 import { TokenCount, TokenLimit } from '../llm-adapter/token'
 
 const capabilityIdChecks = [
@@ -58,6 +61,12 @@ export interface CapabilityProtocolVersion extends Schema.Schema.Type<
   typeof CapabilityProtocolVersion
 > {}
 
+export const CapabilityDurationMilliseconds = Schema.Int.check(Schema.isGreaterThan(0)).pipe(
+  Schema.brand('@yokai/protocol/CapabilityDurationMilliseconds'),
+)
+
+export type CapabilityDurationMilliseconds = typeof CapabilityDurationMilliseconds.Type
+
 const CapabilityScopeIdentifier = Schema.String.check(
   Schema.isTrimmed(),
   Schema.isNonEmpty(),
@@ -91,11 +100,27 @@ export const ContextProviderRequest = Schema.Struct({
 
 export interface ContextProviderRequest extends Schema.Schema.Type<typeof ContextProviderRequest> {}
 
+export const MAX_CONTEXT_FRAGMENT_LABEL_LENGTH = 256
+export const MAX_CONTEXT_FRAGMENT_CONTENT_LENGTH = 8_192
+export const MAX_CONTEXT_FRAGMENT_SOURCE_REFS = 128
+export const MAX_CONTEXT_FRAGMENT_SOURCE_REF_LENGTH = 512
+
 export const ContextFragment = Schema.Struct({
   providerId: ContextProviderId,
-  label: Schema.NonEmptyString,
-  content: Schema.NonEmptyString,
-  sourceRefs: Schema.Array(Schema.NonEmptyString),
+  label: Schema.String.check(
+    Schema.isNonEmpty(),
+    Schema.isMaxLength(MAX_CONTEXT_FRAGMENT_LABEL_LENGTH),
+  ),
+  content: Schema.String.check(
+    Schema.isNonEmpty(),
+    Schema.isMaxLength(MAX_CONTEXT_FRAGMENT_CONTENT_LENGTH),
+  ),
+  sourceRefs: Schema.Array(
+    Schema.String.check(
+      Schema.isNonEmpty(),
+      Schema.isMaxLength(MAX_CONTEXT_FRAGMENT_SOURCE_REF_LENGTH),
+    ),
+  ).check(Schema.isMaxLength(MAX_CONTEXT_FRAGMENT_SOURCE_REFS)),
   untrusted: Schema.Boolean,
   estimatedTokens: TokenCount,
 })
@@ -126,11 +151,20 @@ const ContextProviderProvideSchema = Schema.declare(
   (value): value is ContextProviderProvide => typeof value === 'function',
 )
 
+/** A synchronous, side-effect-free visibility check for the frozen turn scope. */
+export type ContextProviderIsAvailable = (scope: CapabilityScope) => boolean
+
+const ContextProviderIsAvailableSchema = Schema.declare(
+  (value): value is ContextProviderIsAvailable => typeof value === 'function',
+)
+
 export const ContextProvider = Schema.Struct({
   id: ContextProviderId,
   protocolVersion: CapabilityProtocolVersion,
   description: Schema.NonEmptyString,
   maxTokens: TokenLimit,
+  maxDurationMs: CapabilityDurationMilliseconds,
+  isAvailable: ContextProviderIsAvailableSchema,
   provide: ContextProviderProvideSchema,
 })
 
@@ -159,11 +193,11 @@ export const ActionToolFailurePolicy = Schema.Literals(['continue', 'block-reply
 
 export type ActionToolFailurePolicy = typeof ActionToolFailurePolicy.Type
 
-export const ActionToolDurationMilliseconds = Schema.Int.check(Schema.isGreaterThan(0)).pipe(
-  Schema.brand('@yokai/protocol/ActionToolDurationMilliseconds'),
-)
+/** @deprecated Use CapabilityDurationMilliseconds for all capability time limits. */
+export const ActionToolDurationMilliseconds = CapabilityDurationMilliseconds
 
-export type ActionToolDurationMilliseconds = typeof ActionToolDurationMilliseconds.Type
+/** @deprecated Use CapabilityDurationMilliseconds for all capability time limits. */
+export type ActionToolDurationMilliseconds = CapabilityDurationMilliseconds
 
 /** A synchronous, side-effect-free visibility check for the frozen turn scope. */
 export type ActionToolIsAvailable = (scope: CapabilityScope) => boolean
@@ -175,6 +209,36 @@ const ActionToolIsAvailableSchema = Schema.declare(
 export const ActionToolInput = Schema.Record(Schema.String, Schema.Json)
 
 export interface ActionToolInput extends Schema.Schema.Type<typeof ActionToolInput> {}
+
+export const ActionToolRequest = Schema.Struct({
+  scope: CapabilityScope,
+  input: ActionToolInput,
+})
+
+export interface ActionToolRequest extends Schema.Schema.Type<typeof ActionToolRequest> {}
+
+export const ActionToolExecutionReason = Schema.Literals([
+  'timeout',
+  'unavailable',
+  'execution-failed',
+])
+
+export type ActionToolExecutionReason = typeof ActionToolExecutionReason.Type
+
+export class ActionToolExecutionError extends Schema.TaggedError<ActionToolExecutionError>(
+  '@yokai/protocol/ActionToolExecutionError',
+)('ActionToolExecutionError', {
+  toolId: ActionToolId,
+  reason: ActionToolExecutionReason,
+}) {}
+
+export type ActionToolExecute = (
+  request: ActionToolRequest,
+) => Effect.Effect<void, ActionToolExecutionError>
+
+const ActionToolExecuteSchema = Schema.declare(
+  (value): value is ActionToolExecute => typeof value === 'function',
+)
 
 /** A synchronous, side-effect-free authorization check over fully decoded input. */
 export type ActionToolIsInputAllowed = (scope: CapabilityScope, input: ActionToolInput) => boolean
@@ -196,9 +260,10 @@ const ActionToolRegistration = Schema.Struct({
   executionStage: ActionToolExecutionStage,
   completionPolicy: ActionToolCompletionPolicy,
   failurePolicy: ActionToolFailurePolicy,
-  maxDurationMs: ActionToolDurationMilliseconds,
+  maxDurationMs: CapabilityDurationMilliseconds,
   isAvailable: ActionToolIsAvailableSchema,
   isInputAllowed: ActionToolIsInputAllowedSchema,
+  execute: ActionToolExecuteSchema,
 })
 
 interface ActionToolRegistration extends Schema.Schema.Type<typeof ActionToolRegistration> {}
@@ -268,12 +333,25 @@ const FeedbackToolPrepareSchema = Schema.declare(
   (value): value is FeedbackToolPrepare => typeof value === 'function',
 )
 
+/** A synchronous, side-effect-free visibility check for the frozen turn scope. */
+export type FeedbackToolIsAvailable = (scope: CapabilityScope) => boolean
+
+const FeedbackToolIsAvailableSchema = Schema.declare(
+  (value): value is FeedbackToolIsAvailable => typeof value === 'function',
+)
+
 export const FeedbackTool = Schema.Struct({
   id: FeedbackToolId,
   protocolVersion: CapabilityProtocolVersion,
-  description: Schema.NonEmptyString,
+  description: Schema.String.check(
+    Schema.isNonEmpty(),
+    Schema.isMaxLength(MAX_FEEDBACK_TOOL_DESCRIPTION_LENGTH),
+  ),
   inputSchema: PortableToolInputSchema,
+  outputSchema: PortableToolOutputSchema,
   maxResultTokens: TokenLimit,
+  maxDurationMs: CapabilityDurationMilliseconds,
+  isAvailable: FeedbackToolIsAvailableSchema,
   prepare: FeedbackToolPrepareSchema,
 })
 

@@ -3,7 +3,10 @@ import { Effect, Result, Schema } from 'effect'
 
 import {
   ActionTool,
+  ActionToolExecutionError,
+  ActionToolId,
   ActionToolInput,
+  ActionToolRequest,
   MAX_ACTION_TOOL_DESCRIPTION_LENGTH,
   MAX_ACTION_TOOL_XML_TEMPLATE_LENGTH,
 } from '../../src/index'
@@ -29,6 +32,7 @@ const definition = {
   maxDurationMs: 250,
   isAvailable: () => true,
   isInputAllowed: () => true,
+  execute: () => Effect.void,
 }
 
 it.effect('decodes the complete static ActionTool registration contract', () =>
@@ -62,6 +66,46 @@ it.effect('decodes the complete static ActionTool registration contract', () =>
         input,
       ),
     ).toBe(true)
+    yield* tool.execute(
+      ActionToolRequest.make({
+        scope: {
+          instanceId: 'instance',
+          platform: 'test',
+          guildId: 'guild',
+          channelId: 'channel',
+        },
+        input,
+      }),
+    )
+  }),
+)
+
+it.effect('exposes stable typed ActionTool execution failures without an internal cause', () =>
+  Effect.gen(function* () {
+    const error = new ActionToolExecutionError({
+      toolId: ActionToolId.make('reaction.add'),
+      reason: 'timeout',
+    })
+    const tool = yield* Schema.decodeUnknownEffect(ActionTool)({
+      ...definition,
+      execute: () => Effect.fail(error),
+    })
+    const failure = yield* tool
+      .execute(
+        ActionToolRequest.make({
+          scope: {
+            instanceId: 'instance',
+            platform: 'test',
+            guildId: 'guild',
+            channelId: 'channel',
+          },
+          input: { emoji: '👻' },
+        }),
+      )
+      .pipe(Effect.flip)
+
+    expect(failure).toEqual(error)
+    expect(Object.keys(failure).sort()).toEqual(['_tag', 'reason', 'toolId'])
   }),
 )
 
@@ -109,6 +153,7 @@ it.effect('rejects unknown policies and invalid duration or visibility contracts
       { ...definition, maxDurationMs: 1.5 },
       { ...definition, isAvailable: true },
       { ...definition, isInputAllowed: true },
+      { ...definition, execute: true },
     ]
     const results = yield* Effect.forEach(candidates, (candidate) =>
       Schema.decodeUnknownEffect(ActionTool)(candidate).pipe(Effect.result),
