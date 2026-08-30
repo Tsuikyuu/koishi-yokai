@@ -400,7 +400,7 @@ export const render = (scene: Scene): string =>
       topic: scene.thread.summary,
       participants: scene.thread.participants,
       mode: scene.thread.mode,
-      direction: scene.direction.kind,
+      direction: scene.direction.kind === 'yokai' ? 'self' : scene.direction.kind,
       targetParticipantId: Option.getOrNull(scene.direction.targetParticipantId),
       activeThreadCount: scene.activeThreadCount,
       interruptsOthers: scene.interruptsOthers,

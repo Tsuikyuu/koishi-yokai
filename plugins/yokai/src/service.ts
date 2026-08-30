@@ -3,8 +3,10 @@ import {
   CapabilityRegistry,
   ChannelMessageBuffer,
   DirectResponseMechanism,
+  EngagementLease,
   type CapabilityRegistration as CoreCapabilityRegistration,
   type AdapterRegistration as CoreAdapterRegistration,
+  HostConfiguration,
   HostModelSelection,
   HostSession,
   PresetRegistry,
@@ -43,7 +45,7 @@ import { Clock, Effect, Option } from 'effect'
 import { Context, Service, type Session } from 'koishi'
 
 import type { Config } from './config'
-import { DEFAULT_INSTANCE_ID } from './config'
+import { DEFAULT_INSTANCE_ID, resolveHardReplyPolicy } from './config'
 import { KoishiMessageNormalization, type EventKind } from './message-archive/normalization'
 import { KoishiWakeObservation } from './response/observation'
 import { YokaiRuntime } from './runtime/runtime'
@@ -53,6 +55,16 @@ interface ArchivedObservation {
   readonly message: MessageArchiveEvent.ArchivedMessage
   readonly isDuplicate: boolean
 }
+
+const selectedRoleName = Effect.fn('Yokai.selectedRoleName')(function* () {
+  const configuration = yield* HostConfiguration.Service
+  if (Option.isNone(configuration.presetId)) return Option.none<string>()
+  const presets = yield* PresetRegistry.Service
+  return Option.map(
+    yield* presets.snapshot(configuration.presetId.value),
+    (snapshot) => snapshot.persona.name,
+  )
+})
 
 export class Yokai extends Service<Config> implements YokaiCapabilityHost {
   private readonly effectRuntime: YokaiRuntime.Interface
@@ -121,20 +133,24 @@ export class Yokai extends Service<Config> implements YokaiCapabilityHost {
     const boundary = fromSession(session)
     const sendText = makeSendText(boundary)
     const archivedEffect = this.archiveMessageEvent(session, 'created')
+    const hardReplyPolicy = resolveHardReplyPolicy(this.config)
     return this.runEffect(
       Effect.gen(function* () {
         const archived = yield* archivedEffect
         if (Option.isNone(archived)) return false
 
+        const roleName = yield* selectedRoleName()
         const observation = KoishiWakeObservation.fromSession(
           session,
           archived.value.message,
           archived.value.isDuplicate,
+          roleName,
+          hardReplyPolicy,
         )
         const threadTracker = yield* ThreadTracker.Service
         const scene = yield* threadTracker.observe(
           archived.value.message,
-          observation.explicitMention || observation.replyToSelf || observation.nameHit,
+          WakeMessage.isDirectedToSelf(observation),
         )
         const roleState = yield* RoleState.Service
         const localState = yield* Effect.gen(function* () {
@@ -155,10 +171,16 @@ export class Yokai extends Service<Config> implements YokaiCapabilityHost {
         if (Option.isNone(localState)) return false
         const observedMessage = WakeMessage.withLocalState(observation, localState.value)
         const directMechanism = yield* DirectResponseMechanism.Service
+        const engagementLease = yield* EngagementLease.Service
         const activityMechanism = yield* ActivityResponseMechanism.Service
         const direct = yield* directMechanism.observe(observedMessage)
+        const engagement = yield* engagementLease.observe(observedMessage, scene)
         const activity = yield* activityMechanism.observe(observedMessage)
-        const selected = Option.isSome(direct) ? direct : activity
+        const selected = Option.isSome(direct)
+          ? direct
+          : Option.isSome(engagement)
+            ? Option.some(engagement.value.proposal)
+            : activity
         if (Option.isNone(selected)) return false
 
         const arbiter = yield* WakeArbiter.Service
@@ -191,7 +213,15 @@ export class Yokai extends Service<Config> implements YokaiCapabilityHost {
               Effect.catch((error) => Effect.die(error)),
             )
           })
-        const outcome = yield* arbiter.submit(selected.value, executeTurn)
+        const outcome = Option.isSome(direct)
+          ? yield* arbiter.submit(direct.value, executeTurn)
+          : Option.isSome(engagement)
+            ? yield* arbiter.submitWithAdmission(
+                engagement.value.proposal,
+                engagement.value.admission,
+                executeTurn,
+              )
+            : yield* arbiter.submit(selected.value, executeTurn)
         if (outcome._tag === 'Executed') {
           yield* activityMechanism.consume(outcome.proposal.scopeId)
         }

@@ -38,7 +38,8 @@ const message = (
     isEffective: true,
     explicitMention: false,
     replyToSelf: false,
-    nameHit: false,
+    presetNameMatch: 'none',
+    hardReplyKind: 'none',
     isQuestionOrHelp: false,
     hasQuote: false,
     hasMedia: false,
@@ -75,17 +76,46 @@ const mechanismLayer = Layer.merge(
   ),
 )
 
-it.effect('uses the direct window for mentions, replies, and following supplements', () =>
+it.effect('uses the direct window for all hard reply kinds and following supplements', () =>
   Effect.gen(function* () {
     yield* TestClock.setTime(0)
     const direct = yield* DirectResponseMechanism.Service
 
-    const mention = yield* direct.observe(message('mention', { explicitMention: true }))
+    const mention = yield* direct.observe(
+      message('mention', { explicitMention: true, hardReplyKind: 'explicit-mention' }),
+    )
     expect(Option.isSome(mention)).toBe(true)
     if (Option.isNone(mention)) return yield* Effect.die('Expected direct mention proposal')
     expect(mention.value.reason.code).toBe('explicit-mention')
     expect(mention.value.budgetCategory).toBe('reserved')
     expect(mention.value.cooldownPolicy).toBe('bypass')
+
+    const reply = yield* direct.observe(
+      message('reply', { replyToSelf: true, hardReplyKind: 'reply-to-self' }),
+    )
+    expect(Option.isSome(reply)).toBe(true)
+    if (Option.isNone(reply)) return yield* Effect.die('Expected direct reply proposal')
+    expect(reply.value.reason.code).toBe('reply-to-self')
+
+    const prefix = yield* direct.observe(
+      message('prefix', {
+        presetNameMatch: 'prefix',
+        hardReplyKind: 'role-name-prefix',
+      }),
+    )
+    expect(Option.isSome(prefix)).toBe(true)
+    if (Option.isNone(prefix)) return yield* Effect.die('Expected role-name prefix proposal')
+    expect(prefix.value.reason.code).toBe('role-name-prefix')
+
+    const contains = yield* direct.observe(
+      message('contains', {
+        presetNameMatch: 'contains',
+        hardReplyKind: 'role-name-contains',
+      }),
+    )
+    expect(Option.isSome(contains)).toBe(true)
+    if (Option.isNone(contains)) return yield* Effect.die('Expected role-name contains proposal')
+    expect(contains.value.reason.code).toBe('role-name-contains')
 
     const supplement = yield* direct.observe(message('supplement'))
     expect(Option.isSome(supplement)).toBe(true)
@@ -107,6 +137,15 @@ it.effect('uses the direct window for mentions, replies, and following supplemen
 
     yield* TestClock.adjust(Duration.millis(501))
     expect(Option.isNone(yield* direct.observe(message('late-supplement')))).toBe(true)
+    const softNameMatch = message('role-name', { presetNameMatch: 'prefix' })
+    expect(WakeMessage.isHardTrigger(softNameMatch)).toBe(false)
+    expect(Option.isNone(yield* direct.observe(softNameMatch))).toBe(true)
+
+    const softReply = message('soft-reply', { replyToSelf: true })
+    expect(WakeMessage.isDirectedToSelf(softReply)).toBe(true)
+    expect(WakeMessage.isHardTrigger(softReply)).toBe(false)
+    expect(WakeMessage.isLeaseAnchorTrigger(softReply)).toBe(false)
+    expect(Option.isNone(yield* direct.observe(softReply))).toBe(true)
   }).pipe(Effect.provide(DirectResponseMechanism.layer())),
 )
 

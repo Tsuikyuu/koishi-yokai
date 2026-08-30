@@ -7,7 +7,7 @@ import {
   GatePressure,
   LocalRelevance,
 } from '../activity-gating/index'
-import { type Message } from './message'
+import { type Message, isHardTrigger } from './message'
 import {
   ACTIVITY_MECHANISM_ID,
   CHANNEL_CONVERSATION_MERGE_KEY,
@@ -177,10 +177,12 @@ export const layer = (options: Options = DEFAULT_OPTIONS) =>
               isDuplicate: message.isDuplicate,
               isOtherBot: message.isOtherBot,
               isSelf: message.isSelf,
-              explicitMention: message.explicitMention,
-              replyToSelf: message.replyToSelf,
+              hardTrigger: isHardTrigger(message),
               mentionDegree: ActivityGateValue.Score.make(message.explicitMention ? 10 : 0),
-              nameOrAliasEvidence: ActivityGateValue.Score.make(message.nameHit ? 2 : 0),
+              replyToSelfEvidence: ActivityGateValue.Score.make(message.replyToSelf ? 10 : 0),
+              nameOrAliasEvidence: ActivityGateValue.Score.make(
+                message.presetNameMatch === 'none' ? 0 : 2,
+              ),
               questionOrHelpEvidence: ActivityGateValue.Score.make(
                 message.isQuestionOrHelp ? 2 : 0,
               ),

@@ -9,6 +9,7 @@ import {
   CapabilityRegistry,
   ChannelMessageBuffer,
   DirectResponseMechanism,
+  EngagementLease,
   HostConfiguration,
   PresetRegistry,
   RoleState,
@@ -37,6 +38,10 @@ import {
   DEFAULT_BACKGROUND_MINUTE_CALLS,
   DEFAULT_BUDGET_TIME_ZONE,
   DEFAULT_DIRECT_DEBOUNCE_MS,
+  DEFAULT_ENGAGEMENT_ENABLED,
+  DEFAULT_ENGAGEMENT_IDLE_TTL_MS,
+  DEFAULT_ENGAGEMENT_MAX_DURATION_MS,
+  DEFAULT_ENGAGEMENT_MAX_ROUNDS,
   DEFAULT_INSTANCE_ID,
   DEFAULT_MESSAGE_RETENTION_DAYS,
   DEFAULT_NOTEBOOK_EXPIRATION_DAYS,
@@ -95,6 +100,33 @@ const configurationLayer = (config: Config) =>
 
 const configuredNumber = (value: number | undefined, fallback: number): number =>
   value === undefined ? fallback : value
+
+const decodeEngagementOptions = Effect.fn('YokaiRuntime.decodeEngagementOptions')(function* (
+  config: Config,
+  directDebounceMs: number,
+) {
+  const configured = config.engagement
+  return yield* Schema.decodeUnknownEffect(EngagementLease.Options)({
+    enabled:
+      configured === undefined || configured.enabled === undefined
+        ? DEFAULT_ENGAGEMENT_ENABLED
+        : configured.enabled,
+    idleTtlMs: configuredNumber(
+      configured === undefined ? undefined : configured.idleTtlMs,
+      DEFAULT_ENGAGEMENT_IDLE_TTL_MS,
+    ),
+    maxDurationMs: configuredNumber(
+      configured === undefined ? undefined : configured.maxDurationMs,
+      DEFAULT_ENGAGEMENT_MAX_DURATION_MS,
+    ),
+    maxRounds: configuredNumber(
+      configured === undefined ? undefined : configured.maxRounds,
+      DEFAULT_ENGAGEMENT_MAX_ROUNDS,
+    ),
+    debounceMs: directDebounceMs,
+    proposalTtlMs: directDebounceMs + 9_500,
+  })
+})
 
 const stateParameters = (config: Config): RoleStateModel.Parameters => {
   const configured = config.state
@@ -236,7 +268,12 @@ const wakeServicesLayer = (config: Config) => {
     debounceMs: WakeProposal.DurationMilliseconds.make(directDebounceMs),
     proposalTtlMs: WakeProposal.DurationMilliseconds.make(directDebounceMs + 9_500),
   })
-  return Layer.merge(direct, activityServices)
+  const engagement = Layer.unwrap(
+    decodeEngagementOptions(config, directDebounceMs).pipe(
+      Effect.map((options) => EngagementLease.layer(options)),
+    ),
+  )
+  return Layer.mergeAll(direct, engagement, activityServices)
 }
 
 const decodeMessageArchiveOptions = Effect.fn('YokaiRuntime.decodeMessageArchiveOptions')(

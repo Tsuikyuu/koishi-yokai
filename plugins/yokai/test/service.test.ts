@@ -138,6 +138,22 @@ it.effect('starts without a selected model', () => {
   }).pipe(Effect.ensuring(stop(ctx)))
 })
 
+it.effect('rejects an engagement idle TTL longer than its absolute duration', () => {
+  const ctx = new Context()
+  const service = new TestYokai(ctx, {
+    feedbackToolsEnabled: false,
+    engagement: {
+      idleTtlMs: 5_000,
+      maxDurationMs: 4_999,
+    },
+  })
+
+  return Effect.gen(function* () {
+    const outcome = yield* Effect.promise(() => service.readConfiguration()).pipe(Effect.exit)
+    expect(outcome._tag).toBe('Failure')
+  }).pipe(Effect.ensuring(stop(ctx)))
+})
+
 it.effect('starts and stops when the preset directory requires asynchronous acquisition', () =>
   Effect.scoped(
     Effect.gen(function* () {
@@ -170,7 +186,7 @@ it.effect('decodes exactly one selected model reference', () => {
   }).pipe(Effect.ensuring(stop(ctx)))
 })
 
-it.effect('registers direct and activity as built-in response mechanisms', () => {
+it.effect('registers direct, activity, and engagement as built-in response mechanisms', () => {
   const ctx = new Context()
   const service = new TestYokai(ctx, DEFAULT_CONFIG)
 
@@ -179,6 +195,7 @@ it.effect('registers direct and activity as built-in response mechanisms', () =>
       'action-completion',
       'activity',
       'direct',
+      'engagement',
     ])
   }).pipe(Effect.ensuring(stop(ctx)))
 })

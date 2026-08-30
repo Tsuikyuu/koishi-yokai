@@ -136,10 +136,12 @@ it.effect('drops an expired proposal before budget or execution', () =>
       yield* TestClock.setTime(0)
       const arbiter = yield* WakeArbiter.Service
       const budget = yield* CallBudget.Service
+      const admissions = yield* Ref.make(0)
       const executions = yield* Ref.make(0)
       const fiber = yield* arbiter
-        .submit(
+        .submitWithAdmission(
           proposal('expiring', 'expires', 10, { debounceMs: 1_000, expiresAt: 500 }),
+          () => Ref.update(admissions, (count) => count + 1).pipe(Effect.as(true)),
           (_merged, markDispatched) =>
             markDispatched().pipe(Effect.andThen(Ref.update(executions, (count) => count + 1))),
         )
@@ -148,6 +150,7 @@ it.effect('drops an expired proposal before budget or execution', () =>
       yield* TestClock.adjust(Duration.seconds(1))
       const outcome = yield* Fiber.join(fiber)
       expect(outcome._tag).toBe('Expired')
+      expect(yield* Ref.get(admissions)).toBe(0)
       expect(yield* Ref.get(executions)).toBe(0)
       expect((yield* budget.snapshot()).minute.usage.normal.committed).toBe(0)
       expect((yield* budget.snapshot()).minute.usage.reserved.committed).toBe(0)
@@ -235,6 +238,7 @@ it.effect('enforces social cooldown while direct proposals bypass it', () =>
     Effect.gen(function* () {
       yield* TestClock.setTime(0)
       const arbiter = yield* WakeArbiter.Service
+      const admissions = yield* Ref.make(0)
       const execute: WakeArbiter.Executor<never> = (_merged, markDispatched) =>
         markDispatched().pipe(Effect.asVoid)
 
@@ -242,17 +246,19 @@ it.effect('enforces social cooldown while direct proposals bypass it', () =>
         (yield* arbiter.submit(proposal('direct-first', 'direct', 100, { debounceMs: 0 }), execute))
           ._tag,
       ).toBe('Executed')
-      const denied = yield* arbiter.submit(
+      const denied = yield* arbiter.submitWithAdmission(
         proposal('social', 'social', 10, {
           debounceMs: 0,
           category: 'normal',
           cooldown: 'enforce',
         }),
+        () => Ref.update(admissions, (count) => count + 1).pipe(Effect.as(true)),
         execute,
       )
       expect(denied._tag).toBe('CooldownDenied')
       if (denied._tag !== 'CooldownDenied') return yield* Effect.die('Expected cooldown denial')
       expect(denied.remainingMs).toBe(45_000)
+      expect(yield* Ref.get(admissions)).toBe(0)
 
       expect(
         (yield* arbiter.submit(
@@ -283,13 +289,201 @@ it.effect('denies exhausted categories and releases skipped pre-dispatch turns',
         (yield* arbiter.submit(proposal('charged', 'charged', 100, { debounceMs: 0 }), execute))
           ._tag,
       ).toBe('Executed')
+      const admissions = yield* Ref.make(0)
       expect(
-        (yield* arbiter.submit(proposal('denied', 'denied', 100, { debounceMs: 0 }), execute))._tag,
+        (yield* arbiter.submitWithAdmission(
+          proposal('denied', 'denied', 100, { debounceMs: 0 }),
+          () => Ref.update(admissions, (count) => count + 1).pipe(Effect.as(true)),
+          execute,
+        ))._tag,
       ).toBe('BudgetDenied')
+      expect(yield* Ref.get(admissions)).toBe(0)
       expect(
         Option.isSome((yield* arbiter.gateStatus(WakeProposal.scopeIdOf(SCOPE))).lastWakeAt),
       ).toBe(true)
     }).pipe(Effect.provide(testLayer(1))),
+  ),
+)
+
+it.effect('skips a denied admission, releases its budget, and never runs the executor', () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      yield* TestClock.setTime(0)
+      const arbiter = yield* WakeArbiter.Service
+      const budget = yield* CallBudget.Service
+      const admissions = yield* Ref.make(0)
+      const executions = yield* Ref.make(0)
+
+      const outcome = yield* arbiter.submitWithAdmission(
+        proposal('admission-denied', 'admission-denied', 100, { debounceMs: 0 }),
+        () => Ref.update(admissions, (count) => count + 1).pipe(Effect.as(false)),
+        () => Ref.update(executions, (count) => count + 1),
+      )
+
+      expect(outcome._tag).toBe('Skipped')
+      expect(yield* Ref.get(admissions)).toBe(1)
+      expect(yield* Ref.get(executions)).toBe(0)
+      const snapshot = yield* budget.snapshot()
+      expect(snapshot.minute.usage.reserved.pending).toBe(0)
+      expect(snapshot.minute.usage.reserved.committed).toBe(0)
+      expect(snapshot.minute.usage.reserved.remaining).toBe(8)
+    }).pipe(Effect.provide(testLayer())),
+  ),
+)
+
+it.effect('classifies an admission defect before dispatch and releases its budget', () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      yield* TestClock.setTime(0)
+      const arbiter = yield* WakeArbiter.Service
+      const budget = yield* CallBudget.Service
+      const executions = yield* Ref.make(0)
+
+      const outcome = yield* arbiter.submitWithAdmission(
+        proposal('admission-defect', 'admission-defect', 100, { debounceMs: 0 }),
+        () => Effect.die('expected-admission-defect'),
+        () => Ref.update(executions, (count) => count + 1),
+      )
+
+      expect(outcome).toMatchObject({ _tag: 'ExecutionFailed', dispatched: false })
+      expect(yield* Ref.get(executions)).toBe(0)
+      expect((yield* budget.snapshot()).minute.usage.reserved.remaining).toBe(8)
+    }).pipe(Effect.provide(testLayer())),
+  ),
+)
+
+it.effect(
+  'uses the latest equal-priority admission and executor exactly once for a merged batch',
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        yield* TestClock.setTime(0)
+        const arbiter = yield* WakeArbiter.Service
+        const firstAdmissions = yield* Ref.make(0)
+        const secondAdmissions = yield* Ref.make(0)
+        const firstExecutions = yield* Ref.make(0)
+        const secondExecutions = yield* Ref.make(0)
+
+        const first = yield* arbiter
+          .submitWithAdmission(
+            proposal('one-admission', 'first', 100),
+            () => Ref.update(firstAdmissions, (count) => count + 1).pipe(Effect.as(true)),
+            (_merged, markDispatched) =>
+              markDispatched().pipe(
+                Effect.andThen(Ref.update(firstExecutions, (count) => count + 1)),
+              ),
+          )
+          .pipe(Effect.forkScoped)
+        yield* Effect.yieldNow
+        yield* TestClock.adjust(Duration.millis(100))
+        const second = yield* arbiter
+          .submitWithAdmission(
+            proposal('one-admission', 'second', 100, { submittedAt: 100 }),
+            () => Ref.update(secondAdmissions, (count) => count + 1).pipe(Effect.as(true)),
+            (_merged, markDispatched) =>
+              markDispatched().pipe(
+                Effect.andThen(Ref.update(secondExecutions, (count) => count + 1)),
+              ),
+          )
+          .pipe(Effect.forkScoped)
+        yield* Effect.yieldNow
+
+        expect(yield* Ref.get(firstAdmissions)).toBe(0)
+        expect(yield* Ref.get(secondAdmissions)).toBe(0)
+        yield* TestClock.adjust(Duration.millis(500))
+        expect((yield* Fiber.join(first))._tag).toBe('Executed')
+        expect((yield* Fiber.join(second))._tag).toBe('Executed')
+        expect(yield* Ref.get(firstAdmissions)).toBe(0)
+        expect(yield* Ref.get(secondAdmissions)).toBe(1)
+        expect(yield* Ref.get(firstExecutions)).toBe(0)
+        expect(yield* Ref.get(secondExecutions)).toBe(1)
+      }).pipe(Effect.provide(testLayer())),
+    ),
+)
+
+it.effect(
+  'keeps the primary admission and executor when a lower-priority proposal arrives later',
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        yield* TestClock.setTime(0)
+        const arbiter = yield* WakeArbiter.Service
+        const primaryAdmissions = yield* Ref.make(0)
+        const primaryExecutions = yield* Ref.make(0)
+        const lowerExecutions = yield* Ref.make(0)
+
+        const primary = yield* arbiter
+          .submitWithAdmission(
+            proposal('primary-admission', 'primary', 100),
+            () => Ref.update(primaryAdmissions, (count) => count + 1).pipe(Effect.as(true)),
+            (_merged, markDispatched) =>
+              markDispatched().pipe(
+                Effect.andThen(Ref.update(primaryExecutions, (count) => count + 1)),
+              ),
+          )
+          .pipe(Effect.forkScoped)
+        yield* Effect.yieldNow
+        yield* TestClock.adjust(Duration.millis(100))
+        const lower = yield* arbiter
+          .submit(
+            proposal('primary-admission', 'lower', 10, { submittedAt: 100 }),
+            (_merged, markDispatched) =>
+              markDispatched().pipe(
+                Effect.andThen(Ref.update(lowerExecutions, (count) => count + 1)),
+              ),
+          )
+          .pipe(Effect.forkScoped)
+        yield* Effect.yieldNow
+        yield* TestClock.adjust(Duration.millis(500))
+
+        expect((yield* Fiber.join(primary))._tag).toBe('Executed')
+        expect((yield* Fiber.join(lower))._tag).toBe('Executed')
+        expect(yield* Ref.get(primaryAdmissions)).toBe(1)
+        expect(yield* Ref.get(primaryExecutions)).toBe(1)
+        expect(yield* Ref.get(lowerExecutions)).toBe(0)
+      }).pipe(Effect.provide(testLayer())),
+    ),
+)
+
+it.effect('replaces admission when a higher-priority default admission becomes primary', () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      yield* TestClock.setTime(0)
+      const arbiter = yield* WakeArbiter.Service
+      const lowerAdmissions = yield* Ref.make(0)
+      const lowerExecutions = yield* Ref.make(0)
+      const primaryExecutions = yield* Ref.make(0)
+
+      const lower = yield* arbiter
+        .submitWithAdmission(
+          proposal('replaced-admission', 'lower', 10),
+          () => Ref.update(lowerAdmissions, (count) => count + 1).pipe(Effect.as(false)),
+          (_merged, markDispatched) =>
+            markDispatched().pipe(
+              Effect.andThen(Ref.update(lowerExecutions, (count) => count + 1)),
+            ),
+        )
+        .pipe(Effect.forkScoped)
+      yield* Effect.yieldNow
+      yield* TestClock.adjust(Duration.millis(100))
+      const primary = yield* arbiter
+        .submit(
+          proposal('replaced-admission', 'primary', 100, { submittedAt: 100 }),
+          (_merged, markDispatched) =>
+            markDispatched().pipe(
+              Effect.andThen(Ref.update(primaryExecutions, (count) => count + 1)),
+            ),
+        )
+        .pipe(Effect.forkScoped)
+      yield* Effect.yieldNow
+      yield* TestClock.adjust(Duration.millis(500))
+
+      expect((yield* Fiber.join(lower))._tag).toBe('Executed')
+      expect((yield* Fiber.join(primary))._tag).toBe('Executed')
+      expect(yield* Ref.get(lowerAdmissions)).toBe(0)
+      expect(yield* Ref.get(lowerExecutions)).toBe(0)
+      expect(yield* Ref.get(primaryExecutions)).toBe(1)
+    }).pipe(Effect.provide(testLayer())),
   ),
 )
 

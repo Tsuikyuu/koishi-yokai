@@ -15,6 +15,14 @@ import {
   DEFAULT_BACKGROUND_MINUTE_CALLS,
   DEFAULT_BUDGET_TIME_ZONE,
   DEFAULT_DIRECT_DEBOUNCE_MS,
+  DEFAULT_HARD_REPLY_AT_MENTION,
+  DEFAULT_HARD_REPLY_ON_REPLY_TO_SELF,
+  DEFAULT_HARD_REPLY_ROLE_NAME_CONTAINS,
+  DEFAULT_HARD_REPLY_ROLE_NAME_PREFIX,
+  DEFAULT_ENGAGEMENT_ENABLED,
+  DEFAULT_ENGAGEMENT_IDLE_TTL_MS,
+  DEFAULT_ENGAGEMENT_MAX_DURATION_MS,
+  DEFAULT_ENGAGEMENT_MAX_ROUNDS,
   DEFAULT_NOTEBOOK_EXPIRATION_DAYS,
   DEFAULT_NOTEBOOK_MAX_NOTES_PER_REPLY,
   DEFAULT_NOTEBOOK_RECALL_LIMIT,
@@ -29,10 +37,11 @@ import {
   DEFAULT_STATE_MOOD_HALF_LIFE_MS,
   DEFAULT_STATE_PARTICIPATION_HALF_LIFE_MS,
   MAX_STATE_HALF_LIFE_MS,
+  resolveHardReplyPolicy,
 } from '../src/config'
 import { schemaForCatalog } from '../src/model-catalog/schema-projection'
 
-it('keeps model, local wake gating, budgets, instance, retention, and notebook in main config', () => {
+it('keeps model, local wake gating, engagement, budgets, instance, retention, and notebook in main config', () => {
   expect(
     Config({
       model: 'gemini/gemini-2.5-flash',
@@ -43,6 +52,12 @@ it('keeps model, local wake gating, budgets, instance, retention, and notebook i
     model: 'gemini/gemini-2.5-flash',
     feedbackToolsEnabled: true,
     messageRetentionDays: 90,
+    engagement: {
+      enabled: DEFAULT_ENGAGEMENT_ENABLED,
+      idleTtlMs: DEFAULT_ENGAGEMENT_IDLE_TTL_MS,
+      maxDurationMs: DEFAULT_ENGAGEMENT_MAX_DURATION_MS,
+      maxRounds: DEFAULT_ENGAGEMENT_MAX_ROUNDS,
+    },
     notebook: {
       maxNotesPerReply: DEFAULT_NOTEBOOK_MAX_NOTES_PER_REPLY,
       recallLimit: DEFAULT_NOTEBOOK_RECALL_LIMIT,
@@ -57,6 +72,10 @@ it('keeps model, local wake gating, budgets, instance, retention, and notebook i
     },
     wake: {
       directDebounceMs: DEFAULT_DIRECT_DEBOUNCE_MS,
+      hardReplyAtMention: DEFAULT_HARD_REPLY_AT_MENTION,
+      hardReplyOnReplyToSelf: DEFAULT_HARD_REPLY_ON_REPLY_TO_SELF,
+      hardReplyRoleNamePrefix: DEFAULT_HARD_REPLY_ROLE_NAME_PREFIX,
+      hardReplyRoleNameContains: DEFAULT_HARD_REPLY_ROLE_NAME_CONTAINS,
       activityDebounceMs: DEFAULT_ACTIVITY_DEBOUNCE_MS,
       cooldownMs: DEFAULT_ACTIVITY_COOLDOWN_MS,
       activityHalfLifeMs: DEFAULT_ACTIVITY_HALF_LIFE_MS,
@@ -82,6 +101,7 @@ it('keeps model, local wake gating, budgets, instance, retention, and notebook i
   const feedbackToolsEnabled = fields.feedbackToolsEnabled
   const instanceId = fields.instanceId
   const messageRetentionDays = fields.messageRetentionDays
+  const engagement = fields.engagement
   const notebook = fields.notebook
   const presetId = fields.presetId
   const presetDirectory = fields.presetDirectory
@@ -94,6 +114,7 @@ it('keeps model, local wake gating, budgets, instance, retention, and notebook i
     feedbackToolsEnabled === undefined ||
     instanceId === undefined ||
     messageRetentionDays === undefined ||
+    engagement === undefined ||
     notebook === undefined ||
     presetId === undefined ||
     presetDirectory === undefined ||
@@ -115,6 +136,36 @@ it('keeps model, local wake gating, budgets, instance, retention, and notebook i
   expect(messageRetentionDays.meta.default).toBe(90)
   expect(messageRetentionDays.meta.min).toBe(1)
   expect(messageRetentionDays.meta.max).toBe(3_650)
+  expect(engagement({ enabled: false, idleTtlMs: 60_000, maxRounds: 4 })).toEqual({
+    enabled: false,
+    idleTtlMs: 60_000,
+    maxDurationMs: DEFAULT_ENGAGEMENT_MAX_DURATION_MS,
+    maxRounds: 4,
+  })
+  const engagementFields = engagement.dict
+  if (engagementFields === undefined) throw new Error('Expected an engagement configuration schema')
+  const engagementEnabled = engagementFields.enabled
+  const idleTtlMs = engagementFields.idleTtlMs
+  const maxDurationMs = engagementFields.maxDurationMs
+  const maxRounds = engagementFields.maxRounds
+  if (
+    engagementEnabled === undefined ||
+    idleTtlMs === undefined ||
+    maxDurationMs === undefined ||
+    maxRounds === undefined
+  ) {
+    throw new Error('Expected all engagement configuration fields')
+  }
+  expect(engagementEnabled.meta.default).toBe(DEFAULT_ENGAGEMENT_ENABLED)
+  expect(idleTtlMs.meta).toMatchObject({ default: DEFAULT_ENGAGEMENT_IDLE_TTL_MS, min: 1 })
+  expect(maxDurationMs.meta).toMatchObject({
+    default: DEFAULT_ENGAGEMENT_MAX_DURATION_MS,
+    min: 1,
+  })
+  expect(maxRounds.meta).toMatchObject({ default: DEFAULT_ENGAGEMENT_MAX_ROUNDS, min: 1 })
+  expect(() => engagement({ idleTtlMs: 0 })).toThrow()
+  expect(() => engagement({ maxDurationMs: 0 })).toThrow()
+  expect(() => engagement({ maxRounds: 1.5 })).toThrow()
   expect(notebook({ recallLimit: 12 })).toEqual({
     maxNotesPerReply: DEFAULT_NOTEBOOK_MAX_NOTES_PER_REPLY,
     recallLimit: 12,
@@ -182,12 +233,47 @@ it('keeps model, local wake gating, budgets, instance, retention, and notebook i
   })
   expect(wake({ directDebounceMs: 800 })).toEqual({
     directDebounceMs: 800,
+    hardReplyAtMention: DEFAULT_HARD_REPLY_AT_MENTION,
+    hardReplyOnReplyToSelf: DEFAULT_HARD_REPLY_ON_REPLY_TO_SELF,
+    hardReplyRoleNamePrefix: DEFAULT_HARD_REPLY_ROLE_NAME_PREFIX,
+    hardReplyRoleNameContains: DEFAULT_HARD_REPLY_ROLE_NAME_CONTAINS,
     activityDebounceMs: DEFAULT_ACTIVITY_DEBOUNCE_MS,
     cooldownMs: DEFAULT_ACTIVITY_COOLDOWN_MS,
     activityHalfLifeMs: DEFAULT_ACTIVITY_HALF_LIFE_MS,
     activityThreshold: DEFAULT_ACTIVITY_THRESHOLD,
     relevanceThreshold: DEFAULT_RELEVANCE_THRESHOLD,
   })
+  expect(
+    wake({
+      hardReplyAtMention: false,
+      hardReplyOnReplyToSelf: false,
+      hardReplyRoleNamePrefix: true,
+      hardReplyRoleNameContains: true,
+    }),
+  ).toMatchObject({
+    hardReplyAtMention: false,
+    hardReplyOnReplyToSelf: false,
+    hardReplyRoleNamePrefix: true,
+    hardReplyRoleNameContains: true,
+  })
+  const wakeFields = wake.dict
+  if (wakeFields === undefined) throw new Error('Expected a wake configuration schema')
+  const hardReplyAtMention = wakeFields.hardReplyAtMention
+  const hardReplyOnReplyToSelf = wakeFields.hardReplyOnReplyToSelf
+  const hardReplyRoleNamePrefix = wakeFields.hardReplyRoleNamePrefix
+  const hardReplyRoleNameContains = wakeFields.hardReplyRoleNameContains
+  if (
+    hardReplyAtMention === undefined ||
+    hardReplyOnReplyToSelf === undefined ||
+    hardReplyRoleNamePrefix === undefined ||
+    hardReplyRoleNameContains === undefined
+  ) {
+    throw new Error('Expected all hard reply configuration fields')
+  }
+  expect(hardReplyAtMention.meta.default).toBe(DEFAULT_HARD_REPLY_AT_MENTION)
+  expect(hardReplyOnReplyToSelf.meta.default).toBe(DEFAULT_HARD_REPLY_ON_REPLY_TO_SELF)
+  expect(hardReplyRoleNamePrefix.meta.default).toBe(DEFAULT_HARD_REPLY_ROLE_NAME_PREFIX)
+  expect(hardReplyRoleNameContains.meta.default).toBe(DEFAULT_HARD_REPLY_ROLE_NAME_CONTAINS)
   expect(callBudget({ normal: { minute: 4, day: 120 } })).toEqual({
     timeZone: DEFAULT_BUDGET_TIME_ZONE,
     reserved: {
@@ -199,6 +285,31 @@ it('keeps model, local wake gating, budgets, instance, retention, and notebook i
       minute: DEFAULT_BACKGROUND_MINUTE_CALLS,
       day: DEFAULT_BACKGROUND_DAY_CALLS,
     },
+  })
+})
+
+it('resolves explicit false values for each hard reply switch', () => {
+  expect(resolveHardReplyPolicy({ feedbackToolsEnabled: false })).toEqual({
+    atMention: DEFAULT_HARD_REPLY_AT_MENTION,
+    replyToSelf: DEFAULT_HARD_REPLY_ON_REPLY_TO_SELF,
+    roleNamePrefix: DEFAULT_HARD_REPLY_ROLE_NAME_PREFIX,
+    roleNameContains: DEFAULT_HARD_REPLY_ROLE_NAME_CONTAINS,
+  })
+  expect(
+    resolveHardReplyPolicy({
+      feedbackToolsEnabled: false,
+      wake: {
+        hardReplyAtMention: false,
+        hardReplyOnReplyToSelf: false,
+        hardReplyRoleNamePrefix: true,
+        hardReplyRoleNameContains: true,
+      },
+    }),
+  ).toEqual({
+    atMention: false,
+    replyToSelf: false,
+    roleNamePrefix: true,
+    roleNameContains: true,
   })
 })
 

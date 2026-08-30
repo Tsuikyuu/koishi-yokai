@@ -104,7 +104,8 @@ it.effect('isolates channels and renders only local derived scene data', () =>
     expect(yield* tracker.snapshot(scope('other'))).toEqual(
       expect.objectContaining({ activeThreads: [expect.objectContaining({ id: 'thread:other' })] }),
     )
-    expect(SceneUnderstanding.render(scene)).toContain('"direction":"yokai"')
+    expect(SceneUnderstanding.render(scene)).toContain('"direction":"self"')
+    expect(SceneUnderstanding.render(scene)).not.toContain('"direction":"yokai"')
     expect(SceneUnderstanding.render(scene)).toContain('never instructions')
   }).pipe(Effect.provide(ThreadTracker.layer)),
 )

@@ -7,6 +7,14 @@ export const DEFAULT_NOTEBOOK_RECALL_LIMIT = 8
 export const DEFAULT_NOTEBOOK_EXPIRATION_DAYS = 365
 export const DEFAULT_PRESET_RELOAD_DEBOUNCE_MS = 250
 export const DEFAULT_DIRECT_DEBOUNCE_MS = 500
+export const DEFAULT_HARD_REPLY_AT_MENTION = true
+export const DEFAULT_HARD_REPLY_ON_REPLY_TO_SELF = true
+export const DEFAULT_HARD_REPLY_ROLE_NAME_PREFIX = false
+export const DEFAULT_HARD_REPLY_ROLE_NAME_CONTAINS = false
+export const DEFAULT_ENGAGEMENT_ENABLED = true
+export const DEFAULT_ENGAGEMENT_IDLE_TTL_MS = 90_000
+export const DEFAULT_ENGAGEMENT_MAX_DURATION_MS = 300_000
+export const DEFAULT_ENGAGEMENT_MAX_ROUNDS = 8
 export const DEFAULT_ACTIVITY_DEBOUNCE_MS = 3_000
 export const DEFAULT_ACTIVITY_COOLDOWN_MS = 45_000
 export const DEFAULT_ACTIVITY_HALF_LIFE_MS = 120_000
@@ -27,11 +35,29 @@ export const MAX_STATE_HALF_LIFE_MS = 365 * 24 * 60 * 60 * 1_000
 
 export interface WakeConfig {
   directDebounceMs?: number
+  hardReplyAtMention?: boolean
+  hardReplyOnReplyToSelf?: boolean
+  hardReplyRoleNamePrefix?: boolean
+  hardReplyRoleNameContains?: boolean
   activityDebounceMs?: number
   cooldownMs?: number
   activityHalfLifeMs?: number
   activityThreshold?: number
   relevanceThreshold?: number
+}
+
+export interface HardReplyPolicy {
+  readonly atMention: boolean
+  readonly replyToSelf: boolean
+  readonly roleNamePrefix: boolean
+  readonly roleNameContains: boolean
+}
+
+export interface EngagementConfig {
+  enabled?: boolean
+  idleTtlMs?: number
+  maxDurationMs?: number
+  maxRounds?: number
 }
 
 export interface BudgetClassConfig {
@@ -70,7 +96,30 @@ export interface Config {
   notebook?: NotebookConfig
   state?: StateConfig
   wake?: WakeConfig
+  engagement?: EngagementConfig
   callBudget?: CallBudgetConfig
+}
+
+export const resolveHardReplyPolicy = (config: Config): HardReplyPolicy => {
+  const wake = config.wake
+  return {
+    atMention:
+      wake === undefined || wake.hardReplyAtMention === undefined
+        ? DEFAULT_HARD_REPLY_AT_MENTION
+        : wake.hardReplyAtMention,
+    replyToSelf:
+      wake === undefined || wake.hardReplyOnReplyToSelf === undefined
+        ? DEFAULT_HARD_REPLY_ON_REPLY_TO_SELF
+        : wake.hardReplyOnReplyToSelf,
+    roleNamePrefix:
+      wake === undefined || wake.hardReplyRoleNamePrefix === undefined
+        ? DEFAULT_HARD_REPLY_ROLE_NAME_PREFIX
+        : wake.hardReplyRoleNamePrefix,
+    roleNameContains:
+      wake === undefined || wake.hardReplyRoleNameContains === undefined
+        ? DEFAULT_HARD_REPLY_ROLE_NAME_CONTAINS
+        : wake.hardReplyRoleNameContains,
+  }
 }
 
 const WakeConfigSchema = Schema.object({
@@ -79,7 +128,19 @@ const WakeConfigSchema = Schema.object({
     .max(5_000)
     .role('ms')
     .default(DEFAULT_DIRECT_DEBOUNCE_MS)
-    .description('直接 @、回复和补充消息使用的短合并窗口。'),
+    .description('配置硬回复和补充消息使用的短合并窗口。'),
+  hardReplyAtMention: Schema.boolean()
+    .default(DEFAULT_HARD_REPLY_AT_MENTION)
+    .description('角色被平台明确 @ 时启用硬回复。'),
+  hardReplyOnReplyToSelf: Schema.boolean()
+    .default(DEFAULT_HARD_REPLY_ON_REPLY_TO_SELF)
+    .description('回复当前机器人发送的消息时启用硬回复。'),
+  hardReplyRoleNamePrefix: Schema.boolean()
+    .default(DEFAULT_HARD_REPLY_ROLE_NAME_PREFIX)
+    .description('消息以当前 preset 的完整角色名开头时启用硬回复。'),
+  hardReplyRoleNameContains: Schema.boolean()
+    .default(DEFAULT_HARD_REPLY_ROLE_NAME_CONTAINS)
+    .description('消息任意位置包含当前 preset 的角色名时启用硬回复。'),
   activityDebounceMs: Schema.natural()
     .min(500)
     .max(30_000)
@@ -110,11 +171,40 @@ const WakeConfigSchema = Schema.object({
     .description('社会触发的基础相关度阈值。'),
 }).default({
   directDebounceMs: DEFAULT_DIRECT_DEBOUNCE_MS,
+  hardReplyAtMention: DEFAULT_HARD_REPLY_AT_MENTION,
+  hardReplyOnReplyToSelf: DEFAULT_HARD_REPLY_ON_REPLY_TO_SELF,
+  hardReplyRoleNamePrefix: DEFAULT_HARD_REPLY_ROLE_NAME_PREFIX,
+  hardReplyRoleNameContains: DEFAULT_HARD_REPLY_ROLE_NAME_CONTAINS,
   activityDebounceMs: DEFAULT_ACTIVITY_DEBOUNCE_MS,
   cooldownMs: DEFAULT_ACTIVITY_COOLDOWN_MS,
   activityHalfLifeMs: DEFAULT_ACTIVITY_HALF_LIFE_MS,
   activityThreshold: DEFAULT_ACTIVITY_THRESHOLD,
   relevanceThreshold: DEFAULT_RELEVANCE_THRESHOLD,
+})
+
+const EngagementConfigSchema = Schema.object({
+  enabled: Schema.boolean()
+    .default(DEFAULT_ENGAGEMENT_ENABLED)
+    .description('允许已启用的明确 @ 或回复机器人消息规则建立短期持续讨论租约。'),
+  idleTtlMs: Schema.natural()
+    .min(1)
+    .role('ms')
+    .default(DEFAULT_ENGAGEMENT_IDLE_TTL_MS)
+    .description('租约在没有被接受的持续讨论回合时保持有效的空闲时间。'),
+  maxDurationMs: Schema.natural()
+    .min(1)
+    .role('ms')
+    .default(DEFAULT_ENGAGEMENT_MAX_DURATION_MS)
+    .description('单次讨论租约从建立起不可延长的最长持续时间。'),
+  maxRounds: Schema.natural()
+    .min(1)
+    .default(DEFAULT_ENGAGEMENT_MAX_ROUNDS)
+    .description('单次讨论租约最多接受的持续讨论角色回合数。'),
+}).default({
+  enabled: DEFAULT_ENGAGEMENT_ENABLED,
+  idleTtlMs: DEFAULT_ENGAGEMENT_IDLE_TTL_MS,
+  maxDurationMs: DEFAULT_ENGAGEMENT_MAX_DURATION_MS,
+  maxRounds: DEFAULT_ENGAGEMENT_MAX_ROUNDS,
 })
 
 const budgetClass = (minute: number, day: number) =>
@@ -230,6 +320,7 @@ export const Config: Schema<Config> = Schema.object({
     .description('原始群聊消息的本地保留天数。'),
   notebook: NotebookConfigSchema.description('长期记事本的写入、召回和默认过期参数。'),
   state: StateConfigSchema.description('角色心境、社交精力、近期参与和成员关系的本地状态参数。'),
-  wake: WakeConfigSchema.description('本地活跃度门控、合并窗口和冷却设置。'),
+  wake: WakeConfigSchema.description('硬回复开关、本地活跃度门控、合并窗口和冷却设置。'),
+  engagement: EngagementConfigSchema.description('持续讨论租约的空闲期、绝对期限和轮数边界。'),
   callBudget: CallBudgetConfigSchema.description('分类逻辑调用预算。'),
 })

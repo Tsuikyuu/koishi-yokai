@@ -6,9 +6,9 @@ export const DEFAULT_HARD_TRIGGER_RELEVANCE = Score.make(10)
 
 export const Signals = Schema.Struct({
   ...MessageEligibility.fields,
-  explicitMention: Schema.Boolean,
-  replyToSelf: Schema.Boolean,
+  hardTrigger: Schema.Boolean,
   mentionDegree: Score,
+  replyToSelfEvidence: Score,
   nameOrAliasEvidence: Score,
   questionOrHelpEvidence: Score,
   unfinishedItemEvidence: Score,
@@ -52,12 +52,13 @@ export const calculate = (
 
   const positiveEvidence = Score.make(
     signals.mentionDegree +
+      signals.replyToSelfEvidence +
       signals.nameOrAliasEvidence +
       signals.questionOrHelpEvidence +
       signals.unfinishedItemEvidence +
       signals.threadOrInterestEvidence,
   )
-  const hardTrigger = signals.explicitMention || signals.replyToSelf
+  const hardTrigger = signals.hardTrigger
   const pressuredRelevance = Math.max(0, positiveEvidence - totalPressure)
 
   return Result.make({

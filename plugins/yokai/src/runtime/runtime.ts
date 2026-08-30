@@ -5,6 +5,7 @@ import {
   CapabilityRegistry,
   ChannelMessageBuffer,
   DirectResponseMechanism,
+  EngagementLease,
   HostConfiguration,
   HostSession,
   PresetRegistry,
@@ -27,6 +28,7 @@ export type Services =
   | CapabilityRegistry.Service
   | ChannelMessageBuffer.Service
   | DirectResponseMechanism.Service
+  | EngagementLease.Service
   | HostConfiguration.Service
   | MessageArchive.Service
   | MessageHistory.Service
