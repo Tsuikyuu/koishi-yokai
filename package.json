@@ -23,7 +23,9 @@
     "lint:fix": "eslint . --fix && prettier --write .",
     "pub": "yakumo publish",
     "test": "vitest run",
-    "typecheck": "yakumo run yokai-workspaces -- typecheck && yakumo run yokai-workspaces -- typecheck:test",
+    "typecheck": "yarn typecheck:source && yarn typecheck:test",
+    "typecheck:source": "yarn workspaces foreach -A --include '@yokai-internal/*' --include 'yokai-*' --include 'koishi-plugin-yokai*' run typecheck",
+    "typecheck:test": "yarn workspaces foreach -A --include '@yokai-internal/*' --include 'yokai-*' --include 'koishi-plugin-yokai*' run typecheck:test",
     "check": "yarn typecheck && yarn lint && yarn test && yarn build"
   },
   "devDependencies": {
