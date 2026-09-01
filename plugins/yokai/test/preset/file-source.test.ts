@@ -144,6 +144,12 @@ it.effect('retries a valid file when a referenced capability is installed later'
           Skill.make({
             id: SkillId.make('late.skill'),
             protocolVersion: CapabilityProtocolVersion.make({ major: 0, minor: 1 }),
+            description: 'A Skill installed after the preset file is first observed.',
+            prompt: 'Apply the late-installed Skill.',
+            selection: { _tag: 'Always' },
+            contextProviders: [],
+            actionTools: [],
+            feedbackTools: [],
           }),
         )
         yield* Effect.yieldNow

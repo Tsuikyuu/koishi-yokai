@@ -15,6 +15,10 @@ import {
   DEFAULT_BACKGROUND_MINUTE_CALLS,
   DEFAULT_BUDGET_TIME_ZONE,
   DEFAULT_DIRECT_DEBOUNCE_MS,
+  DEFAULT_VISIBLE_ACTION_TOOLS,
+  DEFAULT_VISIBLE_FEEDBACK_TOOLS,
+  DEFAULT_VISIBLE_MCP_SERVERS,
+  DEFAULT_VISIBLE_SKILLS,
   DEFAULT_HARD_REPLY_AT_MENTION,
   DEFAULT_HARD_REPLY_ON_REPLY_TO_SELF,
   DEFAULT_HARD_REPLY_ROLE_NAME_CONTAINS,
@@ -41,6 +45,7 @@ import {
   DEFAULT_STATE_MOOD_HALF_LIFE_MS,
   DEFAULT_STATE_PARTICIPATION_HALF_LIFE_MS,
   MAX_STATE_HALF_LIFE_MS,
+  MAX_CONFIGURED_CAPABILITIES_PER_DOMAIN,
   resolveHardReplyPolicy,
 } from '../src/config'
 import { schemaForCatalog } from '../src/model-catalog/schema-projection'
@@ -55,6 +60,12 @@ it('keeps model, wake gating, engagement, schedules, budgets, storage, and noteb
     instanceId: 'default',
     model: 'gemini/gemini-2.5-flash',
     feedbackToolsEnabled: true,
+    capabilities: {
+      skills: DEFAULT_VISIBLE_SKILLS,
+      actionTools: DEFAULT_VISIBLE_ACTION_TOOLS,
+      feedbackTools: DEFAULT_VISIBLE_FEEDBACK_TOOLS,
+      mcpServers: DEFAULT_VISIBLE_MCP_SERVERS,
+    },
     messageRetentionDays: 90,
     engagement: {
       enabled: DEFAULT_ENGAGEMENT_ENABLED,
@@ -109,6 +120,7 @@ it('keeps model, wake gating, engagement, schedules, budgets, storage, and noteb
   if (fields === undefined) throw new Error('Expected an object configuration schema')
   const model = fields.model
   const feedbackToolsEnabled = fields.feedbackToolsEnabled
+  const capabilities = fields.capabilities
   const instanceId = fields.instanceId
   const messageRetentionDays = fields.messageRetentionDays
   const engagement = fields.engagement
@@ -123,6 +135,7 @@ it('keeps model, wake gating, engagement, schedules, budgets, storage, and noteb
   if (
     model === undefined ||
     feedbackToolsEnabled === undefined ||
+    capabilities === undefined ||
     instanceId === undefined ||
     messageRetentionDays === undefined ||
     engagement === undefined ||
@@ -144,6 +157,39 @@ it('keeps model, wake gating, engagement, schedules, budgets, storage, and noteb
   expect(fields).not.toHaveProperty('primary')
   expect(fields).not.toHaveProperty('fallback')
   expect(feedbackToolsEnabled.meta.default).toBe(false)
+  expect(capabilities({ actionTools: ['reaction.add'], mcpServers: ['tools'] })).toEqual({
+    skills: DEFAULT_VISIBLE_SKILLS,
+    actionTools: ['reaction.add'],
+    feedbackTools: DEFAULT_VISIBLE_FEEDBACK_TOOLS,
+    mcpServers: ['tools'],
+  })
+  const capabilityFields = capabilities.dict
+  if (capabilityFields === undefined) {
+    throw new Error('Expected a capability visibility configuration schema')
+  }
+  const skillAllowlist = capabilityFields.skills
+  const actionToolAllowlist = capabilityFields.actionTools
+  const feedbackToolAllowlist = capabilityFields.feedbackTools
+  const mcpServerAllowlist = capabilityFields.mcpServers
+  if (
+    skillAllowlist === undefined ||
+    actionToolAllowlist === undefined ||
+    feedbackToolAllowlist === undefined ||
+    mcpServerAllowlist === undefined
+  ) {
+    throw new Error('Expected all capability visibility allowlists')
+  }
+  expect(() => capabilities({ skills: ['duplicate', 'duplicate'] })).toThrow()
+  expect(() => capabilities({ actionTools: ['contains/slash'] })).toThrow()
+  expect(() =>
+    capabilities({
+      feedbackTools: Array.from(
+        { length: MAX_CONFIGURED_CAPABILITIES_PER_DOMAIN + 1 },
+        (_, index) => `tool.${String(index)}`,
+      ),
+    }),
+  ).toThrow()
+  expect(() => capabilities({ mcpServers: ['valid.server', 'other_server-2'] })).not.toThrow()
   expect(instanceId.meta.default).toBe('default')
   expect(messageRetentionDays.meta.default).toBe(90)
   expect(messageRetentionDays.meta.min).toBe(1)

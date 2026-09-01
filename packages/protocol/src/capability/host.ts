@@ -4,6 +4,7 @@ import type {
   ContextProvider,
   FeedbackTool,
   McpServer,
+  McpServerSnapshot,
   PresetSource,
   ResponseMechanism,
   Skill,
@@ -21,6 +22,11 @@ export interface AdapterRegistration extends CapabilityRegistration {
   readonly publishModels: (snapshot: AdapterModelSnapshot) => Promise<boolean>
 }
 
+export interface McpServerRegistration extends CapabilityRegistration {
+  /** Returns false when this registration or snapshot revision is stale. */
+  readonly publishSnapshot: (snapshot: McpServerSnapshot) => Promise<boolean>
+}
+
 export interface PresetRegistration extends CapabilityRegistration {
   /** Returns false when the content hash is unchanged or this registration is stale. */
   readonly publish: (candidate: PresetCandidate) => Promise<boolean>
@@ -33,7 +39,7 @@ export interface YokaiCapabilityHost {
   readonly registerActionTool: (capability: ActionTool) => Promise<CapabilityRegistration>
   readonly registerFeedbackTool: (capability: FeedbackTool) => Promise<CapabilityRegistration>
   readonly registerSkill: (capability: Skill) => Promise<CapabilityRegistration>
-  readonly registerMcpServer: (capability: McpServer) => Promise<CapabilityRegistration>
+  readonly registerMcpServer: (capability: McpServer) => Promise<McpServerRegistration>
   readonly registerPresetSource: (capability: PresetSource) => Promise<PresetRegistration>
   readonly registerResponseMechanism: (
     capability: ResponseMechanism,

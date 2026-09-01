@@ -27,6 +27,7 @@ import { vi } from 'vitest'
 vi.mock('koishi', () => import('@koishijs/core'))
 
 import { apply, type Config } from '../../src/index'
+import { DEFAULT_VISIBLE_ACTION_TOOLS } from '../../src/config'
 import type { YokaiMemoryRow } from '../../src/notebook/model'
 
 const ADAPTER_ID = AdapterId.make('notebook-integration')
@@ -38,6 +39,9 @@ const BASE_TIMESTAMP = 1_777_000_000_000
 const CONFIG: Config = {
   model: MODEL_REFERENCE,
   feedbackToolsEnabled: false,
+  capabilities: {
+    actionTools: [...DEFAULT_VISIBLE_ACTION_TOOLS, 'test.silent-after'],
+  },
   notebook: { maxNotesPerReply: 4, recallLimit: 8 },
   wake: {
     directDebounceMs: 100,

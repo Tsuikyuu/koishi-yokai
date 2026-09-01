@@ -100,6 +100,26 @@ quote 只作用于所在消息段。根级只允许 message 和 actions；Action
 首次生成前可加入有界历史 ContextProvider；显式启用且 adapter 支持时，允许一批
 `history.search` FeedbackTool 调用和唯一一次最终生成。该路径不会自动切换模型。
 
+## 能力可见性
+
+`capabilities.skills`、`capabilities.actionTools`、`capabilities.feedbackTools` 和
+`capabilities.mcpServers` 是实例级硬允许列表，每类最多 64 个唯一 ID。第三方能力默认不可见；
+默认 ActionTool 仅包含 `notebook.write` 与三个 `schedule.*` 写动作，默认 FeedbackTool 仅包含
+`history.search` 和 `schedule.query`，Skill 与 MCP Server 默认列表为空。`feedbackToolsEnabled`
+仍是 FeedbackTool 的总开关。配置了人格预设时，回合候选是允许列表与预设直接引用、所选 Skill
+引用的交集；未配置预设时，允许列表本身就是候选集。
+
+Skill 使用关键词、事件类型或响应机制等纯本地数据规则选择，不调用远程模型；每回合最多注入 4 个 Skill，
+其可信提示总计不超过 16 KiB。ContextProvider 也在首次生成前按关键词、响应机制或所选 Skill
+本地选择，并继续受 8 个 Provider、共享 400 ms 截止时间和上下文预算限制。可用性检查后，每回合
+最多向模型暴露 16 个 ActionTool XML 模板和 16 个 FeedbackTool declaration。
+
+MCP 扩展通过 `ctx.yokai.registerMcpServer()` 注册服务，再由返回句柄的 `publishSnapshot()` 发布
+严格递增 revision 的完整 `Connected` 或 `Disconnected` 快照。每个工具必须显式投影为 ActionTool
+或 FeedbackTool，ID 必须是 `<serverId>.<toolName>`；未分类工具不会进入能力快照。新快照以整份原子
+替换，断线只清除该服务的投影，旧 revision 与已注销句柄返回 `false`。MCP 投影还必须同时通过
+对应 Tool ID 和 Server ID 两层允许列表。
+
 ## 人格预设
 
 配置 `presetId` 后，每个角色回合开始时会冻结该 ID 的最新有效人格快照。可同时配置

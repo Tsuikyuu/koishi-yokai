@@ -10,6 +10,8 @@ export type {
   AdapterRegistration,
   CapabilityRegistration,
   Interface as CapabilityRegistryInterface,
+  McpProjectionSource,
+  McpServerRegistration,
   ResolvedModel,
   TurnCapabilitySnapshot,
 } from './registry'

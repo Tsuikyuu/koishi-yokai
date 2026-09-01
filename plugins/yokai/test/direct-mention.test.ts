@@ -8,20 +8,31 @@ import {
 } from 'yokai-adapter-conformance'
 import { makeFakeAdapter, type FakeAdapterSubject } from 'yokai-adapter-conformance/fake'
 import {
+  ActionTool,
+  ActionToolDurationMilliseconds,
+  ActionToolId,
+  ActionToolXmlTemplate,
   AdapterId,
   AdapterModelId,
   CapabilityDurationMilliseconds,
   CapabilityProtocolVersion,
+  ContextFragment,
+  ContextProvider,
+  ContextProviderId,
   FeedbackTool,
   FeedbackToolId,
   type GenerateRequest,
   GenerationUsage,
   PresetSource,
   PresetSourceId,
+  ResponseMechanismId,
+  Skill,
+  SkillId,
+  TokenCount,
   TokenLimit,
   type YokaiAdapter,
 } from 'yokai-protocol'
-import { Deferred, Effect, Fiber, Queue } from 'effect'
+import { Deferred, Effect, Fiber, Option, Queue } from 'effect'
 import { Bot, Context, h, type Fragment, type Schema as KoishiSchema, Universal } from 'koishi'
 import { vi } from 'vitest'
 
@@ -310,6 +321,219 @@ it.effect('turns one direct mention into one generic generation and one group me
   ),
 )
 
+it.effect('applies locally selected Skill capabilities before the first generation', () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const skillId = SkillId.make('calendar.skill')
+      const contextProviderId = ContextProviderId.make('calendar.context')
+      const actionToolId = ActionToolId.make('calendar.action')
+      const feedbackToolId = FeedbackToolId.make('calendar.feedback')
+      const hiddenActionToolId = ActionToolId.make('hidden.action')
+      const hiddenFeedbackToolId = FeedbackToolId.make('hidden.feedback')
+      const hiddenProviderCalled = vi.fn()
+      const harness = yield* makeHarness(
+        [textGeneration('<output><message>calendar ready</message></output>')],
+        {
+          ...CONFIG,
+          presetId: 'koharu',
+          feedbackToolsEnabled: true,
+          capabilities: {
+            skills: [skillId],
+            actionTools: [actionToolId],
+            feedbackTools: [feedbackToolId],
+          },
+        },
+        true,
+      )
+      yield* Effect.promise(() =>
+        harness.ctx.yokai.registerContextProvider(
+          ContextProvider.make({
+            id: contextProviderId,
+            protocolVersion: CAPABILITY_VERSION,
+            description: 'Provide locally cached calendar context.',
+            maxTokens: TokenLimit.make(64),
+            maxDurationMs: CapabilityDurationMilliseconds.make(100),
+            selection: {
+              _tag: 'MatchAny',
+              keywords: [],
+              responseMechanisms: [],
+              skills: [skillId],
+            },
+            isAvailable: () => true,
+            provide: () =>
+              Effect.succeed(
+                Option.some(
+                  ContextFragment.make({
+                    providerId: contextProviderId,
+                    label: 'Calendar context',
+                    content: 'Local calendar has one event at 15:00.',
+                    sourceRefs: [],
+                    untrusted: true,
+                    estimatedTokens: TokenCount.make(12),
+                  }),
+                ),
+              ),
+          }),
+        ),
+      )
+      yield* Effect.promise(() =>
+        harness.ctx.yokai.registerContextProvider(
+          ContextProvider.make({
+            id: ContextProviderId.make('hidden.context'),
+            protocolVersion: CAPABILITY_VERSION,
+            description: 'A provider whose local criteria do not match.',
+            maxTokens: TokenLimit.make(64),
+            maxDurationMs: CapabilityDurationMilliseconds.make(100),
+            selection: {
+              _tag: 'MatchAny',
+              keywords: [],
+              responseMechanisms: [ResponseMechanismId.make('schedule')],
+              skills: [],
+            },
+            isAvailable: () => true,
+            provide: () => {
+              hiddenProviderCalled()
+              return Effect.succeed(Option.none())
+            },
+          }),
+        ),
+      )
+      yield* Effect.promise(() =>
+        harness.ctx.yokai.registerActionTool(
+          ActionTool.make({
+            id: actionToolId,
+            protocolVersion: CAPABILITY_VERSION,
+            description: 'Create one calendar entry.',
+            xmlTemplate: ActionToolXmlTemplate.make(
+              '<action tool="calendar.action"><title>XML_ESCAPED_TITLE</title></action>',
+            ),
+            inputSchema: {
+              _tag: 'Object',
+              properties: [{ name: 'title', required: true, schema: { _tag: 'String' } }],
+            },
+            executionStage: 'after-send',
+            completionPolicy: 'none',
+            failurePolicy: 'continue',
+            maxDurationMs: ActionToolDurationMilliseconds.make(100),
+            isAvailable: () => true,
+            isInputAllowed: () => true,
+            execute: () => Effect.void,
+          }),
+        ),
+      )
+      yield* Effect.promise(() =>
+        harness.ctx.yokai.registerActionTool(
+          ActionTool.make({
+            id: hiddenActionToolId,
+            protocolVersion: CAPABILITY_VERSION,
+            description: 'A registered ActionTool outside the configured allowlist.',
+            xmlTemplate: ActionToolXmlTemplate.make(
+              '<action tool="hidden.action"><value>XML_ESCAPED_VALUE</value></action>',
+            ),
+            inputSchema: {
+              _tag: 'Object',
+              properties: [{ name: 'value', required: true, schema: { _tag: 'String' } }],
+            },
+            executionStage: 'after-send',
+            completionPolicy: 'none',
+            failurePolicy: 'continue',
+            maxDurationMs: ActionToolDurationMilliseconds.make(100),
+            isAvailable: () => true,
+            isInputAllowed: () => true,
+            execute: () => Effect.void,
+          }),
+        ),
+      )
+      yield* Effect.promise(() =>
+        harness.ctx.yokai.registerFeedbackTool(
+          FeedbackTool.make({
+            id: feedbackToolId,
+            protocolVersion: CAPABILITY_VERSION,
+            description: 'Read one calendar entry.',
+            inputSchema: { _tag: 'Object', properties: [] },
+            outputSchema: { _tag: 'String' },
+            maxResultTokens: TokenLimit.make(64),
+            maxDurationMs: CapabilityDurationMilliseconds.make(100),
+            isAvailable: () => true,
+            prepare: () => Effect.succeed({ execute: () => Effect.succeed('entry') }),
+          }),
+        ),
+      )
+      yield* Effect.promise(() =>
+        harness.ctx.yokai.registerFeedbackTool(
+          FeedbackTool.make({
+            id: hiddenFeedbackToolId,
+            protocolVersion: CAPABILITY_VERSION,
+            description: 'A registered FeedbackTool outside the configured allowlist.',
+            inputSchema: { _tag: 'Object', properties: [] },
+            outputSchema: { _tag: 'String' },
+            maxResultTokens: TokenLimit.make(64),
+            maxDurationMs: CapabilityDurationMilliseconds.make(100),
+            isAvailable: () => true,
+            prepare: () => Effect.succeed({ execute: () => Effect.succeed('hidden') }),
+          }),
+        ),
+      )
+      yield* Effect.promise(() =>
+        harness.ctx.yokai.registerSkill(
+          Skill.make({
+            id: skillId,
+            protocolVersion: CAPABILITY_VERSION,
+            description: 'Use local calendar capabilities for direct requests.',
+            prompt: 'Use the trusted local calendar rules.',
+            selection: {
+              _tag: 'MatchAny',
+              keywords: [],
+              responseMechanisms: [ResponseMechanismId.make('direct')],
+              eventKinds: [],
+            },
+            contextProviders: [contextProviderId],
+            actionTools: [actionToolId],
+            feedbackTools: [feedbackToolId],
+          }),
+        ),
+      )
+      const preset = yield* Effect.promise(() =>
+        harness.ctx.yokai.registerPresetSource(
+          PresetSource.make({
+            id: PresetSourceId.make('local-selection.preset'),
+            protocolVersion: CAPABILITY_VERSION,
+          }),
+        ),
+      )
+      expect(
+        yield* Effect.promise(() =>
+          preset.publish({
+            ...presetCandidate('Koharu'),
+            skills: [skillId],
+            actionTools: [hiddenActionToolId],
+            feedbackTools: [hiddenFeedbackToolId],
+          }),
+        ),
+      ).toBe(true)
+
+      yield* dispatchMessage(
+        harness,
+        'message-local-selection',
+        h.at('bot').toString() + ' check the calendar',
+      )
+      const request = yield* Queue.take(harness.requests)
+
+      expect(request.systemInstruction).toContain('Use the trusted local calendar rules.')
+      expect(request.systemInstruction).toContain('calendar.action')
+      expect(request.systemInstruction).not.toContain(hiddenActionToolId)
+      expect(request.feedbackTools.map((tool) => tool.id)).toEqual([feedbackToolId])
+      expect(request.feedbackTools.map((tool) => tool.id)).not.toContain(hiddenFeedbackToolId)
+      expect(request.messages.some((message) => message.content.includes('event at 15:00'))).toBe(
+        true,
+      )
+      expect(hiddenProviderCalled).not.toHaveBeenCalled()
+      expect(yield* Queue.take(harness.sentMessages)).toBe('calendar ready')
+      expect(yield* generationStarts(harness.subject)).toHaveLength(1)
+    }),
+  ),
+)
+
 it.effect('recognizes an explicit self mention outside the start of a message', () =>
   Effect.scoped(
     Effect.gen(function* () {
@@ -463,9 +687,23 @@ it.effect('keeps FeedbackTools hidden when the host switch is disabled', () =>
 it.effect('selects visible FeedbackTools before applying the per-turn cap', () =>
   Effect.scoped(
     Effect.gen(function* () {
+      const unavailableIds = Array.from(
+        { length: 16 },
+        (_, index) => `test.hidden-${index.toString().padStart(2, '0')}`,
+      )
+      const visibleIds = Array.from(
+        { length: 17 },
+        (_, index) => `test.visible-${index.toString().padStart(2, '0')}`,
+      )
       const harness = yield* makeHarness(
         [textGeneration('<output><message>bounded feedback tools</message></output>')],
-        { ...CONFIG, feedbackToolsEnabled: true },
+        {
+          ...CONFIG,
+          feedbackToolsEnabled: true,
+          capabilities: {
+            feedbackTools: [...unavailableIds, ...visibleIds],
+          },
+        },
         true,
       )
       const makeFeedbackTool = (id: string, available: boolean): FeedbackTool =>
@@ -480,11 +718,9 @@ it.effect('selects visible FeedbackTools before applying the per-turn cap', () =
           isAvailable: () => available,
           prepare: () => Effect.succeed({ execute: () => Effect.succeed({}) }),
         })
-      const unavailable = Array.from({ length: 16 }, (_, index) =>
-        makeFeedbackTool(`test.hidden-${index.toString().padStart(2, '0')}`, false),
-      )
-      const lateVisible = makeFeedbackTool('test.late-visible', true)
-      yield* Effect.forEach([...unavailable, lateVisible], (tool) =>
+      const unavailable = unavailableIds.map((id) => makeFeedbackTool(id, false))
+      const visible = visibleIds.map((id) => makeFeedbackTool(id, true))
+      yield* Effect.forEach([...unavailable, ...visible], (tool) =>
         Effect.promise(() => harness.ctx.yokai.registerFeedbackTool(tool)),
       )
 
@@ -495,7 +731,7 @@ it.effect('selects visible FeedbackTools before applying the per-turn cap', () =
       )
       const request = yield* Queue.take(harness.requests)
 
-      expect(request.feedbackTools.map((tool) => tool.id)).toContain('test.late-visible')
+      expect(request.feedbackTools.map((tool) => tool.id)).toEqual(visibleIds.slice(0, 16))
       expect(yield* Queue.take(harness.sentMessages)).toBe('bounded feedback tools')
       expect(yield* generationStarts(harness.subject)).toHaveLength(1)
     }),

@@ -32,6 +32,7 @@ import { vi } from 'vitest'
 vi.mock('koishi', () => import('@koishijs/core'))
 
 import { apply, type Config } from '../src/index'
+import { DEFAULT_VISIBLE_ACTION_TOOLS } from '../src/config'
 
 const ADAPTER_ID = AdapterId.make('action-test')
 const MODEL_ID = AdapterModelId.make('model-a')
@@ -41,6 +42,22 @@ const CAPABILITY_VERSION = CapabilityProtocolVersion.make({ major: 0, minor: 1 }
 const CONFIG: Config = {
   model: MODEL_REFERENCE,
   feedbackToolsEnabled: false,
+  capabilities: {
+    actionTools: [
+      ...DEFAULT_VISIBLE_ACTION_TOOLS,
+      'test.before',
+      'test.after',
+      'test.deferred',
+      'test.block',
+      'test.deferred-first',
+      'test.deferred-second',
+      ...Array.from(
+        { length: 17 },
+        (_, index) => `test.limit-${index.toString().padStart(2, '0')}`,
+      ),
+      'test.silent-after',
+    ],
+  },
   wake: { directDebounceMs: 100, cooldownMs: 0 },
 }
 

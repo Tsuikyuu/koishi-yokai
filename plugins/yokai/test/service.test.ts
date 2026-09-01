@@ -13,6 +13,10 @@ import {
 } from '@yokai-internal/core'
 import { MessageArchiveEvent } from '@yokai-internal/memory'
 import {
+  ActionTool,
+  ActionToolDurationMilliseconds,
+  ActionToolId,
+  ActionToolXmlTemplate,
   AdapterDescriptor,
   AdapterId,
   AdapterModelId,
@@ -23,6 +27,11 @@ import {
   ContextProvider,
   ContextProviderId,
   CURRENT_ADAPTER_PROTOCOL_VERSION,
+  FeedbackTool,
+  FeedbackToolId,
+  McpServer,
+  McpServerId,
+  McpServerSnapshot,
   PresetId,
   PresetSource,
   PresetSourceId,
@@ -37,6 +46,12 @@ import { vi } from 'vitest'
 vi.mock('koishi', () => import('@koishijs/core'))
 
 import { apply, type Config } from '../src/index'
+import {
+  DEFAULT_VISIBLE_ACTION_TOOLS,
+  DEFAULT_VISIBLE_FEEDBACK_TOOLS,
+  DEFAULT_VISIBLE_MCP_SERVERS,
+  DEFAULT_VISIBLE_SKILLS,
+} from '../src/config'
 import { Yokai } from '../src/service'
 
 const DEFAULT_CONFIG: Config = {
@@ -66,6 +81,40 @@ const makeAdapter = (id: string): YokaiAdapter => ({
   generate: () => Effect.die('not called'),
   continue: () => Effect.die('not called'),
 })
+
+const makeMcpActionTool = (id: string): ActionTool =>
+  ActionTool.make({
+    id: ActionToolId.make(id),
+    protocolVersion: VERSION,
+    description: 'Test MCP action tool',
+    xmlTemplate: ActionToolXmlTemplate.make(
+      `<action tool="${id}"><value>XML_ESCAPED_VALUE</value></action>`,
+    ),
+    inputSchema: {
+      _tag: 'Object',
+      properties: [{ name: 'value', required: true, schema: { _tag: 'String' } }],
+    },
+    executionStage: 'after-send',
+    completionPolicy: 'none',
+    failurePolicy: 'continue',
+    maxDurationMs: ActionToolDurationMilliseconds.make(250),
+    isAvailable: () => true,
+    isInputAllowed: () => true,
+    execute: () => Effect.void,
+  })
+
+const makeMcpFeedbackTool = (id: string): FeedbackTool =>
+  FeedbackTool.make({
+    id: FeedbackToolId.make(id),
+    protocolVersion: VERSION,
+    description: 'Test MCP feedback tool',
+    inputSchema: { _tag: 'Object', properties: [] },
+    outputSchema: { _tag: 'String' },
+    maxResultTokens: TokenLimit.make(64),
+    maxDurationMs: CapabilityDurationMilliseconds.make(250),
+    isAvailable: () => true,
+    prepare: () => Effect.succeed({ execute: () => Effect.succeed('result') }),
+  })
 
 class TestYokai extends Yokai {
   readConfiguration() {
@@ -97,6 +146,7 @@ class TestYokai extends Yokai {
           contextProviders: snapshot.contextProviders.map((provider) => provider.id),
           actionTools: snapshot.actionTools.map((tool) => tool.id),
           feedbackTools: snapshot.feedbackTools.map((tool) => tool.id),
+          mcpProjectionSources: snapshot.mcpProjectionSources,
           responseMechanisms: snapshot.responseMechanisms.map((mechanism) => mechanism.id),
         })),
       ),
@@ -200,6 +250,43 @@ it.effect('starts without a selected model', () => {
 
     expect(Option.isNone(configuration.model)).toBe(true)
     expect(configuration.feedbackToolsEnabled).toBe(true)
+    expect(configuration.capabilityVisibility).toEqual({
+      skills: DEFAULT_VISIBLE_SKILLS,
+      actionTools: DEFAULT_VISIBLE_ACTION_TOOLS,
+      feedbackTools: DEFAULT_VISIBLE_FEEDBACK_TOOLS,
+      mcpServers: DEFAULT_VISIBLE_MCP_SERVERS,
+    })
+    expect(Object.isFrozen(configuration.capabilityVisibility)).toBe(true)
+    expect(Object.isFrozen(configuration.capabilityVisibility.actionTools)).toBe(true)
+  }).pipe(Effect.ensuring(stop(ctx)))
+})
+
+it.effect('decodes and freezes custom capability visibility', () => {
+  const ctx = new Context()
+  const service = new TestYokai(ctx, {
+    feedbackToolsEnabled: false,
+    capabilities: {
+      skills: ['custom.skill'],
+      actionTools: ['custom.action'],
+      feedbackTools: ['custom.feedback'],
+      mcpServers: ['custom.server'],
+    },
+  })
+
+  return Effect.gen(function* () {
+    const configuration = yield* Effect.promise(() => service.readConfiguration())
+
+    expect(configuration.capabilityVisibility).toEqual({
+      skills: ['custom.skill'],
+      actionTools: ['custom.action'],
+      feedbackTools: ['custom.feedback'],
+      mcpServers: ['custom.server'],
+    })
+    expect(Object.isFrozen(configuration.capabilityVisibility)).toBe(true)
+    expect(Object.isFrozen(configuration.capabilityVisibility.skills)).toBe(true)
+    expect(Object.isFrozen(configuration.capabilityVisibility.actionTools)).toBe(true)
+    expect(Object.isFrozen(configuration.capabilityVisibility.feedbackTools)).toBe(true)
+    expect(Object.isFrozen(configuration.capabilityVisibility.mcpServers)).toBe(true)
   }).pipe(Effect.ensuring(stop(ctx)))
 })
 
@@ -358,6 +445,64 @@ it.effect('publishes through an adapter handle until that handle is unregistered
     expect(yield* Effect.promise(() => registration.publishModels(snapshot))).toBe(true)
     expect(yield* Effect.promise(() => registration.unregister())).toBe(true)
     expect(yield* Effect.promise(() => registration.publishModels(snapshot))).toBe(false)
+  }).pipe(Effect.ensuring(stop(ctx)))
+})
+
+it.effect('publishes MCP projections and disconnects through the public server handle', () => {
+  const ctx = new Context()
+  const service = new TestYokai(ctx, DEFAULT_CONFIG)
+
+  return Effect.gen(function* () {
+    const registration = yield* Effect.promise(() =>
+      service.registerMcpServer(
+        McpServer.make({ id: McpServerId.make('calendar'), protocolVersion: VERSION }),
+      ),
+    )
+    const connected = yield* Schema.decodeUnknownEffect(McpServerSnapshot)({
+      _tag: 'Connected',
+      serverId: 'calendar',
+      revision: 1,
+      projections: [
+        {
+          _tag: 'Action',
+          name: 'create',
+          tool: makeMcpActionTool('calendar.create'),
+        },
+        {
+          _tag: 'Feedback',
+          name: 'lookup',
+          tool: makeMcpFeedbackTool('calendar.lookup'),
+        },
+      ],
+    })
+    const disconnected = yield* Schema.decodeUnknownEffect(McpServerSnapshot)({
+      _tag: 'Disconnected',
+      serverId: 'calendar',
+      revision: 2,
+    })
+
+    expect(yield* Effect.promise(() => registration.publishSnapshot(connected))).toBe(true)
+    const projected = yield* Effect.promise(() => service.capabilityIds())
+    expect(projected.actionTools).toContain('calendar.create')
+    expect(projected.feedbackTools).toContain('calendar.lookup')
+    expect(projected.mcpProjectionSources).toEqual([
+      {
+        serverId: 'calendar',
+        actionToolIds: ['calendar.create'],
+        feedbackToolIds: ['calendar.lookup'],
+      },
+    ])
+    expect(yield* Effect.promise(() => registration.publishSnapshot(connected))).toBe(false)
+
+    expect(yield* Effect.promise(() => registration.publishSnapshot(disconnected))).toBe(true)
+    const offline = yield* Effect.promise(() => service.capabilityIds())
+    expect(offline.actionTools).not.toContain('calendar.create')
+    expect(offline.feedbackTools).not.toContain('calendar.lookup')
+    expect(offline.mcpProjectionSources).toEqual([])
+    expect(yield* Effect.promise(() => registration.publishSnapshot(connected))).toBe(false)
+
+    expect(yield* Effect.promise(() => registration.unregister())).toBe(true)
+    expect(yield* Effect.promise(() => registration.publishSnapshot(disconnected))).toBe(false)
   }).pipe(Effect.ensuring(stop(ctx)))
 })
 

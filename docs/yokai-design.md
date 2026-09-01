@@ -87,7 +87,7 @@ Yokai 必须理解“谁在和谁说话”，而不是把最近若干消息直�
 
 每条消息都可以在本地存档和更新计数，但绝不能因此调用一次 LLM。主体插件使用不依赖远程模型的活跃度门控，把连续消息合并成少量有意义的角色回合。
 
-每个频道维护活跃度、参与相关度、待合并消息、近期参与者、最后消息与唤醒时间、调用预算和状态版本。
+每个频道维护活跃度、参与相关度、待合并消息、近期参与者、最后消息与唤醒时间、实例预算压力快照和状态版本。
 
 #### 3.2.1 活跃度累计
 
@@ -158,7 +158,8 @@ relevance =
 
 #### 3.2.4 动态阈值和预算
 
-每个频道和实例配置分钟、小时和每日调用预算。预算消耗越高，社会触发阈值越高；直接 @ 等硬触发优先保留额度。
+每个 Yokai 实例配置 reserved/normal/background 三类 minute/day 逻辑调用预算，频道只记录消费归因与当前实例预算
+压力，不另造可以互相借额的独立账本。预算消耗越高，社会触发阈值越高；直接 @ 等硬触发优先使用 reserved 额度。
 
 ```text
 effectiveThreshold =
@@ -362,8 +363,9 @@ ActionTool 向提示词提供一段精确 XML 模板，模型只能复制模板�
 模型输出只能包含一个无属性 `<output>` 根元素，不允许前后说明或 Markdown 代码围栏。
 `message` 和参数字段只允许 XML 转义后的纯文本，不允许嵌套标记、CDATA 或处理指令。
 
-宿主持有的协议标识为 `yokai.role-output/2`，不进入模型 XML。审计或回放记录同时保存 protocolId、
-ActionTool 注册快照、冻结 scope 和可见消息 ID 白名单。
+宿主持有的协议标识为 `yokai.role-output/2`，不进入模型 XML。运行时冻结 ActionTool 注册、scope 和可见消息 ID
+白名单用于校验；普通 turn/审计只保存 protocolId、content-free outcome 与计数，完整快照和白名单仅进入受限加密
+ReplayEnvelope。
 
 主体完整接收文本后才解析 XML，不边生成边执行或发送。解析器禁用 DTD、外部实体和网络访问，
 并限制总字节数、元素深度、文本长度和动作数量；未知元素、重复字段、未知 Tool、越权参数和
@@ -467,7 +469,8 @@ Yokai 内置工具不提供高危写操作。第三方工具的授权、副作�
 
 公开插件使用无 scope 的 `koishi-plugin-yokai*` 命名，并由维护者的个人 npm 账户发布。
 
-首个版本只有两个必需安装包。
+基础运行路径只有两个必需安装包：主体和至少一个 adapter。另独立发布一个完全可选的 Console 增强包；不安装它
+不会降低 Yokai 的存档、门控、生成、Tool、预算执行和安全默认能力。
 
 #### `koishi-plugin-yokai`
 
@@ -481,11 +484,25 @@ Yokai 内置工具不提供高危写操作。第三方工具的授权、副作�
 - 单次 XML 生成、动作执行、表达约束和低延迟发送；
 - adapter、tool、skill、MCP、预设源和响应机制注册表；
 - 集中合并所有响应机制提案的唤醒仲裁器；
-- 数据库模型；
-- 配置和后台调试页面；
+- 数据库模型、治理/预算迁移和 host-managed preset source；
+- 主插件原生 Config、粗粒度 break-glass 管理命令和版本化进程内 control service；
 - 适配器注册与选择。
 
-它提供 `ctx.yokai` 服务，但不直接实现任何厂商模型 API。
+它提供 `ctx.yokai` 服务，但不直接实现任何厂商模型 API，也不依赖 Koishi Console service、客户端框架或
+`koishi-plugin-yokai-console`。无 Console 是正常部署形态，不产生缺依赖错误。
+
+#### `koishi-plugin-yokai-console`（可选）
+
+独立发布的精细管理增强插件，只负责：
+
+- 把主体 `ctx.yokai` 上版本化的 control service 适配为有权限的 Koishi Console routes 与页面；
+- 展示能力目录、fingerprint 审批、优先级、effective 预算、dry-run reason、managed preset、频道状态和模型目录；
+- 在主体声明 telemetry/replay feature 后追加指标、成本和受限回放页面；
+- 随自身生命周期注册/注销后端路由、订阅和静态资源。
+
+它不拥有 policy、预算账本、preset source、审计、Replay、数据库表或迁移，不直接读取 Yokai 数据库，也不导入
+`@yokai-internal/*`。安装只 hydrate 主体已有状态，卸载只失去精细管理界面与交互；已保存策略、active preset、
+预算用量和角色回合继续由主体执行。Console 缺服务、加载失败或 control protocol major 不兼容只禁用自身。
 
 #### `koishi-plugin-yokai-adapter-gemini`
 
@@ -619,7 +636,8 @@ koishi-plugin-yokai-adapter-ollama
 分支，或持有厂商专属配置；安装后的 adapter Koishi 插件只通过稳定的 `ctx.yokai` 协议注册自己。
 adapter 的凭据、端点和厂商参数留在自己的插件配置中，主插件只保存稳定模型引用。
 
-MVP 只发布主体和一个适配器，但协议预留以下第三方插件命名：
+MVP 发布主体、Gemini adapter，以及独立可选的 `koishi-plugin-yokai-console`；只有前两者属于基础运行路径。协议另
+预留以下第三方插件命名：
 
 ```text
 koishi-plugin-yokai-adapter-*
@@ -632,18 +650,21 @@ koishi-plugin-yokai-preset-*
 
 这些插件只依赖 `yokai-protocol`、Koishi 和主体提供的 `ctx.yokai` 服务，不能直接依赖 `@yokai-internal/core`、`@yokai-internal/mind` 或 `@yokai-internal/memory`。
 
+官方 Console 同样不能依赖内部包；它额外以 Koishi Console 与主体为 peer/runtime requirements，只消费
+`yokai-protocol` 中的 control DTO 和 `ctx.yokai` 进程内 service。主体对 Console 保持零反向依赖。
+
 ### 4.2 协议、测试支持与内部包
 
 `protocol` 和 adapter conformance 是无 scope 的公开包；`core`、`mind`、`memory`
 使用仅限工作区的 `@yokai-internal/*` scope，并保持 private：
 
-| 包                          | 职责                                                                      |
-| --------------------------- | ------------------------------------------------------------------------- |
-| `yokai-protocol`            | adapter、ContextProvider、ActionTool、FeedbackTool、Skill、MCP 和扩展协议 |
-| `yokai-adapter-conformance` | 公开的 adapter 契约测试、确定性 fake 和测试支持                           |
-| `@yokai-internal/core`      | 注册表、唤醒仲裁、缓冲、门控、预算、单次管线和动作执行                    |
-| `@yokai-internal/mind`      | 场景、状态、关系策略、发言决策、XML 提示和表达约束                        |
-| `@yokai-internal/memory`    | 群聊存档、分页历史、记忆检索、冲突、遗忘和数据库端口                      |
+| 包                          | 职责                                                   |
+| --------------------------- | ------------------------------------------------------ |
+| `yokai-protocol`            | adapter、五类能力、扩展协议及版本化 control DTO        |
+| `yokai-adapter-conformance` | 公开的 adapter 契约测试、确定性 fake 和测试支持        |
+| `@yokai-internal/core`      | 注册表、唤醒仲裁、缓冲、门控、预算、单次管线和动作执行 |
+| `@yokai-internal/mind`      | 场景、状态、关系策略、发言决策、XML 提示和表达约束     |
+| `@yokai-internal/memory`    | 群聊存档、分页历史、记忆检索、冲突、遗忘和数据库端口   |
 
 依赖方向：
 
@@ -657,7 +678,12 @@ yokai-protocol
 koishi-plugin-yokai
 
 adapter-* ──只依赖 protocol、Koishi 和对应厂商客户端
+
+koishi-plugin-yokai-console ──只依赖 protocol、Koishi Console 和 ctx.yokai control service
 ```
+
+最后一条箭头严格单向；`koishi-plugin-yokai` 的 manifest、源码、bundle 和 tarball 不得包含 Console 包、客户端框架、
+路由或静态资源。
 
 `yokai-protocol` 和 `yokai-adapter-conformance` 作为普通 npm 包发布；三个内部包随主体
 构建产物打包，不成为最终用户的安装时依赖。
@@ -673,7 +699,8 @@ packages/
 
 plugins/
 ├── yokai/
-└── yokai-adapter-gemini/
+├── yokai-adapter-gemini/
+└── yokai-console/
 ```
 
 ## 5. 扩展架构
@@ -749,8 +776,8 @@ adapter 注册后主体立即在其作用域中请求模型清单；adapter 配�
 
 #### ContextProvider
 
-ContextProvider 不是模型工具。它由主体根据焦点消息、Skill、关键词和响应机制在首次 LLM
-请求前选择，输出直接进入冻结上下文。Provider 必须有独立 token、耗时和作用域预算；每消息远程
+ContextProvider 不是模型工具。它先受实例有序 allowlist 约束，再由主体根据焦点消息、Skill、关键词和响应机制在首次 LLM
+请求前选择；第三方新 Provider 默认不可见，allowlist 顺序作为达到数量或总预算上限时的准入优先级。输出直接进入冻结上下文。Provider 必须有独立 token、耗时和作用域预算；每消息远程
 拉取不属于快速路径，外部内容只能使用后台缓存或延后 ActionTool 预先获取。
 注册描述至少固定 ID、用途、最大耗时、token 上限和可用性判定。输出片段保留 ID、标签、内容、来源引用、不可信标记与 token 估算。
 
@@ -897,7 +924,8 @@ schedule.cancel
 
 角色预设不能直接作为可变全局对象使用。主体维护不可变、带版本的快照，快照记录预设 ID、版本、内容 hash、人格、编译后提示和加载时间。
 
-文件、Console、数据库和第三方预设插件都通过 `YokaiPresetSource` 发布候选版本。更新流程：
+文件、主体托管的 managed 数据库源和第三方预设插件都通过 `YokaiPresetSource` 发布候选版本。managed source 始终
+由主体注册并恢复 last-good；可选 Console 只是它的编辑客户端，不注册 source，也不持有 owner principal。更新流程：
 
 ```text
 发现文件或配置变化
@@ -917,36 +945,70 @@ schedule.cancel
 - 需要清理状态的重大角色变更通过显式迁移操作完成，不能随文件保存自动发生。
 - 当前使用的预设被插件卸载时保留最后有效快照，并在控制面提示来源已离线。
 
-这允许直接编辑 YAML/JSON、通过 Console 保存或安装新的 `preset-*` 插件，全程不重启 Koishi。
+这允许直接编辑 YAML/JSON、在安装可选 Console 时保存 managed preset，或安装新的 `preset-*` 插件，全程不重启
+Koishi。Console 卸载后，已发布的 managed preset 仍由主体继续提供。
 
 ### 5.7 插件热插拔语义
 
-| 操作                | 新角色回合       | 进行中回合                              |
-| ------------------- | ---------------- | --------------------------------------- |
-| 安装 Tool/Skill/MCP | 立即可见         | 保持原能力快照                          |
-| 卸载 Tool/Skill/MCP | 不再可见         | 已开始调用允许完成或由 AbortSignal 取消 |
-| 更新预设            | 使用新版本       | 使用旧版本完成                          |
-| 安装响应机制        | 开始接收后续事件 | 不修改已有回合                          |
-| 卸载响应机制        | 注销监听和定时器 | 已入队提案按 mechanism ID 作废          |
+| 操作                | 新角色回合                                         | 进行中回合                              |
+| ------------------- | -------------------------------------------------- | --------------------------------------- |
+| 安装 Tool/Skill/MCP | 仅注册；匹配 grant 与 fingerprint 后才对新回合可见 | 保持原能力快照                          |
+| 卸载 Tool/Skill/MCP | 不再可见                                           | 已开始调用允许完成或由 AbortSignal 取消 |
+| 更新预设            | 使用新版本                                         | 使用旧版本完成                          |
+| 安装响应机制        | 开始接收后续事件                                   | 不修改已有回合                          |
+| 卸载响应机制        | 注销监听和定时器                                   | 已入队提案按 mechanism ID 作废          |
+| 安装 Console        | 只 hydrate 管理页面，不改变 policy 或能力快照      | 不修改已有回合                          |
+| 卸载 Console        | 只注销路由/订阅；主体继续使用持久治理状态          | 不修改、取消或 dispose 主体回合         |
 
 所有插件通过 Koishi 生命周期获得 `Disposable` 和 `AbortSignal`，不得遗留全局定时器、监听器或缓存。
 
 ## 6. 最小数据模型
 
-| 表                    | 内容                                                    |
-| --------------------- | ------------------------------------------------------- |
-| `yokai_identity`      | 角色人格和当前版本                                      |
-| `yokai_channel_state` | 频道活跃度、相关度、缓冲游标、冷却和调用预算            |
-| `yokai_member_state`  | 成员称呼、关系和交流偏好                                |
-| `yokai_message`       | 保留期内带稳定游标的原始群聊消息、编辑版本与引用        |
-| `yokai_memory`        | 记事本中的经历、事实、自我和关系笔记                    |
-| `yokai_thread`        | 当前短期话题线程                                        |
-| `yokai_engagement`    | 持续讨论租约、参与者、有效期和剩余轮数                  |
-| `yokai_schedule`      | 一次性或重复的持久化定时唤醒任务                        |
-| `yokai_preset_state`  | 实例当前预设 ID、版本、hash 和来源                      |
-| `yokai_turn`          | 触发、上下文、协议与能力快照、XML、费用、发送结果和耗时 |
+| 表                        | 内容                                                          |
+| ------------------------- | ------------------------------------------------------------- |
+| `yokai_identity`          | 角色人格和当前版本                                            |
+| `yokai_channel_state`     | 频道活跃度、相关度、缓冲游标、冷却和预算压力快照              |
+| `yokai_member_state`      | 成员称呼、关系和交流偏好                                      |
+| `yokai_message`           | 保留期内带稳定游标的原始群聊消息、编辑版本与引用              |
+| `yokai_memory`            | 记事本中的经历、事实、自我和关系笔记                          |
+| `yokai_thread`            | 当前短期话题线程                                              |
+| `yokai_engagement`        | 持续讨论租约、参与者、有效期和剩余轮数                        |
+| `yokai_schedule`          | 一次性或重复的持久化定时唤醒任务                              |
+| `yokai_preset_state`      | 实例唯一 Unselected/Resolved/PendingIntent selection revision |
+| `yokai_managed_preset`    | 主体保留 managed owner 下不可变 preset 版本及 last-good       |
+| `yokai_governance`        | 当前治理策略、不可变历史 revision、授权 fingerprint 和审计    |
+| `yokai_call_budget`       | 实例分类 minute/day 窗口、使用量和在途 reservation            |
+| `yokai_admission_attempt` | 唤醒合并、过期、冷却与预算准入输入/结果及可选 turn 关联       |
+| `yokai_turn`              | 触发、治理/能力快照、XML 解析结果、费用、发送结果和耗时       |
+| `yokai_replay`            | 加密、限权且有保留期的 admission/turn 精确回放载荷            |
+| `yokai_replay_key_meta`   | host-global keyId/commitment 不可复用绑定与 retired tombstone |
 
-`yokai_turn` 的回放边界包含 protocolId、ActionTool 注册快照、冻结 scope 和可见 message ID 白名单。
+治理策略以协议硬上限、扩展注册上限、实例宿主软上限和回合剩余额度的交集计算 effective 值；软上限只能收紧。
+能力授权绑定 domain、ID、宿主从 Koishi owner 派生的稳定来源、可证明覆盖传递代码的安装 build fingerprint，以及
+覆盖全部模型可见/权限字段的 versioned canonical descriptor hash，preset 与 Skill 只能请求而不能扩权。能力/预算
+策略、active preset、preset source 和频道策略各有唯一权威源；legacy 主配置只迁移一次，审计历史不参与运行时
+选择。调用预算按实例、类别和窗口持久化，provider I/O 前提交计费；重启释放 pending、保留 committed，配置
+reload 或时区变更不能提前清零额度。
+
+这些表、迁移、默认策略 bootstrap、预算窗口、managed source、审计和保留期任务全部由主体拥有。空库在没有
+Console 的情况下原子建立安全默认 revision，按稳定顺序批准宿主内置能力；第三方新增/变化仍 pending-review。主体版本
+携带的 builtin fingerprint migration 只替换精确匹配的旧 tuple，保留 enabled、grant 顺序、lower-only override、
+频道、preset 和预算状态。Console 安装、卸载或重连不创建默认 revision、不重跑迁移、不重置预算，也不改变任何
+运行时 source。
+
+从未配置 preset 时，`yokai_preset_state` 写入带 revision 的 `Unselected { reason: "not-configured" }`；legacy preset
+来源在迁移时尚未注册、无效或同 ID 有歧义时，则保留 ID 与宿主 source hint 的 PendingIntent。两者期间均只存档、
+不生成；Unselected 只能由管理员以 CAS 显式选择，PendingIntent 只有精确匹配宿主证明的来源或管理员 CAS 选择后才
+解析为带 source/version 的 Resolved state，第三方同名来源不能自动抢占。
+
+普通 `yokai_turn` 只保存 protocolId、非内容 revision/hash、预算证据、content-free 能力选择结果和 callback
+outcome；普通 `yokai_admission_attempt` 只保存有界非内容 ID、scope/focus kind 与准入数值，不能保存正文、完整
+scope、Action 参数或这些敏感输入的可字典枚举 hash。精确回放所需正文、Action 参数、冻结 scope、有效 preset/
+模型/adapter/MCP 状态，以及五类能力的 canonical serializable descriptor snapshot 只进入 `yokai_replay` 的版本化
+AEAD 载荷，并受 plaintext/ciphertext 字节硬帽约束。密钥由 Koishi 边界通过 scoped secret resolver 注入
+`ReplayKeyProvider`，同 key nonce 唯一并以 instance/record/version/key/time 作为 AAD；密钥缺失或 envelope 超限时
+fail closed，绝不回退明文。预算拒绝等未创建角色回合的决策不能伪造成空 turn。不可序列化的 availability 与输入
+授权函数不在离线环境重跑，只核对加密载荷中的录制输入、实现 fingerprint 和 outcome。
 `yokai_message` 按 `(platform, guildId, channelId, timestamp, messageId)` 建立分页索引，并为作者与本地全文搜索建立辅助索引。
 原始消息默认保留 90 天，保留天数由主插件配置；后台定期删除超期记录，不实现按消息撤回或手动删除流程。
 消息正文由宿主上下文提供器按预算选择，不会全部进入每次模型上下文。所有历史和记事本先按 Yokai 实例及群聊作用域隔离，再做检索。
@@ -955,19 +1017,21 @@ schedule.cancel
 
 配置只固定产品层的约束，具体 Koishi Schema 由各实施任务确定：
 
-| 配置组           | 关键内容                                                                       |
-| ---------------- | ------------------------------------------------------------------------------ |
-| 角色             | 实例 ID、预设 ID                                                               |
-| 模型             | 单个可选 `model`；选项来自实时模型目录                                         |
-| 门控与预算       | 活跃度/相关度阈值、半衰期、debounce、冷却、上下文窗口和分类调用预算            |
-| 历史             | 原始消息保留天数（默认 90）、分页上限、每回合查询数和 token 上限               |
-| 生成             | 超时、上下文截止时间、XML 上限、ActionTool/FeedbackTool 数量、耗时与结果上限   |
-| 能力可见性       | `feedbackToolsEnabled`、ActionTool/FeedbackTool/Skill/MCP 可见列表与每回合上限 |
-| 讨论、定时与主动 | 开关、租约空闲 TTL、绝对期限、最大轮数、时区、错过宽限、待办上限和独立预算     |
-| 预设与记事本     | 文件监听、重载 debounce、召回上限、默认笔记过期时间                            |
-| 表达             | 最大长度；严格角色内表达是固定行为                                             |
+| 配置组           | 关键内容                                                                                          |
+| ---------------- | ------------------------------------------------------------------------------------------------- |
+| 角色             | 实例 ID；active preset 来自版本化 preset state，legacy Config 只迁移一次                          |
+| 模型             | 单个可选 `model`；选项来自实时模型目录                                                            |
+| 门控与预算       | 活跃度/相关度阈值、半衰期、debounce、冷却、回合资源软上限和实例分类调用预算                       |
+| 历史             | 原始消息保留天数（默认 90）、分页上限、每回合查询数和 token 上限                                  |
+| 生成             | 超时、上下文截止时间、XML 上限、ActionTool/FeedbackTool 数量、耗时与结果上限                      |
+| 能力可见性       | `feedbackToolsEnabled`、带来源/hash 的 ContextProvider/ActionTool/FeedbackTool/Skill/MCP 有序授权 |
+| 讨论、定时与主动 | 开关、租约空闲 TTL、绝对期限、最大轮数、时区、错过宽限、待办上限和独立预算                        |
+| 预设与记事本     | 文件监听、重载 debounce、召回上限、默认笔记过期时间                                               |
+| 表达             | 最大长度；严格角色内表达是固定行为                                                                |
 
-角色外调试和管理只在 Koishi Console 或管理命令中进行。单个 `model` 属于主插件配置；未选模型是允许的本地存档模式，
+角色外管理通过主插件原生 Config、粗粒度 break-glass 命令，以及安装时才存在的可选精细 Console 进行。没有
+`koishi-plugin-yokai-console` 是正常运行形态：主体继续执行持久 policy/预算与全部角色回合，只失去逐项审批、
+调序、细粒度预算编辑、dry-run/图表和 Replay UI。单个 `model` 属于主插件配置；未选模型是允许的本地存档模式，
 不使用伪造的 `none` 模型 ID。Gemini adapter 的有序 URL/key 端点只存在 adapter 插件配置中，并共享
 顶层超时与发现重试设置；它们是一个逻辑连接的容灾传输，不是多个可选模型。
 
@@ -1003,6 +1067,9 @@ schedule.cancel
 
 ### 8.2 必测场景
 
+- node_modules 与 Koishi service 中完全不存在 Console 包/服务时，主体从 fresh/旧库启动、迁移并完成普通角色回合；
+- Console 热安装只 hydrate 现有状态；编辑 policy/managed preset 后卸载、重启和重装，主体的 grant、预算窗口、
+  active preset、审计与 Replay 均不重置，缺席期间第三方 pending-review 在重装后可见；
 - 多人并行聊天时选择沉默或正确线程；
 - 连续低相关消息只存档和累计，不调用模型；
 - 短时间消息爆发只合并成一个角色回合；
@@ -1017,7 +1084,8 @@ schedule.cancel
 - `after-send` ActionTool 不延迟角色消息，`deferred` ActionTool 完成后不能续接当前请求；
 - 回复成功后可通过 `notebook.write` 写入零条或多条有界笔记，沉默或发送失败时不写入；
 - FeedbackTool 的最终请求使用禁止函数调用模式，任何第三次逻辑生成都应被测试判定为失败；
-- 新安装的 Tool、Skill 和响应机制在下一回合可见，卸载后不再被选择；
+- 新安装的 Tool/Skill/MCP 只进入 registered 清单，匹配实例 grant 与 fingerprint 审批后才在下一回合可见；响应机制
+  安装后开始接收后续事件，卸载后不再被选择；
 - MCP 服务断开和重连不会影响主体或其他能力；
 - 修改有效预设后下一回合使用新版本，错误预设继续使用旧版本；
 - 预设热更新不会清空关系、记忆、讨论租约或定时任务；
@@ -1066,14 +1134,17 @@ schedule.cancel
 13. 仓库外 LLM adapter 的零修改兼容门禁，覆盖注册、模型发现、配置联动、两类生成和卸载。
 
 MVP 只正式发布 Gemini adapter；用于兼容门禁的确定性 adapter 是测试夹具，不作为第二个产品 adapter
-发布。MVP 范围不包含语音、图片生成、浏览器、代码工具、人格市场和主动私聊。
+发布。MVP 同时独立发布可选 `koishi-plugin-yokai-console`，但基础验收和运行不安装它。MVP 范围不包含语音、
+图片生成、浏览器、代码工具、人格市场和主动私聊。
 
 ## 10. 最终架构决策
 
 1. 平台标识负责角色外知情，普通聊天始终保持角色内表达。
 2. 仿生性的核心是场景判断、沉默、连续状态、关系和记忆，不是单一提示词。
 3. 所有仿生逻辑集中在 `koishi-plugin-yokai`。
-4. MVP 公开 Koishi 插件只包含主体和 adapter；后续能力按 `tool-*`、`skill-*`、`mcp-*`、`response-*`、`preset-*` 扩展，永不公开 `core`、`mind`、`memory` 插件。
+4. MVP 的基础运行路径只要求主体和 adapter；`koishi-plugin-yokai-console` 作为独立可选第三包发布，主体对它零
+   反向依赖。后续能力按 `tool-*`、`skill-*`、`mcp-*`、`response-*`、`preset-*` 扩展，永不公开
+   `core`、`mind`、`memory` 插件。
 5. 最终角色输出通过统一 XML 提出有序待发消息和 ActionTool；需要结果的 FeedbackTool 使用首次原生
    函数调用，主体严格处理两类结果，不做开放式模型续轮。
 6. 角色回合使用创建时的单一冻结快照，生成期间的新消息留给下一回合。
@@ -1100,3 +1171,5 @@ MVP 只正式发布 Gemini adapter；用于兼容门禁的确定性 adapter 是�
     仓库外 adapter 门禁验证，而不是依赖第二个正式 adapter。
 21. 原始消息默认保留 90 天且可配置；不实现撤回同步、消息级删除或手动删除流程。长期记忆只由
     回复成功后的 `notebook.write` ActionTool 选择性写入，写入结果不回灌模型。
+22. 治理策略、预算账本、managed preset、审计、指标和 Replay 始终归主体；Console 只是版本化 control service 的
+    可选客户端。安装、卸载、故障或版本不兼容只能影响精细管理界面，不能改变角色运行状态。

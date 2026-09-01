@@ -1,11 +1,14 @@
 import type { ModelReference, PresetId } from 'yokai-protocol'
 import { Context, Layer, type Option } from 'effect'
 
+import type { CapabilitySelection } from '../capability-selection/index'
+
 export interface Interface {
   readonly instanceId: string
   readonly model: Option.Option<ModelReference>
   readonly presetId: Option.Option<PresetId>
   readonly feedbackToolsEnabled: boolean
+  readonly capabilityVisibility: CapabilitySelection.Visibility
 }
 
 export class Service extends Context.Service<Service, Interface>()(
