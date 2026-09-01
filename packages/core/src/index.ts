@@ -1,5 +1,6 @@
 export * from './activity-gating/index'
 export * from './call-budget/index'
+export * from './capability-selection/index'
 export * from './capability-registry/index'
 export * from './host/index'
 export * from './preset/index'

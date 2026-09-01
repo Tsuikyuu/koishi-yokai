@@ -64,6 +64,16 @@ export const ResponseMechanismId = Schema.String.check(...capabilityIdChecks).pi
 
 export type ResponseMechanismId = typeof ResponseMechanismId.Type
 
+export const CapabilityEventKind = Schema.Literals([
+  'direct',
+  'activity',
+  'engagement',
+  'schedule',
+  'initiative',
+])
+
+export type CapabilityEventKind = typeof CapabilityEventKind.Type
+
 export const CapabilityProtocolVersion = Schema.Struct({
   major: Schema.Natural,
   minor: Schema.Natural,
@@ -103,6 +113,91 @@ export const FocusMessage = Schema.Struct({
 })
 
 export interface FocusMessage extends Schema.Schema.Type<typeof FocusMessage> {}
+
+export const MAX_LOCAL_SELECTION_KEYWORDS = 64
+export const MAX_LOCAL_SELECTION_KEYWORD_LENGTH = 128
+export const MAX_LOCAL_SELECTION_RESPONSE_MECHANISMS = 64
+export const MAX_LOCAL_SELECTION_EVENT_KINDS = 5
+export const MAX_LOCAL_SELECTION_SKILLS = 64
+
+export const LocalSelectionKeyword = Schema.String.check(
+  Schema.isTrimmed(),
+  Schema.isNonEmpty(),
+  Schema.isMaxLength(MAX_LOCAL_SELECTION_KEYWORD_LENGTH),
+  Schema.isPattern(/^[^\p{C}]+$/u),
+).pipe(Schema.brand('@yokai/protocol/LocalSelectionKeyword'))
+
+export type LocalSelectionKeyword = typeof LocalSelectionKeyword.Type
+
+const LocalSelectionKeywords = Schema.Array(LocalSelectionKeyword).check(
+  Schema.isMaxLength(MAX_LOCAL_SELECTION_KEYWORDS),
+  Schema.isUnique(),
+)
+
+const LocalSelectionResponseMechanisms = Schema.Array(ResponseMechanismId).check(
+  Schema.isMaxLength(MAX_LOCAL_SELECTION_RESPONSE_MECHANISMS),
+  Schema.isUnique(),
+)
+
+const LocalSelectionEventKinds = Schema.Array(CapabilityEventKind).check(
+  Schema.isMaxLength(MAX_LOCAL_SELECTION_EVENT_KINDS),
+  Schema.isUnique(),
+)
+
+const LocalSelectionSkills = Schema.Array(SkillId).check(
+  Schema.isMaxLength(MAX_LOCAL_SELECTION_SKILLS),
+  Schema.isUnique(),
+)
+
+const SkillSelectionRegistration = Schema.TaggedUnion({
+  Always: {},
+  MatchAny: {
+    keywords: LocalSelectionKeywords,
+    responseMechanisms: LocalSelectionResponseMechanisms,
+    eventKinds: LocalSelectionEventKinds,
+  },
+})
+
+type SkillSelectionRegistration = typeof SkillSelectionRegistration.Type
+
+export const SkillSelection = SkillSelectionRegistration.check(
+  Schema.makeFilter((selection: SkillSelectionRegistration) =>
+    selection._tag === 'Always' ||
+    selection.keywords.length > 0 ||
+    selection.responseMechanisms.length > 0 ||
+    selection.eventKinds.length > 0
+      ? true
+      : 'Expected MatchAny Skill selection to contain at least one criterion',
+  ),
+)
+
+export type SkillSelection = typeof SkillSelection.Type
+
+const ContextProviderSelectionRegistration = Schema.TaggedUnion({
+  Always: {},
+  MatchAny: {
+    keywords: LocalSelectionKeywords,
+    responseMechanisms: LocalSelectionResponseMechanisms,
+    skills: LocalSelectionSkills,
+  },
+})
+
+type ContextProviderSelectionRegistration = typeof ContextProviderSelectionRegistration.Type
+
+export const ContextProviderSelection = ContextProviderSelectionRegistration.check(
+  Schema.makeFilter((selection: ContextProviderSelectionRegistration) =>
+    selection._tag === 'Always' ||
+    selection.keywords.length > 0 ||
+    selection.responseMechanisms.length > 0 ||
+    selection.skills.length > 0
+      ? true
+      : 'Expected MatchAny ContextProvider selection to contain at least one criterion',
+  ),
+)
+
+export type ContextProviderSelection = typeof ContextProviderSelection.Type
+
+const ALWAYS_CONTEXT_PROVIDER_SELECTION = { _tag: 'Always' } as const
 
 export const ContextProviderRequest = Schema.Struct({
   scope: CapabilityScope,
@@ -176,6 +271,10 @@ export const ContextProvider = Schema.Struct({
   description: Schema.NonEmptyString,
   maxTokens: TokenLimit,
   maxDurationMs: CapabilityDurationMilliseconds,
+  selection: ContextProviderSelection.pipe(
+    Schema.withDecodingDefaultKey(Effect.succeed(ALWAYS_CONTEXT_PROVIDER_SELECTION)),
+    Schema.withConstructorDefault(Effect.succeed(ALWAYS_CONTEXT_PROVIDER_SELECTION)),
+  ),
   isAvailable: ContextProviderIsAvailableSchema,
   provide: ContextProviderProvideSchema,
 })
@@ -380,9 +479,46 @@ export const feedbackToolDeclaration = (tool: FeedbackTool): FeedbackToolDeclara
     inputSchema: tool.inputSchema,
   })
 
+export const MAX_SKILL_DESCRIPTION_LENGTH = 2_048
+export const MAX_SKILL_PROMPT_LENGTH = 8_192
+export const MAX_SKILL_CAPABILITY_REFERENCES = 64
+
+const SkillDescription = Schema.String.check(
+  Schema.isTrimmed(),
+  Schema.isNonEmpty(),
+  Schema.isMaxLength(MAX_SKILL_DESCRIPTION_LENGTH),
+)
+
+const SkillPrompt = Schema.String.check(
+  Schema.isTrimmed(),
+  Schema.isNonEmpty(),
+  Schema.isMaxLength(MAX_SKILL_PROMPT_LENGTH),
+)
+
+const SkillContextProviderReferences = Schema.Array(ContextProviderId).check(
+  Schema.isMaxLength(MAX_SKILL_CAPABILITY_REFERENCES),
+  Schema.isUnique(),
+)
+
+const SkillActionToolReferences = Schema.Array(ActionToolId).check(
+  Schema.isMaxLength(MAX_SKILL_CAPABILITY_REFERENCES),
+  Schema.isUnique(),
+)
+
+const SkillFeedbackToolReferences = Schema.Array(FeedbackToolId).check(
+  Schema.isMaxLength(MAX_SKILL_CAPABILITY_REFERENCES),
+  Schema.isUnique(),
+)
+
 export const Skill = Schema.Struct({
   id: SkillId,
   protocolVersion: CapabilityProtocolVersion,
+  description: SkillDescription,
+  prompt: SkillPrompt,
+  selection: SkillSelection,
+  contextProviders: SkillContextProviderReferences,
+  actionTools: SkillActionToolReferences,
+  feedbackTools: SkillFeedbackToolReferences,
 })
 
 export interface Skill extends Schema.Schema.Type<typeof Skill> {}
@@ -393,6 +529,72 @@ export const McpServer = Schema.Struct({
 })
 
 export interface McpServer extends Schema.Schema.Type<typeof McpServer> {}
+
+export const MAX_MCP_TOOL_NAME_LENGTH = 128
+export const MAX_MCP_TOOL_PROJECTIONS = 128
+
+export const McpToolName = Schema.String.check(
+  Schema.isNonEmpty(),
+  Schema.isMaxLength(MAX_MCP_TOOL_NAME_LENGTH),
+  Schema.isPattern(/^[A-Za-z_][A-Za-z0-9._-]*$/),
+).pipe(Schema.brand('@yokai/protocol/McpToolName'))
+
+export type McpToolName = typeof McpToolName.Type
+
+export const McpToolProjection = Schema.TaggedUnion({
+  Action: {
+    name: McpToolName,
+    tool: ActionTool,
+  },
+  Feedback: {
+    name: McpToolName,
+    tool: FeedbackTool,
+  },
+})
+
+export type McpToolProjection = typeof McpToolProjection.Type
+
+export const McpServerSnapshotRevision = Schema.Natural.pipe(
+  Schema.brand('@yokai/protocol/McpServerSnapshotRevision'),
+)
+
+export type McpServerSnapshotRevision = typeof McpServerSnapshotRevision.Type
+
+const McpServerSnapshotRegistration = Schema.TaggedUnion({
+  Connected: {
+    serverId: McpServerId,
+    revision: McpServerSnapshotRevision,
+    projections: Schema.Array(McpToolProjection).check(
+      Schema.isMaxLength(MAX_MCP_TOOL_PROJECTIONS),
+    ),
+  },
+  Disconnected: {
+    serverId: McpServerId,
+    revision: McpServerSnapshotRevision,
+  },
+})
+
+type McpServerSnapshotRegistration = typeof McpServerSnapshotRegistration.Type
+
+export const McpServerSnapshot = McpServerSnapshotRegistration.check(
+  Schema.makeFilter((snapshot: McpServerSnapshotRegistration) => {
+    if (snapshot._tag === 'Disconnected') return true
+
+    const names = snapshot.projections.map((projection) => projection.name)
+    if (new Set(names).size !== names.length) {
+      return 'Expected unique MCP Tool projection names'
+    }
+
+    const mismatched = snapshot.projections.find(
+      (projection) => projection.tool.id !== `${snapshot.serverId}.${projection.name}`,
+    )
+    return mismatched === undefined
+      ? true
+      : 'Expected every MCP Tool projection ID to equal <serverId>.<toolName>'
+  }),
+)
+
+export type McpServerSnapshot = typeof McpServerSnapshot.Type
 
 export const PresetSource = Schema.Struct({
   id: PresetSourceId,

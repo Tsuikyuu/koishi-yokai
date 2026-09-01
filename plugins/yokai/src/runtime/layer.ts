@@ -7,6 +7,7 @@ import {
   ActivityScoring,
   CallBudget,
   CapabilityRegistry,
+  CapabilitySelection,
   ChannelMessageBuffer,
   DirectResponseMechanism,
   EngagementLease,
@@ -47,6 +48,10 @@ import {
   DEFAULT_ENGAGEMENT_MAX_DURATION_MS,
   DEFAULT_ENGAGEMENT_MAX_ROUNDS,
   DEFAULT_INSTANCE_ID,
+  DEFAULT_VISIBLE_ACTION_TOOLS,
+  DEFAULT_VISIBLE_FEEDBACK_TOOLS,
+  DEFAULT_VISIBLE_MCP_SERVERS,
+  DEFAULT_VISIBLE_SKILLS,
   DEFAULT_MESSAGE_RETENTION_DAYS,
   DEFAULT_NOTEBOOK_EXPIRATION_DAYS,
   DEFAULT_NOTEBOOK_MAX_NOTES_PER_REPLY,
@@ -86,6 +91,16 @@ import { KoishiScheduledTaskStorage } from '../schedule/index'
 const decodeModelReference = Schema.decodeUnknownEffect(ModelReference)
 const decodePresetId = Schema.decodeUnknownEffect(PresetId)
 
+const freezeCapabilityVisibility = (
+  visibility: CapabilitySelection.Visibility,
+): CapabilitySelection.Visibility =>
+  Object.freeze({
+    skills: Object.freeze([...visibility.skills]),
+    actionTools: Object.freeze([...visibility.actionTools]),
+    feedbackTools: Object.freeze([...visibility.feedbackTools]),
+    mcpServers: Object.freeze([...visibility.mcpServers]),
+  })
+
 const decodeConfiguration = Effect.fn('YokaiRuntime.decodeConfiguration')(function* (
   config: Config,
 ) {
@@ -97,12 +112,34 @@ const decodeConfiguration = Effect.fn('YokaiRuntime.decodeConfiguration')(functi
     config.presetId === undefined
       ? Option.none<PresetId>()
       : Option.some(yield* decodePresetId(config.presetId))
+  const configuredCapabilities = config.capabilities
+  const capabilityVisibility = freezeCapabilityVisibility(
+    yield* Schema.decodeUnknownEffect(CapabilitySelection.Visibility)({
+      skills:
+        configuredCapabilities === undefined || configuredCapabilities.skills === undefined
+          ? DEFAULT_VISIBLE_SKILLS
+          : configuredCapabilities.skills,
+      actionTools:
+        configuredCapabilities === undefined || configuredCapabilities.actionTools === undefined
+          ? DEFAULT_VISIBLE_ACTION_TOOLS
+          : configuredCapabilities.actionTools,
+      feedbackTools:
+        configuredCapabilities === undefined || configuredCapabilities.feedbackTools === undefined
+          ? DEFAULT_VISIBLE_FEEDBACK_TOOLS
+          : configuredCapabilities.feedbackTools,
+      mcpServers:
+        configuredCapabilities === undefined || configuredCapabilities.mcpServers === undefined
+          ? DEFAULT_VISIBLE_MCP_SERVERS
+          : configuredCapabilities.mcpServers,
+    }),
+  )
 
   return HostConfiguration.Service.of({
     instanceId: config.instanceId === undefined ? DEFAULT_INSTANCE_ID : config.instanceId,
     model,
     presetId,
     feedbackToolsEnabled: config.feedbackToolsEnabled,
+    capabilityVisibility,
   })
 })
 

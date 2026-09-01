@@ -1,6 +1,27 @@
+import {
+  HISTORY_SEARCH_FEEDBACK_TOOL_ID,
+  NOTEBOOK_WRITE_ACTION_TOOL_ID,
+  SCHEDULE_CANCEL_ACTION_TOOL_ID,
+  SCHEDULE_CREATE_ACTION_TOOL_ID,
+  SCHEDULE_QUERY_FEEDBACK_TOOL_ID,
+  SCHEDULE_UPDATE_ACTION_TOOL_ID,
+} from 'yokai-protocol'
 import { Schema } from 'koishi'
 
 export const DEFAULT_INSTANCE_ID = 'default'
+export const MAX_CONFIGURED_CAPABILITIES_PER_DOMAIN = 64
+export const DEFAULT_VISIBLE_SKILLS: ReadonlyArray<string> = []
+export const DEFAULT_VISIBLE_ACTION_TOOLS: ReadonlyArray<string> = [
+  NOTEBOOK_WRITE_ACTION_TOOL_ID,
+  SCHEDULE_CREATE_ACTION_TOOL_ID,
+  SCHEDULE_UPDATE_ACTION_TOOL_ID,
+  SCHEDULE_CANCEL_ACTION_TOOL_ID,
+]
+export const DEFAULT_VISIBLE_FEEDBACK_TOOLS: ReadonlyArray<string> = [
+  HISTORY_SEARCH_FEEDBACK_TOOL_ID,
+  SCHEDULE_QUERY_FEEDBACK_TOOL_ID,
+]
+export const DEFAULT_VISIBLE_MCP_SERVERS: ReadonlyArray<string> = []
 export const DEFAULT_MESSAGE_RETENTION_DAYS = 90
 export const DEFAULT_NOTEBOOK_MAX_NOTES_PER_REPLY = 4
 export const DEFAULT_NOTEBOOK_RECALL_LIMIT = 8
@@ -96,6 +117,13 @@ export interface ScheduleConfig {
   contextLimit?: number
 }
 
+export interface CapabilityVisibilityConfig {
+  skills?: string[]
+  actionTools?: string[]
+  feedbackTools?: string[]
+  mcpServers?: string[]
+}
+
 export interface Config {
   instanceId?: string
   presetId?: string
@@ -103,6 +131,7 @@ export interface Config {
   presetReloadDebounceMs?: number
   model?: string
   feedbackToolsEnabled: boolean
+  capabilities?: CapabilityVisibilityConfig
   messageRetentionDays?: number
   notebook?: NotebookConfig
   schedule?: ScheduleConfig
@@ -327,6 +356,42 @@ const ScheduleConfigSchema = Schema.object({
   contextLimit: DEFAULT_SCHEDULE_CONTEXT_LIMIT,
 })
 
+const CapabilityIdSchema = Schema.string()
+  .pattern(/^[A-Za-z_][A-Za-z0-9._-]*$/)
+  .max(128)
+
+const capabilityAllowlist = (defaults: ReadonlyArray<string>) =>
+  Schema.transform(
+    Schema.array(CapabilityIdSchema).max(MAX_CONFIGURED_CAPABILITIES_PER_DOMAIN),
+    (ids, options) => {
+      if (new Set(ids).size !== ids.length) {
+        throw new Schema.ValidationError('expected unique capability IDs', options)
+      }
+      return ids
+    },
+    true,
+  ).default([...defaults])
+
+const CapabilityVisibilityConfigSchema = Schema.object({
+  skills: capabilityAllowlist(DEFAULT_VISIBLE_SKILLS).description(
+    '允许本地选择的 Skill ID。第三方 Skill 默认不可见。',
+  ),
+  actionTools: capabilityAllowlist(DEFAULT_VISIBLE_ACTION_TOOLS).description(
+    '允许进入回合选择的 ActionTool ID。',
+  ),
+  feedbackTools: capabilityAllowlist(DEFAULT_VISIBLE_FEEDBACK_TOOLS).description(
+    '允许进入回合选择的 FeedbackTool ID；仍受 feedbackToolsEnabled 总开关限制。',
+  ),
+  mcpServers: capabilityAllowlist(DEFAULT_VISIBLE_MCP_SERVERS).description(
+    '允许投影能力进入回合选择的 MCP Server ID。第三方服务默认不可见。',
+  ),
+}).default({
+  skills: [...DEFAULT_VISIBLE_SKILLS],
+  actionTools: [...DEFAULT_VISIBLE_ACTION_TOOLS],
+  feedbackTools: [...DEFAULT_VISIBLE_FEEDBACK_TOOLS],
+  mcpServers: [...DEFAULT_VISIBLE_MCP_SERVERS],
+})
+
 export const Config: Schema<Config> = Schema.object({
   instanceId: Schema.string()
     .pattern(/^[A-Za-z][A-Za-z0-9._-]*$/)
@@ -350,6 +415,9 @@ export const Config: Schema<Config> = Schema.object({
   feedbackToolsEnabled: Schema.boolean()
     .default(false)
     .description('允许模型使用一次有界 FeedbackTool 反馈。'),
+  capabilities: CapabilityVisibilityConfigSchema.description(
+    'Skill、ActionTool、FeedbackTool 和 MCP Server 的实例级可见上界。',
+  ),
   messageRetentionDays: Schema.natural()
     .min(1)
     .max(3_650)

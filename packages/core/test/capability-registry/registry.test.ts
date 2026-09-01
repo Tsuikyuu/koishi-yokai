@@ -10,6 +10,7 @@ import {
   CURRENT_ADAPTER_PROTOCOL_VERSION,
   FeedbackToolId,
   MAX_FEEDBACK_TOOL_DESCRIPTION_LENGTH,
+  McpServerSnapshot,
   ModelReference,
   TokenLimit,
   type ModelCatalogSnapshot,
@@ -118,6 +119,37 @@ const makeFeedbackTool = (id: string): FeedbackTool =>
     prepare: () => Effect.succeed({ execute: () => Effect.succeed(null) }),
   })
 
+const makeConnectedMcpSnapshot = (
+  serverId: string,
+  revision: number,
+  actionToolNames: ReadonlyArray<string>,
+  feedbackToolNames: ReadonlyArray<string>,
+) =>
+  Schema.decodeUnknownEffect(McpServerSnapshot)({
+    _tag: 'Connected',
+    serverId,
+    revision,
+    projections: [
+      ...actionToolNames.map((name) => ({
+        _tag: 'Action',
+        name,
+        tool: makeActionTool(`${serverId}.${name}`),
+      })),
+      ...feedbackToolNames.map((name) => ({
+        _tag: 'Feedback',
+        name,
+        tool: makeFeedbackTool(`${serverId}.${name}`),
+      })),
+    ],
+  })
+
+const makeDisconnectedMcpSnapshot = (serverId: string, revision: number) =>
+  Schema.decodeUnknownEffect(McpServerSnapshot)({
+    _tag: 'Disconnected',
+    serverId,
+    revision,
+  })
+
 it.effect('keeps capability IDs unique within domains and isolated across domains', () =>
   Effect.gen(function* () {
     const registry = yield* CapabilityRegistry.Service
@@ -129,7 +161,16 @@ it.effect('keeps capability IDs unique within domains and isolated across domain
     const actionRegistration = yield* registry.registerActionTool(makeActionTool('shared'))
     const feedbackRegistration = yield* registry.registerFeedbackTool(makeFeedbackTool('shared'))
     const skillRegistration = yield* registry.registerSkill(
-      Skill.make({ id: SkillId.make('shared'), protocolVersion: VERSION }),
+      Skill.make({
+        id: SkillId.make('shared'),
+        protocolVersion: VERSION,
+        description: 'Shared test skill',
+        prompt: 'Use the shared test skill.',
+        selection: { _tag: 'Always' },
+        contextProviders: [],
+        actionTools: [],
+        feedbackTools: [],
+      }),
     )
     const mcpRegistration = yield* registry.registerMcpServer(
       McpServer.make({ id: McpServerId.make('shared'), protocolVersion: VERSION }),
@@ -254,6 +295,50 @@ it.effect('validates FeedbackTools at the public registration boundary', () =>
   }).pipe(Effect.provide(CapabilityRegistry.layer)),
 )
 
+it.effect('validates and detaches Skills at the public registration boundary', () =>
+  Effect.gen(function* () {
+    const registry = yield* CapabilityRegistry.Service
+    const invalid = Skill.make({
+      id: SkillId.make('invalid-skill'),
+      protocolVersion: VERSION,
+      description: 'A Skill mutated by an untyped runtime caller.',
+      prompt: 'Initially valid.',
+      selection: { _tag: 'Always' },
+      contextProviders: [],
+      actionTools: [],
+      feedbackTools: [],
+    })
+    Object.defineProperty(invalid, 'prompt', { value: '', enumerable: true })
+
+    const failure = yield* registry.registerSkill(invalid).pipe(Effect.flip)
+    expect(failure).toMatchObject({
+      _tag: 'CapabilityRegistrationValidationError',
+      domain: 'skill',
+      id: 'invalid-skill',
+    })
+    expect((yield* registry.snapshot()).revision).toBe(0)
+
+    const actionTools: ActionToolId[] = []
+    const valid = Skill.make({
+      id: SkillId.make('detached-skill'),
+      protocolVersion: VERSION,
+      description: 'A valid detached Skill.',
+      prompt: 'Keep the registered snapshot stable.',
+      selection: { _tag: 'Always' },
+      contextProviders: [],
+      actionTools,
+      feedbackTools: [],
+    })
+    yield* registry.registerSkill(valid)
+    actionTools.push(ActionToolId.make('late.action'))
+
+    const snapshot = yield* registry.snapshot()
+    const registered = snapshot.skills[0]
+    if (registered === undefined) return yield* Effect.die('Expected a registered Skill')
+    expect(registered.actionTools).toEqual([])
+  }).pipe(Effect.provide(CapabilityRegistry.layer)),
+)
+
 it.effect('keeps old turn snapshots stable and makes stale unregister handles harmless', () =>
   Effect.gen(function* () {
     const registry = yield* CapabilityRegistry.Service
@@ -273,6 +358,187 @@ it.effect('keeps old turn snapshots stable and makes stale unregister handles ha
     expect(newTurn.contextProviders[0]).toMatchObject({ protocolVersion: { minor: 2 } })
     expect(yield* replacement.unregister()).toBe(true)
     expect(oldTurn.contextProviders).toHaveLength(1)
+  }).pipe(Effect.provide(CapabilityRegistry.layer)),
+)
+
+it.effect('publishes one validated MCP snapshot into flat Tool domains and source metadata', () =>
+  Effect.gen(function* () {
+    const registry = yield* CapabilityRegistry.Service
+    const registration = yield* registry.registerMcpServer(
+      McpServer.make({ id: McpServerId.make('calendar'), protocolVersion: VERSION }),
+    )
+    const connected = yield* makeConnectedMcpSnapshot('calendar', 0, ['create'], ['lookup'])
+
+    expect(yield* registration.publishSnapshot(connected)).toBe(true)
+    const snapshot = yield* registry.snapshot()
+    expect(snapshot.revision).toBe(2)
+    expect(snapshot.actionTools.map((tool) => tool.id)).toEqual(['calendar.create'])
+    expect(snapshot.feedbackTools.map((tool) => tool.id)).toEqual(['calendar.lookup'])
+    expect(snapshot.mcpProjectionSources).toEqual([
+      {
+        serverId: 'calendar',
+        actionToolIds: ['calendar.create'],
+        feedbackToolIds: ['calendar.lookup'],
+      },
+    ])
+
+    const replacement = yield* makeConnectedMcpSnapshot('calendar', 1, [], ['replace'])
+    expect(yield* registration.publishSnapshot(replacement)).toBe(true)
+    const replaced = yield* registry.snapshot()
+    expect(replaced.revision).toBe(3)
+    expect(replaced.actionTools).toEqual([])
+    expect(replaced.feedbackTools.map((tool) => tool.id)).toEqual(['calendar.replace'])
+    expect(snapshot.actionTools.map((tool) => tool.id)).toEqual(['calendar.create'])
+    expect(snapshot.feedbackTools.map((tool) => tool.id)).toEqual(['calendar.lookup'])
+
+    const stale = yield* makeConnectedMcpSnapshot('calendar', 1, ['stale'], [])
+    expect(yield* registration.publishSnapshot(stale)).toBe(false)
+    expect((yield* registry.snapshot()).revision).toBe(3)
+
+    const wrongServer = yield* makeConnectedMcpSnapshot('other', 2, ['create'], [])
+    const failure = yield* registration.publishSnapshot(wrongServer).pipe(Effect.flip)
+    expect(failure).toMatchObject({
+      _tag: 'CapabilityRegistrationValidationError',
+      domain: 'mcp-server',
+      id: 'calendar',
+    })
+    expect((yield* registry.snapshot()).actionTools).toEqual([])
+    expect((yield* registry.snapshot()).feedbackTools.map((tool) => tool.id)).toEqual([
+      'calendar.replace',
+    ])
+  }).pipe(Effect.provide(CapabilityRegistry.layer)),
+)
+
+it.effect('disconnects and reconnects only one MCP source while old turns stay frozen', () =>
+  Effect.gen(function* () {
+    const registry = yield* CapabilityRegistry.Service
+    const calendar = yield* registry.registerMcpServer(
+      McpServer.make({ id: McpServerId.make('calendar'), protocolVersion: VERSION }),
+    )
+    const search = yield* registry.registerMcpServer(
+      McpServer.make({ id: McpServerId.make('search'), protocolVersion: VERSION }),
+    )
+    yield* calendar.publishSnapshot(yield* makeConnectedMcpSnapshot('calendar', 0, ['create'], []))
+    yield* search.publishSnapshot(yield* makeConnectedMcpSnapshot('search', 0, [], ['query']))
+    const oldTurn = yield* registry.snapshot()
+
+    expect(yield* calendar.publishSnapshot(yield* makeDisconnectedMcpSnapshot('calendar', 1))).toBe(
+      true,
+    )
+    const disconnected = yield* registry.snapshot()
+    expect(disconnected.actionTools).toEqual([])
+    expect(disconnected.feedbackTools.map((tool) => tool.id)).toEqual(['search.query'])
+    expect(disconnected.mcpProjectionSources.map((source) => source.serverId)).toEqual(['search'])
+    expect(oldTurn.actionTools.map((tool) => tool.id)).toEqual(['calendar.create'])
+    expect(oldTurn.mcpProjectionSources.map((source) => source.serverId)).toEqual([
+      'calendar',
+      'search',
+    ])
+
+    const equalRevision = yield* makeConnectedMcpSnapshot('calendar', 1, ['stale'], [])
+    expect(yield* calendar.publishSnapshot(equalRevision)).toBe(false)
+    const reconnected = yield* makeConnectedMcpSnapshot('calendar', 2, [], ['lookup'])
+    expect(yield* calendar.publishSnapshot(reconnected)).toBe(true)
+    const current = yield* registry.snapshot()
+    expect(current.feedbackTools.map((tool) => tool.id)).toEqual([
+      'calendar.lookup',
+      'search.query',
+    ])
+
+    expect(yield* calendar.unregister()).toBe(true)
+    expect(yield* calendar.publishSnapshot(yield* makeDisconnectedMcpSnapshot('calendar', 3))).toBe(
+      false,
+    )
+    const afterUnregister = yield* registry.snapshot()
+    expect(afterUnregister.feedbackTools.map((tool) => tool.id)).toEqual(['search.query'])
+    expect(afterUnregister.mcpServers.map((server) => server.id)).toEqual(['search'])
+  }).pipe(Effect.provide(CapabilityRegistry.layer)),
+)
+
+it.effect('rejects MCP projection conflicts and invalid XML without partial replacement', () =>
+  Effect.gen(function* () {
+    const registry = yield* CapabilityRegistry.Service
+    const native = yield* registry.registerActionTool(makeActionTool('calendar.create'))
+    const calendar = yield* registry.registerMcpServer(
+      McpServer.make({ id: McpServerId.make('calendar'), protocolVersion: VERSION }),
+    )
+    const conflicting = yield* makeConnectedMcpSnapshot('calendar', 0, ['create'], ['lookup'])
+
+    const conflict = yield* calendar.publishSnapshot(conflicting).pipe(Effect.flip)
+    expect(conflict).toMatchObject({
+      _tag: 'CapabilityConflictError',
+      domain: 'action-tool',
+      id: 'calendar.create',
+    })
+    expect((yield* registry.snapshot()).feedbackTools).toEqual([])
+
+    expect(yield* native.unregister()).toBe(true)
+    expect(yield* calendar.publishSnapshot(conflicting)).toBe(true)
+    const directConflict = yield* registry
+      .registerFeedbackTool(makeFeedbackTool('calendar.lookup'))
+      .pipe(Effect.flip)
+    expect(directConflict).toMatchObject({
+      _tag: 'CapabilityConflictError',
+      domain: 'feedback-tool',
+      id: 'calendar.lookup',
+    })
+
+    const calendarSub = yield* registry.registerMcpServer(
+      McpServer.make({ id: McpServerId.make('calendar.sub'), protocolVersion: VERSION }),
+    )
+    yield* calendarSub.publishSnapshot(
+      yield* makeConnectedMcpSnapshot('calendar.sub', 0, ['create'], []),
+    )
+    const crossServerCandidate = yield* makeConnectedMcpSnapshot(
+      'calendar',
+      1,
+      ['sub.create'],
+      ['other'],
+    )
+    const crossServerConflict = yield* calendar
+      .publishSnapshot(crossServerCandidate)
+      .pipe(Effect.flip)
+    expect(crossServerConflict).toMatchObject({
+      _tag: 'CapabilityConflictError',
+      domain: 'action-tool',
+      id: 'calendar.sub.create',
+    })
+    expect((yield* registry.snapshot()).feedbackTools.map((tool) => tool.id)).toEqual([
+      'calendar.lookup',
+    ])
+
+    const invalidXml = yield* Schema.decodeUnknownEffect(McpServerSnapshot)({
+      _tag: 'Connected',
+      serverId: 'calendar',
+      revision: 1,
+      projections: [
+        {
+          _tag: 'Action',
+          name: 'replace',
+          tool: {
+            ...makeActionTool('calendar.replace'),
+            xmlTemplate: '<action tool="different"><value>XML_ESCAPED_VALUE</value></action>',
+          },
+        },
+        {
+          _tag: 'Feedback',
+          name: 'other',
+          tool: makeFeedbackTool('calendar.other'),
+        },
+      ],
+    })
+    const compileFailure = yield* calendar.publishSnapshot(invalidXml).pipe(Effect.flip)
+    expect(compileFailure).toMatchObject({
+      _tag: 'RoleResponseEnvelopeCompileError',
+      reason: 'template-tool-mismatch',
+      toolId: 'calendar.replace',
+    })
+    const unchanged = yield* registry.snapshot()
+    expect(unchanged.actionTools.map((tool) => tool.id)).toEqual([
+      'calendar.create',
+      'calendar.sub.create',
+    ])
+    expect(unchanged.feedbackTools.map((tool) => tool.id)).toEqual(['calendar.lookup'])
   }).pipe(Effect.provide(CapabilityRegistry.layer)),
 )
 

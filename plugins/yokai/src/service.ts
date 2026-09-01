@@ -6,6 +6,7 @@ import {
   EngagementLease,
   type CapabilityRegistration as CoreCapabilityRegistration,
   type AdapterRegistration as CoreAdapterRegistration,
+  type McpServerRegistration as CoreMcpServerRegistration,
   HostConfiguration,
   HostModelSelection,
   HostSession,
@@ -30,6 +31,7 @@ import type {
   ContextProvider,
   FeedbackTool,
   McpServer,
+  McpServerRegistration,
   PresetSource,
   PresetId,
   PresetRegistration,
@@ -237,6 +239,17 @@ export class Yokai extends Service<Config> implements YokaiCapabilityHost {
     }
   }
 
+  private bindMcpServerRegistration(
+    owner: Context,
+    registration: CoreMcpServerRegistration,
+  ): McpServerRegistration {
+    return {
+      unregister: this.bindUnregister(owner, registration),
+      publishSnapshot: (snapshot) =>
+        this.effectRuntime.runPromise(registration.publishSnapshot(snapshot)),
+    }
+  }
+
   private bindPresetRegistration(
     owner: Context,
     capabilityRegistration: CoreCapabilityRegistration,
@@ -325,12 +338,12 @@ export class Yokai extends Service<Config> implements YokaiCapabilityHost {
     )
   }
 
-  registerMcpServer(capability: McpServer): Promise<CapabilityRegistration> {
+  registerMcpServer(capability: McpServer): Promise<McpServerRegistration> {
     const owner = this[Context.current]
-    return this.registerCapability(
-      owner,
+    return this.effectRuntime.runPromise(
       CapabilityRegistry.Service.pipe(
         Effect.flatMap((registry) => registry.registerMcpServer(capability)),
+        Effect.map((registration) => this.bindMcpServerRegistration(owner, registration)),
       ),
     )
   }

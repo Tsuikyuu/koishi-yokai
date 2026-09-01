@@ -1,23 +1,37 @@
 import {
+  type ActionToolId,
   AdapterId,
   type AdapterModelSnapshot,
   type AdapterProtocolVersionMismatchError,
   type DiscoveredModel,
+  type FeedbackToolId,
+  type McpServerId,
+  McpServerSnapshot,
   ModelReference,
   type YokaiAdapter,
   negotiateAdapterProtocol,
 } from 'yokai-protocol'
 import { RoleResponseEnvelope } from '@yokai-internal/mind'
-import { Context, Effect, FiberMap, Layer, Option, Schema, Stream, SubscriptionRef } from 'effect'
+import {
+  Context,
+  Data,
+  Effect,
+  FiberMap,
+  Layer,
+  Option,
+  Schema,
+  Stream,
+  SubscriptionRef,
+} from 'effect'
 
 import {
   type ActionTool,
   ContextProvider,
   FeedbackTool,
-  type McpServer,
+  McpServer,
   type PresetSource,
   type ResponseMechanism,
-  type Skill,
+  Skill,
 } from './capability'
 import {
   type AdapterDiscoveryStatus,
@@ -83,6 +97,24 @@ export interface AdapterRegistration extends CapabilityRegistration {
   readonly publishModels: (snapshot: AdapterModelSnapshot) => Effect.Effect<boolean>
 }
 
+export interface McpServerRegistration extends CapabilityRegistration {
+  /** Returns false when this registration generation is stale or revision is not newer. */
+  readonly publishSnapshot: (
+    snapshot: McpServerSnapshot,
+  ) => Effect.Effect<
+    boolean,
+    | CapabilityConflictError
+    | CapabilityRegistrationValidationError
+    | RoleResponseEnvelope.CompileError
+  >
+}
+
+export interface McpProjectionSource {
+  readonly serverId: McpServerId
+  readonly actionToolIds: ReadonlyArray<ActionToolId>
+  readonly feedbackToolIds: ReadonlyArray<FeedbackToolId>
+}
+
 export interface TurnCapabilitySnapshot {
   readonly revision: CapabilityRegistryRevision
   readonly adapters: ReadonlyArray<YokaiAdapter>
@@ -91,6 +123,7 @@ export interface TurnCapabilitySnapshot {
   readonly feedbackTools: ReadonlyArray<FeedbackTool>
   readonly skills: ReadonlyArray<Skill>
   readonly mcpServers: ReadonlyArray<McpServer>
+  readonly mcpProjectionSources: ReadonlyArray<McpProjectionSource>
   readonly presetSources: ReadonlyArray<PresetSource>
   readonly responseMechanisms: ReadonlyArray<ResponseMechanism>
   readonly modelCatalog: ModelCatalogSnapshot
@@ -129,10 +162,16 @@ export interface Interface {
   >
   readonly registerSkill: (
     capability: Skill,
-  ) => Effect.Effect<CapabilityRegistration, CapabilityConflictError>
+  ) => Effect.Effect<
+    CapabilityRegistration,
+    CapabilityConflictError | CapabilityRegistrationValidationError
+  >
   readonly registerMcpServer: (
     capability: McpServer,
-  ) => Effect.Effect<CapabilityRegistration, CapabilityConflictError>
+  ) => Effect.Effect<
+    McpServerRegistration,
+    CapabilityConflictError | CapabilityRegistrationValidationError
+  >
   readonly registerPresetSource: (
     capability: PresetSource,
   ) => Effect.Effect<CapabilityRegistration, CapabilityConflictError>
@@ -168,6 +207,12 @@ interface RegisteredAdapterModels {
   readonly snapshot: Option.Option<AdapterModelSnapshot>
 }
 
+interface RegisteredMcpServerSnapshot {
+  readonly key: number
+  readonly serverId: McpServerId
+  readonly snapshot: Option.Option<McpServerSnapshot>
+}
+
 interface RegistryState {
   readonly revision: CapabilityRegistryRevision
   readonly nextRegistrationKey: number
@@ -177,6 +222,7 @@ interface RegistryState {
   readonly feedbackTools: ReadonlyArray<Registered<FeedbackTool>>
   readonly skills: ReadonlyArray<Registered<Skill>>
   readonly mcpServers: ReadonlyArray<Registered<McpServer>>
+  readonly mcpServerSnapshots: ReadonlyArray<RegisteredMcpServerSnapshot>
   readonly presetSources: ReadonlyArray<Registered<PresetSource>>
   readonly responseMechanisms: ReadonlyArray<Registered<ResponseMechanism>>
   readonly adapterModels: ReadonlyArray<RegisteredAdapterModels>
@@ -192,6 +238,7 @@ const initialState = (): RegistryState => ({
   feedbackTools: [],
   skills: [],
   mcpServers: [],
+  mcpServerSnapshots: [],
   presetSources: [],
   responseMechanisms: [],
   adapterModels: [],
@@ -292,6 +339,81 @@ const withAdapterModels = (
 const statusForSnapshot = (snapshot: AdapterModelSnapshot): AdapterDiscoveryStatus =>
   snapshot.models.some((model) => model.discoveryFreshness === 'stale') ? 'stale' : 'ready'
 
+interface McpProjectedTools {
+  readonly actionTools: ReadonlyArray<ActionTool>
+  readonly feedbackTools: ReadonlyArray<FeedbackTool>
+}
+
+const EMPTY_MCP_PROJECTED_TOOLS: McpProjectedTools = {
+  actionTools: [],
+  feedbackTools: [],
+}
+
+const projectedTools = (snapshot: McpServerSnapshot): McpProjectedTools =>
+  snapshot._tag === 'Disconnected'
+    ? EMPTY_MCP_PROJECTED_TOOLS
+    : {
+        actionTools: snapshot.projections.flatMap((projection): ReadonlyArray<ActionTool> =>
+          projection._tag === 'Action' ? [projection.tool] : [],
+        ),
+        feedbackTools: snapshot.projections.flatMap((projection): ReadonlyArray<FeedbackTool> =>
+          projection._tag === 'Feedback' ? [projection.tool] : [],
+        ),
+      }
+
+const projectedToolsFromContribution = (
+  contribution: RegisteredMcpServerSnapshot,
+): McpProjectedTools =>
+  Option.match(contribution.snapshot, {
+    onNone: () => EMPTY_MCP_PROJECTED_TOOLS,
+    onSome: projectedTools,
+  })
+
+const mcpActionTools = (
+  contributions: ReadonlyArray<RegisteredMcpServerSnapshot>,
+  excludedKey: number | undefined,
+): ReadonlyArray<ActionTool> =>
+  contributions
+    .filter((contribution) => (excludedKey === undefined ? true : contribution.key !== excludedKey))
+    .flatMap((contribution) => projectedToolsFromContribution(contribution).actionTools)
+
+const mcpFeedbackTools = (
+  contributions: ReadonlyArray<RegisteredMcpServerSnapshot>,
+  excludedKey: number | undefined,
+): ReadonlyArray<FeedbackTool> =>
+  contributions
+    .filter((contribution) => (excludedKey === undefined ? true : contribution.key !== excludedKey))
+    .flatMap((contribution) => projectedToolsFromContribution(contribution).feedbackTools)
+
+const projectionSource = (
+  contribution: RegisteredMcpServerSnapshot,
+): ReadonlyArray<McpProjectionSource> =>
+  Option.match(contribution.snapshot, {
+    onNone: () => [],
+    onSome: (snapshot) => {
+      if (snapshot._tag === 'Disconnected') return []
+      const tools = projectedTools(snapshot)
+      return [
+        {
+          serverId: snapshot.serverId,
+          actionToolIds: tools.actionTools.map((tool) => tool.id),
+          feedbackToolIds: tools.feedbackTools.map((tool) => tool.id),
+        },
+      ]
+    },
+  })
+
+type McpPublishOutcome = Data.TaggedEnum<{
+  Published: {}
+  Ignored: {}
+  Conflict: {
+    readonly domain: CapabilityDomain
+    readonly id: string
+  }
+}>
+
+const McpPublishOutcome = Data.taggedEnum<McpPublishOutcome>()
+
 const registerEntry = <A>(
   stateRef: SubscriptionRef.SubscriptionRef<RegistryState>,
   domain: CapabilityDomain,
@@ -300,10 +422,11 @@ const registerEntry = <A>(
   entriesOf: (state: RegistryState) => ReadonlyArray<Registered<A>>,
   entryId: (entry: A) => string,
   replaceEntries: (state: RegistryState, entries: ReadonlyArray<Registered<A>>) => RegistryState,
+  hasAdditionalConflict: (state: RegistryState, id: string) => boolean = () => false,
 ): Effect.Effect<number, CapabilityConflictError> =>
   SubscriptionRef.modifySome(stateRef, (state) => {
     const entries = entriesOf(state)
-    if (entries.some((entry) => entryId(entry.value) === id)) {
+    if (entries.some((entry) => entryId(entry.value) === id) || hasAdditionalConflict(state, id)) {
       return [Option.none<number>(), Option.none<RegistryState>()] as const
     }
 
@@ -346,6 +469,154 @@ const unregisterEntry = <A>(
       Option.some({ ...updated, revision: nextRegistryRevision(state.revision) }),
     ] as const
   })
+
+const decodeMcpServerSnapshot = Effect.fn('CapabilityRegistry.decodeMcpServerSnapshot')(function* (
+  serverId: McpServerId,
+  candidate: McpServerSnapshot,
+) {
+  const snapshot = yield* Schema.decodeUnknownEffect(McpServerSnapshot)(candidate).pipe(
+    Effect.mapError(
+      () =>
+        new CapabilityRegistrationValidationError({
+          domain: 'mcp-server',
+          id: serverId,
+        }),
+    ),
+  )
+  if (snapshot.serverId !== serverId) {
+    return yield* Effect.fail(
+      new CapabilityRegistrationValidationError({ domain: 'mcp-server', id: serverId }),
+    )
+  }
+  return snapshot
+})
+
+const validateMcpActionToolTemplates = Effect.fn(
+  'CapabilityRegistry.validateMcpActionToolTemplates',
+)(function* (snapshot: McpServerSnapshot) {
+  if (snapshot._tag === 'Disconnected') return
+  yield* Effect.forEach(snapshot.projections, (projection) =>
+    projection._tag === 'Action'
+      ? RoleResponseEnvelope.validateActionToolRegistration(projection.tool).pipe(Effect.asVoid)
+      : Effect.void,
+  )
+})
+
+const hasNewMcpSnapshotRevision = (
+  state: RegistryState,
+  key: number,
+  serverId: McpServerId,
+  snapshot: McpServerSnapshot,
+): boolean => {
+  const current = state.mcpServerSnapshots.find(
+    (entry) => entry.key === key && entry.serverId === serverId,
+  )
+  if (current === undefined) return false
+  return Option.match(current.snapshot, {
+    onNone: () => true,
+    onSome: (published) => snapshot.revision > published.revision,
+  })
+}
+
+interface McpProjectionConflict {
+  readonly domain: CapabilityDomain
+  readonly id: string
+}
+
+const firstProjectionConflict = (
+  state: RegistryState,
+  key: number,
+  snapshot: McpServerSnapshot,
+): McpProjectionConflict | undefined => {
+  const projected = projectedTools(snapshot)
+  const existingActionTools = [
+    ...state.actionTools.map((entry) => entry.value),
+    ...mcpActionTools(state.mcpServerSnapshots, key),
+  ]
+  const actionConflict = projected.actionTools.find((tool) =>
+    existingActionTools.some((existing) => existing.id === tool.id),
+  )
+  if (actionConflict !== undefined) {
+    return { domain: 'action-tool', id: actionConflict.id }
+  }
+
+  const existingFeedbackTools = [
+    ...state.feedbackTools.map((entry) => entry.value),
+    ...mcpFeedbackTools(state.mcpServerSnapshots, key),
+  ]
+  const feedbackConflict = projected.feedbackTools.find((tool) =>
+    existingFeedbackTools.some((existing) => existing.id === tool.id),
+  )
+  return feedbackConflict === undefined
+    ? undefined
+    : { domain: 'feedback-tool', id: feedbackConflict.id }
+}
+
+const publishMcpServerSnapshot = Effect.fn('CapabilityRegistry.publishMcpServerSnapshot')(
+  function* (
+    stateRef: SubscriptionRef.SubscriptionRef<RegistryState>,
+    key: number,
+    serverId: McpServerId,
+    candidate: McpServerSnapshot,
+  ) {
+    const snapshot = yield* decodeMcpServerSnapshot(serverId, candidate)
+    if (!hasNewMcpSnapshotRevision(yield* SubscriptionRef.get(stateRef), key, serverId, snapshot)) {
+      return false
+    }
+    yield* validateMcpActionToolTemplates(snapshot)
+    const outcome = yield* SubscriptionRef.modifySome<RegistryState, McpPublishOutcome>(
+      stateRef,
+      (state) => {
+        if (!hasNewMcpSnapshotRevision(state, key, serverId, snapshot)) {
+          return [McpPublishOutcome.Ignored(), Option.none<RegistryState>()] as const
+        }
+
+        const conflict = firstProjectionConflict(state, key, snapshot)
+        if (conflict !== undefined) {
+          return [McpPublishOutcome.Conflict(conflict), Option.none<RegistryState>()] as const
+        }
+
+        const mcpServerSnapshots = state.mcpServerSnapshots.map((entry) =>
+          entry.key === key ? { ...entry, snapshot: Option.some(snapshot) } : entry,
+        )
+        return [
+          McpPublishOutcome.Published(),
+          Option.some({
+            ...state,
+            revision: nextRegistryRevision(state.revision),
+            mcpServerSnapshots,
+          }),
+        ] as const
+      },
+    )
+
+    return yield* McpPublishOutcome.$match(outcome, {
+      Published: () => Effect.succeed(true),
+      Ignored: () => Effect.succeed(false),
+      Conflict: ({ domain, id }) => Effect.fail(new CapabilityConflictError({ domain, id })),
+    })
+  },
+)
+
+const unregisterMcpServer = Effect.fn('CapabilityRegistry.unregisterMcpServer')(function* (
+  stateRef: SubscriptionRef.SubscriptionRef<RegistryState>,
+  key: number,
+) {
+  return yield* SubscriptionRef.modifySome(stateRef, (state) => {
+    if (!state.mcpServers.some((entry) => entry.key === key)) {
+      return [false, Option.none<RegistryState>()] as const
+    }
+    return [
+      true,
+      Option.some({
+        ...state,
+        revision: nextRegistryRevision(state.revision),
+        mcpServers: state.mcpServers.filter((entry) => entry.key !== key),
+        mcpServerSnapshots: state.mcpServerSnapshots.filter((entry) => entry.key !== key),
+      }),
+    ] as const
+  })
+})
 
 const unregisterAdapter = Effect.fn('CapabilityRegistry.unregisterAdapter')(function* (
   stateRef: SubscriptionRef.SubscriptionRef<RegistryState>,
@@ -529,16 +800,23 @@ const turnSnapshot = (state: RegistryState): TurnCapabilitySnapshot => ({
   revision: state.revision,
   adapters: state.adapters.map((entry) => entry.value),
   contextProviders: state.contextProviders.map((entry) => entry.value),
-  actionTools: state.actionTools.map((entry) => entry.value),
-  feedbackTools: state.feedbackTools.map((entry) => entry.value),
+  actionTools: [
+    ...state.actionTools.map((entry) => entry.value),
+    ...mcpActionTools(state.mcpServerSnapshots, undefined),
+  ],
+  feedbackTools: [
+    ...state.feedbackTools.map((entry) => entry.value),
+    ...mcpFeedbackTools(state.mcpServerSnapshots, undefined),
+  ],
   skills: state.skills.map((entry) => entry.value),
   mcpServers: state.mcpServers.map((entry) => entry.value),
+  mcpProjectionSources: state.mcpServerSnapshots.flatMap(projectionSource),
   presetSources: state.presetSources.map((entry) => entry.value),
   responseMechanisms: state.responseMechanisms.map((entry) => entry.value),
   modelCatalog: state.modelCatalog,
 })
 
-const candidateId = (candidate: ContextProvider | FeedbackTool): string =>
+const candidateId = (candidate: ContextProvider | FeedbackTool | Skill | McpServer): string =>
   typeof candidate === 'object' && candidate !== null && typeof candidate.id === 'string'
     ? candidate.id
     : 'registry'
@@ -629,6 +907,8 @@ const make = Effect.fn('CapabilityRegistry.make')(function* () {
       (state) => state.actionTools,
       (entry) => entry.id,
       (state, actionTools) => ({ ...state, actionTools }),
+      (state, id) =>
+        mcpActionTools(state.mcpServerSnapshots, undefined).some((tool) => tool.id === id),
     )
     return {
       unregister: () =>
@@ -661,6 +941,8 @@ const make = Effect.fn('CapabilityRegistry.make')(function* () {
       (state) => state.feedbackTools,
       (entry) => entry.id,
       (state, feedbackTools) => ({ ...state, feedbackTools }),
+      (state, id) =>
+        mcpFeedbackTools(state.mcpServerSnapshots, undefined).some((tool) => tool.id === id),
     )
     return {
       unregister: () =>
@@ -673,9 +955,16 @@ const make = Effect.fn('CapabilityRegistry.make')(function* () {
     } satisfies CapabilityRegistration
   })
 
-  const registerSkill = Effect.fn('CapabilityRegistry.registerSkill')(function* (
-    capability: Skill,
-  ) {
+  const registerSkill = Effect.fn('CapabilityRegistry.registerSkill')(function* (candidate: Skill) {
+    const capability = yield* Schema.decodeUnknownEffect(Skill)(candidate).pipe(
+      Effect.mapError(
+        () =>
+          new CapabilityRegistrationValidationError({
+            domain: 'skill',
+            id: candidateId(candidate),
+          }),
+      ),
+    )
     const key = yield* registerEntry(
       stateRef,
       'skill',
@@ -697,8 +986,17 @@ const make = Effect.fn('CapabilityRegistry.make')(function* () {
   })
 
   const registerMcpServer = Effect.fn('CapabilityRegistry.registerMcpServer')(function* (
-    capability: McpServer,
+    candidate: McpServer,
   ) {
+    const capability = yield* Schema.decodeUnknownEffect(McpServer)(candidate).pipe(
+      Effect.mapError(
+        () =>
+          new CapabilityRegistrationValidationError({
+            domain: 'mcp-server',
+            id: candidateId(candidate),
+          }),
+      ),
+    )
     const key = yield* registerEntry(
       stateRef,
       'mcp-server',
@@ -706,17 +1004,24 @@ const make = Effect.fn('CapabilityRegistry.make')(function* () {
       capability,
       (state) => state.mcpServers,
       (entry) => entry.id,
-      (state, mcpServers) => ({ ...state, mcpServers }),
+      (state, mcpServers) => ({
+        ...state,
+        mcpServers,
+        mcpServerSnapshots: [
+          ...state.mcpServerSnapshots,
+          {
+            key: state.nextRegistrationKey,
+            serverId: capability.id,
+            snapshot: Option.none<McpServerSnapshot>(),
+          },
+        ],
+      }),
     )
     return {
-      unregister: () =>
-        unregisterEntry(
-          stateRef,
-          key,
-          (state) => state.mcpServers,
-          (state, mcpServers) => ({ ...state, mcpServers }),
-        ),
-    } satisfies CapabilityRegistration
+      unregister: () => unregisterMcpServer(stateRef, key),
+      publishSnapshot: (snapshot) =>
+        publishMcpServerSnapshot(stateRef, key, capability.id, snapshot),
+    } satisfies McpServerRegistration
   })
 
   const registerPresetSource = Effect.fn('CapabilityRegistry.registerPresetSource')(function* (

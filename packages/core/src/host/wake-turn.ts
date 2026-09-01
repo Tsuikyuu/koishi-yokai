@@ -17,11 +17,13 @@ import {
   type FinalTextResult,
   type FocusMessage,
   type PresetId,
+  type ResponseMechanismId,
   type YokaiAdapter,
 } from 'yokai-protocol'
 import { Clock, Duration, Effect, Option, Schema } from 'effect'
 
 import { CapabilityRegistry } from '../capability-registry/index'
+import { CapabilitySelection } from '../capability-selection/index'
 import { PresetRegistry } from '../preset/index'
 import { RoleState } from '../role-state/index'
 import { ThreadTracker } from '../scene/index'
@@ -41,7 +43,6 @@ const MAX_OUTPUT_TOKENS = TokenLimit.make(1_024)
 const MAX_FEEDBACK_CALLS = 4
 const MAX_FEEDBACK_RESULT_TOKENS = 8_192
 const MAX_FEEDBACK_CONCURRENCY = 4
-const MAX_VISIBLE_FEEDBACK_TOOLS = 16
 export const MODEL_TURN_DEADLINE_MS = 45_000
 export const MAX_TURN_SYSTEM_INSTRUCTION_BYTES = RoleResponseEnvelope.MAX_SYSTEM_INSTRUCTION_BYTES
 
@@ -59,6 +60,7 @@ export interface Input {
   readonly scope: CapabilityScope
   readonly focus: FocusMessage
   readonly kind: WakeProposal.Kind
+  readonly responseMechanisms: ReadonlyArray<ResponseMechanismId>
   readonly submittedAt: WakeProposal.EpochMilliseconds
   readonly markDispatched: WakeArbiter.MarkDispatched
   readonly withLogicalCallReservation: WakeArbiter.WithLogicalCallReservation
@@ -201,7 +203,7 @@ const selectedFeedbackTools = Effect.fn('WakeTurn.selectedFeedbackTools')(functi
   )
   return visibility
     .filter((entry) => entry.available)
-    .slice(0, MAX_VISIBLE_FEEDBACK_TOOLS)
+    .slice(0, CapabilitySelection.MAX_SELECTED_FEEDBACK_TOOLS)
     .map((entry) => entry.tool)
 })
 
@@ -258,6 +260,15 @@ export const run = Effect.fn('WakeTurn.run')(function* (input: Input) {
         ),
       ),
   })
+  const capabilitySelection = CapabilitySelection.select({
+    capabilities: capabilitySnapshot,
+    visibility: configuration.capabilityVisibility,
+    preset,
+    scope,
+    focus,
+    eventKind: input.kind,
+    responseMechanisms: input.responseMechanisms,
+  })
 
   const channelBuffer = yield* ChannelMessageBuffer.Service
   const turnSnapshot = yield* channelBuffer.snapshot(
@@ -270,7 +281,7 @@ export const run = Effect.fn('WakeTurn.run')(function* (input: Input) {
   )
   const assembledContext = removeFullyBufferedContext(
     yield* ContextAssembly.collect({
-      providers: capabilitySnapshot.contextProviders,
+      providers: capabilitySelection.contextProviders,
       scope,
       focus: turnSnapshot.focus,
     }),
@@ -285,21 +296,26 @@ export const run = Effect.fn('WakeTurn.run')(function* (input: Input) {
   const feedbackTools = yield* selectedFeedbackTools(
     configuration.feedbackToolsEnabled,
     selected.adapter.descriptor.capabilities.feedbackTools,
-    capabilitySnapshot.feedbackTools,
+    capabilitySelection.feedbackTools,
     scope,
   )
   const presetInstruction = Option.match(preset, {
     onNone: () => '',
     onSome: (snapshot) => `${snapshot.compiledPrompt}\n\n`,
   })
+  const skillInstruction =
+    capabilitySelection.skillSystemInstruction.length === 0
+      ? ''
+      : `${capabilitySelection.skillSystemInstruction}\n\n`
+  const instructionPrefix = presetInstruction + skillInstruction
   const responseProtocol = yield* RoleResponseEnvelope.compileBounded(
-    capabilitySnapshot.actionTools,
+    capabilitySelection.actionTools,
     scope,
-    Math.max(0, MAX_TURN_SYSTEM_INSTRUCTION_BYTES - Buffer.byteLength(presetInstruction, 'utf8')),
+    Math.max(0, MAX_TURN_SYSTEM_INSTRUCTION_BYTES - Buffer.byteLength(instructionPrefix, 'utf8')),
   )
   const request = GenerateRequest.make({
     modelId: selected.reference.modelId,
-    systemInstruction: presetInstruction + responseProtocol.systemInstruction,
+    systemInstruction: instructionPrefix + responseProtocol.systemInstruction,
     messages,
     limits: { maxOutputTokens: MAX_OUTPUT_TOKENS },
     feedbackTools: feedbackTools.map(feedbackToolDeclaration),
@@ -408,6 +424,13 @@ export const makeExecutor = Effect.fn('WakeTurn.makeExecutor')(function* (
         scope: proposal.scope,
         focus: proposal.focus,
         kind: proposal.kind,
+        responseMechanisms: [
+          proposal.primaryReason.mechanismId,
+          ...proposal.additionalReasons
+            .map((reason) => reason.mechanismId)
+            .filter((mechanismId, index, mechanisms) => mechanisms.indexOf(mechanismId) === index)
+            .filter((mechanismId) => mechanismId !== proposal.primaryReason.mechanismId),
+        ],
         submittedAt: proposal.submittedAt,
         markDispatched,
         withLogicalCallReservation,

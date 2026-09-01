@@ -50,6 +50,7 @@ it.effect('decodes ContextProvider duration, availability, and provide contracts
   Effect.gen(function* () {
     const provider = yield* Schema.decodeUnknownEffect(ContextProvider)(definition)
     expect(provider.maxDurationMs).toBe(50)
+    expect(provider.selection).toEqual({ _tag: 'Always' })
     expect(provider.isAvailable(SCOPE)).toBe(true)
 
     const fragment = yield* provider.provide(
@@ -67,6 +68,42 @@ it.effect('decodes ContextProvider duration, availability, and provide contracts
     if (Option.isNone(fragment)) return yield* Effect.die('Expected a context fragment')
     expect(fragment.value.content).toBe('bounded context')
   }),
+)
+
+it.effect('decodes explicit local ContextProvider selection criteria', () =>
+  Effect.gen(function* () {
+    const provider = yield* Schema.decodeUnknownEffect(ContextProvider)({
+      ...definition,
+      selection: {
+        _tag: 'MatchAny',
+        keywords: ['schedule'],
+        responseMechanisms: ['direct'],
+        skills: ['calendar'],
+      },
+    })
+
+    expect(provider.selection).toEqual({
+      _tag: 'MatchAny',
+      keywords: ['schedule'],
+      responseMechanisms: ['direct'],
+      skills: ['calendar'],
+    })
+  }),
+)
+
+it.effect('rejects a ContextProvider MatchAny selection without criteria', () =>
+  Schema.decodeUnknownEffect(ContextProvider)({
+    ...definition,
+    selection: {
+      _tag: 'MatchAny',
+      keywords: [],
+      responseMechanisms: [],
+      skills: [],
+    },
+  }).pipe(
+    Effect.result,
+    Effect.map((result) => expect(Result.isFailure(result)).toBe(true)),
+  ),
 )
 
 it.effect('rejects invalid ContextProvider duration and function contracts', () =>

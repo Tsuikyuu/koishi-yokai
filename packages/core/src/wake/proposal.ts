@@ -1,4 +1,9 @@
-import { CapabilityScope, FocusMessage, ResponseMechanismId } from 'yokai-protocol'
+import {
+  CapabilityEventKind,
+  CapabilityScope,
+  FocusMessage,
+  ResponseMechanismId,
+} from 'yokai-protocol'
 import { Schema } from 'effect'
 
 import { Category } from '../call-budget/model'
@@ -46,7 +51,7 @@ export const CooldownPolicy = Schema.Literals(['bypass', 'enforce'])
 
 export type CooldownPolicy = typeof CooldownPolicy.Type
 
-export const Kind = Schema.Literals(['direct', 'activity', 'engagement', 'schedule', 'initiative'])
+export const Kind = CapabilityEventKind
 
 export type Kind = typeof Kind.Type
 
