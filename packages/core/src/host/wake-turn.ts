@@ -61,6 +61,7 @@ export interface Input {
   readonly focus: FocusMessage
   readonly kind: WakeProposal.Kind
   readonly responseMechanisms: ReadonlyArray<ResponseMechanismId>
+  readonly initiativeAudit: Option.Option<WakeProposal.InitiativeAudit>
   readonly submittedAt: WakeProposal.EpochMilliseconds
   readonly markDispatched: WakeArbiter.MarkDispatched
   readonly withLogicalCallReservation: WakeArbiter.WithLogicalCallReservation
@@ -95,6 +96,39 @@ interface GenerationReport {
   readonly path: 'single-pass' | 'bounded-feedback'
   readonly logicalGenerations: 1 | 2
   readonly modelDurationMs: number
+}
+
+const INITIATIVE_SYSTEM_INSTRUCTION = [
+  'The host has opened a low-frequency initiative opportunity based on audited local social state.',
+  'The focus message is context, not a request that must be answered.',
+  'You may speak naturally or return silence.',
+].join(' ')
+
+const renderInitiativeSystemInstruction = (
+  audit: Option.Option<WakeProposal.InitiativeAudit>,
+): string =>
+  [
+    INITIATIVE_SYSTEM_INSTRUCTION,
+    Option.match(audit, {
+      onNone: () => 'No topic or message text has been selected for you by the host.',
+      onSome: (evidence) => {
+        switch (evidence._tag) {
+          case 'UnfinishedTopic':
+            return `The audited motive is to follow up unfinished thread ${JSON.stringify(evidence.threadId)} from the role state. If you speak, follow up that item; otherwise remain silent.`
+          case 'RelevantRecentContent':
+            return `The audited motive is locally relevant recent content anchored by message ${JSON.stringify(evidence.sourceMessageId)}. If you speak, respond naturally to that context; otherwise remain silent.`
+          case 'IntrinsicOpportunity':
+            return 'The audited motive is role-intrinsic. No topic or message text has been selected for you by the host; choose freely from the persona and current context, or remain silent.'
+        }
+      },
+    }),
+  ].join(' ')
+
+const initiativeThreadIdOf = (
+  audit: Option.Option<WakeProposal.InitiativeAudit>,
+): Option.Option<ThreadScene.ThreadId> => {
+  if (Option.isNone(audit) || audit.value._tag !== 'UnfinishedTopic') return Option.none()
+  return Option.some(audit.value.threadId)
 }
 
 const renderFocusMessage = (focus: FocusMessage): string =>
@@ -307,7 +341,11 @@ export const run = Effect.fn('WakeTurn.run')(function* (input: Input) {
     capabilitySelection.skillSystemInstruction.length === 0
       ? ''
       : `${capabilitySelection.skillSystemInstruction}\n\n`
-  const instructionPrefix = presetInstruction + skillInstruction
+  const initiativeInstruction =
+    input.kind === 'initiative'
+      ? `${renderInitiativeSystemInstruction(input.initiativeAudit)}\n\n`
+      : ''
+  const instructionPrefix = presetInstruction + skillInstruction + initiativeInstruction
   const responseProtocol = yield* RoleResponseEnvelope.compileBounded(
     capabilitySelection.actionTools,
     scope,
@@ -372,7 +410,10 @@ export const run = Effect.fn('WakeTurn.run')(function* (input: Input) {
             focusMessageId: focus.messageId,
             kind: input.kind,
             submittedAt: input.submittedAt,
-            threadId: Option.map(scene, (value) => value.thread.id),
+            threadId:
+              input.kind === 'initiative'
+                ? initiativeThreadIdOf(input.initiativeAudit)
+                : Option.map(scene, (value) => value.thread.id),
             sentSegments: RoleStateModel.SentSegmentCount.make(1),
           })
           .pipe(Effect.catch(() => Effect.void)),
@@ -431,6 +472,10 @@ export const makeExecutor = Effect.fn('WakeTurn.makeExecutor')(function* (
             .filter((mechanismId, index, mechanisms) => mechanisms.indexOf(mechanismId) === index)
             .filter((mechanismId) => mechanismId !== proposal.primaryReason.mechanismId),
         ],
+        initiativeAudit:
+          proposal.kind === 'initiative'
+            ? Option.fromUndefinedOr(proposal.primaryReason.initiativeAudit)
+            : Option.none(),
         submittedAt: proposal.submittedAt,
         markDispatched,
         withLogicalCallReservation,

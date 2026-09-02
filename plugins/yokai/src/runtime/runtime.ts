@@ -8,6 +8,7 @@ import {
   EngagementLease,
   HostConfiguration,
   HostSession,
+  InitiativeResponseMechanism,
   PresetRegistry,
   RoleState,
   ScheduledDelivery,
@@ -32,6 +33,7 @@ export type Services =
   | DirectResponseMechanism.Service
   | EngagementLease.Service
   | HostConfiguration.Service
+  | InitiativeResponseMechanism.Service
   | MessageArchive.Service
   | MessageHistory.Service
   | Notebook.Service

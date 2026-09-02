@@ -352,7 +352,7 @@ it.effect('decodes exactly one selected model reference', () => {
 })
 
 it.effect(
-  'registers direct, activity, engagement, and schedule as built-in response mechanisms',
+  'registers direct, activity, engagement, initiative, and schedule as built-in response mechanisms',
   () => {
     const ctx = new Context()
     const service = new TestYokai(ctx, DEFAULT_CONFIG)
@@ -363,11 +363,24 @@ it.effect(
         'activity',
         'direct',
         'engagement',
+        'initiative',
         'schedule',
       ])
     }).pipe(Effect.ensuring(stop(ctx)))
   },
 )
+
+it.effect('hides the initiative response mechanism when proactive speech is disabled', () => {
+  const ctx = new Context()
+  const service = new TestYokai(ctx, {
+    ...DEFAULT_CONFIG,
+    initiative: { enabled: false },
+  })
+
+  return Effect.gen(function* () {
+    expect(yield* Effect.promise(() => service.responseMechanismIds())).not.toContain('initiative')
+  }).pipe(Effect.ensuring(stop(ctx)))
+})
 
 it.effect('hides the schedule response mechanism when persistent scheduling is disabled', () => {
   const ctx = new Context()

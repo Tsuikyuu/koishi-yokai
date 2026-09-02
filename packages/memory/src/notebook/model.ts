@@ -147,6 +147,23 @@ export const RecallRequest = Schema.Struct({
 
 export interface RecallRequest extends Schema.Schema.Type<typeof RecallRequest> {}
 
+export const EvidenceRequest = Schema.Struct({
+  scope: ChannelScope,
+  kind: NoteKind,
+  limit: RecallLimit,
+})
+
+export interface EvidenceRequest extends Schema.Schema.Type<typeof EvidenceRequest> {}
+
+/** Content-free proof that a recallable note exists in the requested channel scope. */
+export const NoteEvidence = Schema.Struct({
+  noteId: NoteId,
+  kind: NoteKind,
+  createdAt: Timestamp,
+})
+
+export interface NoteEvidence extends Schema.Schema.Type<typeof NoteEvidence> {}
+
 export const RecalledNote = Schema.Struct({
   note: Note,
   uncertain: Schema.Boolean,

@@ -40,6 +40,19 @@ XML，空闲到期、达到绝对期限、轮数用尽、转话题、插件停�
 `engagement.enabled` 默认开启，`idleTtlMs` 默认 `90000`、`maxDurationMs` 默认 `300000`、
 `maxRounds` 默认 `8`，并要求两个时间均为正整数且空闲 TTL 不大于绝对期限。
 
+受限群聊主动发言默认开启。每个频道最后一条有效消息后先等待
+`initiative.quietPeriodMs`（默认 `600000` ms），并且距离最近一次已受理角色回合至少经过
+`initiative.channelCooldownMs`（默认 `1800000` ms），才会评估未完话题、高相关近期内容或角色内生机会。
+近期内容默认只考虑 `initiative.recentWindowMs=1800000` ms 内且本地相关度不低于
+`initiative.recentRelevanceThreshold=0.75` 的候选。候选相关成员中至少一人的熟悉度必须达到
+`initiative.relationshipThreshold=0.10`，角色社交精力不得低于 `initiative.minSocialEnergy=0.60`，
+近期参与压力不得高于 `initiative.maxRecentParticipation=0.35`，并且 `background` minute/day 预算仍有余量。
+
+角色内生机会只根据人格兴趣、当前状态或已有且仍可召回的 `self` 笔记提供一次自由发言或保持沉默的机会，
+不会由宿主预写主题或正文；提案仅保留来源类别、版本和 ID 等不含正文的审计证据。这类机会之间默认至少间隔
+`initiative.intrinsicIntervalMs=21600000` ms。关闭 `initiative.enabled` 只停止创建新的主动机会，不影响存档、
+普通唤醒、关系或记忆。MVP 不提供主动私聊开关，私聊始终不会创建 initiative 回合。
+
 持久化定时任务默认启用。每次生成前，`schedule` ContextProvider 都会提供宿主当前时间、当地日期和
 配置的 IANA 时区，并最多注入 8 项相关待办；模型可用只读 `schedule.query` FeedbackTool 扩大查询，
 查询结果只进入唯一一次后续生成。写入只允许最终 XML 中的 `schedule.create`、`schedule.update` 和

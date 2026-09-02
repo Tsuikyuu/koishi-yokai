@@ -6,7 +6,9 @@ import { MessageArchiveStorage } from '../message-archive/storage'
 import { NotebookIdentity } from './identity'
 import {
   type ExpirationDays,
+  type EvidenceRequest,
   Note,
+  NoteEvidence,
   type NotesPerReply,
   RecallQuery,
   type RecallLimit,
@@ -16,6 +18,7 @@ import {
   type WriteReport,
   emptyWriteReport,
   isActive,
+  isRecallable,
 } from './model'
 import { NotebookRanking } from './ranking'
 import { NotebookStorage } from './storage'
@@ -59,6 +62,12 @@ export interface Interface {
     ReadonlyArray<RecalledNote>,
     NotebookStorage.StorageError | InstanceScopeMismatchError
   >
+  readonly findRecallableEvidence: (
+    request: EvidenceRequest,
+  ) => Effect.Effect<
+    ReadonlyArray<NoteEvidence>,
+    NotebookStorage.StorageError | InstanceScopeMismatchError
+  >
 }
 
 export class Service extends Context.Service<Service, Interface>()('@yokai/memory/Notebook') {}
@@ -70,6 +79,17 @@ const ensureInstance = (
   configuredInstanceId === requestedInstanceId
     ? Effect.void
     : Effect.fail(new InstanceScopeMismatchError({ configuredInstanceId, requestedInstanceId }))
+
+const sameScope = (left: ChannelScope, right: ChannelScope): boolean =>
+  left.instanceId === right.instanceId &&
+  left.platform === right.platform &&
+  left.guildId === right.guildId &&
+  left.channelId === right.channelId
+
+const compareEvidenceNotes = (left: Note, right: Note): number =>
+  right.importance - left.importance ||
+  right.createdAt - left.createdAt ||
+  (left.noteId < right.noteId ? -1 : left.noteId > right.noteId ? 1 : 0)
 
 const defaultExpiration = (
   now: Timestamp,
@@ -211,7 +231,31 @@ export const layer = (options: Options) =>
         return NotebookRanking.select(notes, query).map((recalled) => RecalledNote.make(recalled))
       })
 
-      return Service.of({ write, recall })
+      const findRecallableEvidence = Effect.fn('Notebook.findRecallableEvidence')(function* (
+        request: EvidenceRequest,
+      ) {
+        yield* ensureInstance(options.instanceId, request.scope.instanceId)
+        const at = Timestamp.make(yield* Clock.currentTimeMillis)
+        const notes = yield* storage.query(request.scope)
+        return notes
+          .filter(
+            (note) =>
+              sameScope(note, request.scope) &&
+              note.kind === request.kind &&
+              isRecallable(note, at),
+          )
+          .sort(compareEvidenceNotes)
+          .slice(0, request.limit)
+          .map((note) =>
+            NoteEvidence.make({
+              noteId: note.noteId,
+              kind: note.kind,
+              createdAt: note.createdAt,
+            }),
+          )
+      })
+
+      return Service.of({ write, recall, findRecallableEvidence })
     }),
   )
 

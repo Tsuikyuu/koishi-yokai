@@ -23,6 +23,15 @@ import {
   DEFAULT_HARD_REPLY_ON_REPLY_TO_SELF,
   DEFAULT_HARD_REPLY_ROLE_NAME_CONTAINS,
   DEFAULT_HARD_REPLY_ROLE_NAME_PREFIX,
+  DEFAULT_INITIATIVE_CHANNEL_COOLDOWN_MS,
+  DEFAULT_INITIATIVE_ENABLED,
+  DEFAULT_INITIATIVE_INTRINSIC_INTERVAL_MS,
+  DEFAULT_INITIATIVE_MAX_RECENT_PARTICIPATION,
+  DEFAULT_INITIATIVE_MIN_SOCIAL_ENERGY,
+  DEFAULT_INITIATIVE_QUIET_PERIOD_MS,
+  DEFAULT_INITIATIVE_RECENT_RELEVANCE_THRESHOLD,
+  DEFAULT_INITIATIVE_RECENT_WINDOW_MS,
+  DEFAULT_INITIATIVE_RELATIONSHIP_THRESHOLD,
   DEFAULT_ENGAGEMENT_ENABLED,
   DEFAULT_ENGAGEMENT_IDLE_TTL_MS,
   DEFAULT_ENGAGEMENT_MAX_DURATION_MS,
@@ -50,7 +59,7 @@ import {
 } from '../src/config'
 import { schemaForCatalog } from '../src/model-catalog/schema-projection'
 
-it('keeps model, wake gating, engagement, schedules, budgets, storage, and notebook in main config', () => {
+it('keeps model, wake gating, engagement, initiative, schedules, budgets, storage, and notebook in main config', () => {
   expect(
     Config({
       model: 'gemini/gemini-2.5-flash',
@@ -72,6 +81,17 @@ it('keeps model, wake gating, engagement, schedules, budgets, storage, and noteb
       idleTtlMs: DEFAULT_ENGAGEMENT_IDLE_TTL_MS,
       maxDurationMs: DEFAULT_ENGAGEMENT_MAX_DURATION_MS,
       maxRounds: DEFAULT_ENGAGEMENT_MAX_ROUNDS,
+    },
+    initiative: {
+      enabled: DEFAULT_INITIATIVE_ENABLED,
+      quietPeriodMs: DEFAULT_INITIATIVE_QUIET_PERIOD_MS,
+      channelCooldownMs: DEFAULT_INITIATIVE_CHANNEL_COOLDOWN_MS,
+      intrinsicIntervalMs: DEFAULT_INITIATIVE_INTRINSIC_INTERVAL_MS,
+      recentWindowMs: DEFAULT_INITIATIVE_RECENT_WINDOW_MS,
+      recentRelevanceThreshold: DEFAULT_INITIATIVE_RECENT_RELEVANCE_THRESHOLD,
+      relationshipThreshold: DEFAULT_INITIATIVE_RELATIONSHIP_THRESHOLD,
+      minSocialEnergy: DEFAULT_INITIATIVE_MIN_SOCIAL_ENERGY,
+      maxRecentParticipation: DEFAULT_INITIATIVE_MAX_RECENT_PARTICIPATION,
     },
     notebook: {
       maxNotesPerReply: DEFAULT_NOTEBOOK_MAX_NOTES_PER_REPLY,
@@ -124,6 +144,7 @@ it('keeps model, wake gating, engagement, schedules, budgets, storage, and noteb
   const instanceId = fields.instanceId
   const messageRetentionDays = fields.messageRetentionDays
   const engagement = fields.engagement
+  const initiative = fields.initiative
   const notebook = fields.notebook
   const schedule = fields.schedule
   const presetId = fields.presetId
@@ -139,6 +160,7 @@ it('keeps model, wake gating, engagement, schedules, budgets, storage, and noteb
     instanceId === undefined ||
     messageRetentionDays === undefined ||
     engagement === undefined ||
+    initiative === undefined ||
     notebook === undefined ||
     schedule === undefined ||
     presetId === undefined ||
@@ -224,6 +246,98 @@ it('keeps model, wake gating, engagement, schedules, budgets, storage, and noteb
   expect(() => engagement({ idleTtlMs: 0 })).toThrow()
   expect(() => engagement({ maxDurationMs: 0 })).toThrow()
   expect(() => engagement({ maxRounds: 1.5 })).toThrow()
+  expect(
+    initiative({
+      enabled: false,
+      quietPeriodMs: 900_000,
+      recentRelevanceThreshold: 0.8,
+      relationshipThreshold: 0.2,
+    }),
+  ).toEqual({
+    enabled: false,
+    quietPeriodMs: 900_000,
+    channelCooldownMs: DEFAULT_INITIATIVE_CHANNEL_COOLDOWN_MS,
+    intrinsicIntervalMs: DEFAULT_INITIATIVE_INTRINSIC_INTERVAL_MS,
+    recentWindowMs: DEFAULT_INITIATIVE_RECENT_WINDOW_MS,
+    recentRelevanceThreshold: 0.8,
+    relationshipThreshold: 0.2,
+    minSocialEnergy: DEFAULT_INITIATIVE_MIN_SOCIAL_ENERGY,
+    maxRecentParticipation: DEFAULT_INITIATIVE_MAX_RECENT_PARTICIPATION,
+  })
+  const initiativeFields = initiative.dict
+  if (initiativeFields === undefined) {
+    throw new Error('Expected an initiative configuration schema')
+  }
+  const initiativeEnabled = initiativeFields.enabled
+  const quietPeriodMs = initiativeFields.quietPeriodMs
+  const channelCooldownMs = initiativeFields.channelCooldownMs
+  const intrinsicIntervalMs = initiativeFields.intrinsicIntervalMs
+  const recentWindowMs = initiativeFields.recentWindowMs
+  const recentRelevanceThreshold = initiativeFields.recentRelevanceThreshold
+  const relationshipThreshold = initiativeFields.relationshipThreshold
+  const minSocialEnergy = initiativeFields.minSocialEnergy
+  const maxRecentParticipation = initiativeFields.maxRecentParticipation
+  if (
+    initiativeEnabled === undefined ||
+    quietPeriodMs === undefined ||
+    channelCooldownMs === undefined ||
+    intrinsicIntervalMs === undefined ||
+    recentWindowMs === undefined ||
+    recentRelevanceThreshold === undefined ||
+    relationshipThreshold === undefined ||
+    minSocialEnergy === undefined ||
+    maxRecentParticipation === undefined
+  ) {
+    throw new Error('Expected all initiative configuration fields')
+  }
+  expect(initiativeEnabled.meta.default).toBe(DEFAULT_INITIATIVE_ENABLED)
+  expect(quietPeriodMs.meta).toMatchObject({
+    default: DEFAULT_INITIATIVE_QUIET_PERIOD_MS,
+    min: 60_000,
+    max: 24 * 60 * 60 * 1_000,
+  })
+  expect(channelCooldownMs.meta).toMatchObject({
+    default: DEFAULT_INITIATIVE_CHANNEL_COOLDOWN_MS,
+    min: 60_000,
+    max: 30 * 24 * 60 * 60 * 1_000,
+  })
+  expect(intrinsicIntervalMs.meta).toMatchObject({
+    default: DEFAULT_INITIATIVE_INTRINSIC_INTERVAL_MS,
+    min: 60 * 60 * 1_000,
+    max: 90 * 24 * 60 * 60 * 1_000,
+  })
+  expect(recentWindowMs.meta).toMatchObject({
+    default: DEFAULT_INITIATIVE_RECENT_WINDOW_MS,
+    min: 60_000,
+    max: 30 * 24 * 60 * 60 * 1_000,
+  })
+  expect(recentRelevanceThreshold.meta).toMatchObject({
+    default: DEFAULT_INITIATIVE_RECENT_RELEVANCE_THRESHOLD,
+    min: 0,
+    max: 1,
+  })
+  expect(relationshipThreshold.meta).toMatchObject({
+    default: DEFAULT_INITIATIVE_RELATIONSHIP_THRESHOLD,
+    min: 0,
+    max: 1,
+  })
+  expect(minSocialEnergy.meta).toMatchObject({
+    default: DEFAULT_INITIATIVE_MIN_SOCIAL_ENERGY,
+    min: 0,
+    max: 1,
+  })
+  expect(maxRecentParticipation.meta).toMatchObject({
+    default: DEFAULT_INITIATIVE_MAX_RECENT_PARTICIPATION,
+    min: 0,
+    max: 1,
+  })
+  expect(initiativeFields).not.toHaveProperty('allowDirectMessages')
+  expect(() => initiative({ quietPeriodMs: 59_999 })).toThrow()
+  expect(() => initiative({ intrinsicIntervalMs: 3_599_999 })).toThrow()
+  expect(() => initiative({ recentRelevanceThreshold: 1.01 })).toThrow()
+  expect(() => initiative({ relationshipThreshold: -0.01 })).toThrow()
+  expect(() => initiative({ minSocialEnergy: 1.01 })).toThrow()
+  expect(() => initiative({ maxRecentParticipation: -0.01 })).toThrow()
   expect(notebook({ recallLimit: 12 })).toEqual({
     maxNotesPerReply: DEFAULT_NOTEBOOK_MAX_NOTES_PER_REPLY,
     recallLimit: 12,
