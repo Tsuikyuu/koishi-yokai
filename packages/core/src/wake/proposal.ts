@@ -2,10 +2,14 @@ import {
   CapabilityEventKind,
   CapabilityScope,
   FocusMessage,
+  PresetVersion,
   ResponseMechanismId,
 } from 'yokai-protocol'
+import { NotebookModel } from '@yokai-internal/memory'
+import { RoleStateModel, ThreadScene } from '@yokai-internal/mind'
 import { Schema } from 'effect'
 
+import { ActivityGateValue } from '../activity-gating/index'
 import { Category } from '../call-budget/model'
 import type { ScheduledTaskModel } from '../schedule/model'
 
@@ -55,10 +59,46 @@ export const Kind = CapabilityEventKind
 
 export type Kind = typeof Kind.Type
 
+export const InitiativeIntrinsicSource = Schema.Literals([
+  'persona-interest',
+  'current-state',
+  'self-memory',
+])
+
+export type InitiativeIntrinsicSource = typeof InitiativeIntrinsicSource.Type
+
+/** Content-free evidence retained with an initiative reason for admission and audit. */
+export const InitiativeAudit = Schema.TaggedUnion({
+  UnfinishedTopic: {
+    threadId: ThreadScene.ThreadId,
+    stateUpdatedAt: RoleStateModel.EpochMilliseconds,
+  },
+  RelevantRecentContent: {
+    sourceMessageId: Schema.NonEmptyString,
+    score: ActivityGateValue.Score,
+  },
+  IntrinsicOpportunity: {
+    sources: Schema.Array(InitiativeIntrinsicSource).check(
+      Schema.isMinLength(1),
+      Schema.isMaxLength(3),
+      Schema.isUnique(),
+    ),
+    presetVersion: PresetVersion,
+    stateUpdatedAt: RoleStateModel.EpochMilliseconds,
+    selfNoteIds: Schema.Array(NotebookModel.NoteId).check(
+      Schema.isMaxLength(NotebookModel.MAX_RECALL_LIMIT),
+      Schema.isUnique(),
+    ),
+  },
+})
+
+export type InitiativeAudit = typeof InitiativeAudit.Type
+
 export const Reason = Schema.Struct({
   mechanismId: ResponseMechanismId,
   code: ReasonCode,
   priority: Priority,
+  initiativeAudit: Schema.optionalKey(InitiativeAudit),
 })
 
 export interface Reason extends Schema.Schema.Type<typeof Reason> {}
@@ -121,10 +161,15 @@ export const ACTIVITY_MECHANISM_ID = ResponseMechanismId.make('activity')
 export const ENGAGEMENT_MECHANISM_ID = ResponseMechanismId.make('engagement')
 export const ACTION_COMPLETION_MECHANISM_ID = ResponseMechanismId.make('action-completion')
 export const SCHEDULE_MECHANISM_ID = ResponseMechanismId.make('schedule')
+export const INITIATIVE_MECHANISM_ID = ResponseMechanismId.make('initiative')
 export const CHANNEL_CONVERSATION_MERGE_KEY = MergeKey.make('channel-conversation')
 export const ACTION_COMPLETION_MERGE_KEY = MergeKey.make('action-completion')
+export const INITIATIVE_MERGE_KEY = MergeKey.make('initiative-opportunity')
 export const ACTION_COMPLETION_REASON_CODE = ReasonCode.make('deferred-complete')
 export const SCHEDULE_REASON_CODE = ReasonCode.make('task-due')
+export const INITIATIVE_UNFINISHED_REASON_CODE = ReasonCode.make('unfinished-topic')
+export const INITIATIVE_RECENT_REASON_CODE = ReasonCode.make('relevant-recent-content')
+export const INITIATIVE_INTRINSIC_REASON_CODE = ReasonCode.make('intrinsic-opportunity')
 export const ACTION_COMPLETION_PRIORITY = Priority.make(5)
 export const SCHEDULE_PRIORITY = Priority.make(100)
 export const ACTION_COMPLETION_DEBOUNCE_MS = DurationMilliseconds.make(250)

@@ -18,6 +18,8 @@ import {
   SOURCE_ONE,
   SOURCE_THREE,
   SOURCE_TWO,
+  note,
+  noteId,
   objectId,
   proposal,
   topic,
@@ -76,6 +78,7 @@ const archiveLayer = Layer.succeed(
 interface TestStorageInterface extends NotebookStorage.Interface {
   readonly seed: (note: NotebookModel.Note) => Effect.Effect<void>
   readonly all: () => Effect.Effect<ReadonlyArray<NotebookModel.Note>>
+  readonly setLeakyQueries: (enabled: boolean) => Effect.Effect<void>
 }
 
 class TestStorage extends Context.Service<TestStorage, TestStorageInterface>()(
@@ -115,6 +118,7 @@ const storeResult = (
 const testStorageLayer = Layer.effectContext(
   Effect.gen(function* () {
     const notes = yield* Ref.make<ReadonlyArray<NotebookModel.Note>>([])
+    const leakyQueries = yield* Ref.make(false)
     const service = TestStorage.of({
       get: Effect.fn('NotebookTestStorage.get')(function* (scope, noteId) {
         return Option.fromUndefinedOr(
@@ -122,13 +126,17 @@ const testStorageLayer = Layer.effectContext(
         )
       }),
       query: Effect.fn('NotebookTestStorage.query')(function* (scope) {
-        return (yield* Ref.get(notes)).filter((note) => sameScope(note, scope))
+        const stored = yield* Ref.get(notes)
+        return (yield* Ref.get(leakyQueries))
+          ? stored
+          : stored.filter((note) => sameScope(note, scope))
       }),
       store: Effect.fn('NotebookTestStorage.store')(function* (note) {
         return yield* Ref.modify(notes, (current) => storeResult(current, note))
       }),
       seed: (note) => Ref.update(notes, (current) => [...current, note]),
       all: () => Ref.get(notes),
+      setLeakyQueries: (enabled) => Ref.set(leakyQueries, enabled),
     })
     return Context.empty().pipe(
       Context.add(NotebookStorage.Service, service),
@@ -321,4 +329,118 @@ it.effect('keeps channel retrieval isolated and rejects a foreign configured ins
       .pipe(Effect.flip)
     expect(failure._tag).toBe('NotebookInstanceScopeMismatchError')
   }).pipe(Effect.provide(notebookLayer)),
+)
+
+it.effect(
+  'returns only scoped recallable evidence without note bodies in deterministic order',
+  () =>
+    Effect.gen(function* () {
+      yield* TestClock.setTime(10_000)
+      const notebook = yield* Notebook.Service
+      const storage = yield* TestStorage
+      yield* Effect.forEach(
+        [
+          note({
+            noteId: noteId(4),
+            kind: 'self',
+            content: 'highest importance secret',
+            topics: [topic('highest-secret-topic')],
+            confidence: NotebookModel.LOW_CONFIDENCE_THRESHOLD,
+            importance: 0.9,
+            createdAt: 100,
+          }),
+          note({
+            noteId: noteId(3),
+            kind: 'self',
+            content: 'later lexical secret',
+            topics: [topic('later-secret-topic')],
+            confidence: 0.8,
+            importance: 0.8,
+            createdAt: 300,
+          }),
+          note({
+            noteId: noteId(2),
+            kind: 'self',
+            content: 'earlier lexical secret',
+            topics: [topic('earlier-secret-topic')],
+            confidence: 0.8,
+            importance: 0.8,
+            createdAt: 300,
+          }),
+          note({
+            noteId: noteId(5),
+            kind: 'fact',
+            content: 'wrong kind secret',
+            confidence: 1,
+            importance: 1,
+            createdAt: 500,
+          }),
+          note({
+            noteId: noteId(6),
+            kind: 'self',
+            content: 'low confidence secret',
+            confidence: NotebookModel.LOW_CONFIDENCE_THRESHOLD - 0.01,
+            importance: 1,
+            createdAt: 600,
+          }),
+          note({
+            noteId: noteId(7),
+            kind: 'self',
+            content: 'expired secret',
+            confidence: 1,
+            importance: 1,
+            createdAt: 700,
+            expiresAt: 10_000,
+          }),
+          note({
+            noteId: noteId(8),
+            kind: 'self',
+            content: 'superseded secret',
+            confidence: 1,
+            importance: 1,
+            createdAt: 800,
+            supersededByNoteId: noteId(9),
+          }),
+          note({
+            noteId: noteId(10),
+            scope: OTHER_CHANNEL_SCOPE,
+            kind: 'self',
+            content: 'foreign scope secret',
+            confidence: 1,
+            importance: 1,
+            createdAt: 900,
+          }),
+        ],
+        storage.seed,
+        { discard: true },
+      )
+      yield* storage.setLeakyQueries(true)
+
+      const evidence = yield* notebook.findRecallableEvidence(
+        NotebookModel.EvidenceRequest.make({
+          scope: SCOPE,
+          kind: 'self',
+          limit: NotebookModel.RecallLimit.make(3),
+        }),
+      )
+
+      expect(evidence).toEqual([
+        { noteId: noteId(4), kind: 'self', createdAt: 100 },
+        { noteId: noteId(2), kind: 'self', createdAt: 300 },
+        { noteId: noteId(3), kind: 'self', createdAt: 300 },
+      ])
+      expect(Object.keys(evidence[0] ?? {}).sort()).toEqual(['createdAt', 'kind', 'noteId'])
+      expect(JSON.stringify(evidence)).not.toContain('secret')
+
+      const foreignInstance = yield* notebook
+        .findRecallableEvidence(
+          NotebookModel.EvidenceRequest.make({
+            scope: OTHER_INSTANCE_SCOPE,
+            kind: 'self',
+            limit: NotebookModel.RecallLimit.make(1),
+          }),
+        )
+        .pipe(Effect.flip)
+      expect(foreignInstance._tag).toBe('NotebookInstanceScopeMismatchError')
+    }).pipe(Effect.provide(notebookLayer)),
 )

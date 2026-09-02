@@ -39,10 +39,12 @@ const CAPABILITY_SCOPE = CapabilityScope.make(SCOPE)
 const inertWrite = (): Effect.Effect<NotebookModel.WriteReport> =>
   Effect.succeed(NotebookModel.emptyWriteReport(0))
 
+const inertEvidence: Notebook.Interface['findRecallableEvidence'] = () => Effect.succeed([])
+
 const inertNotebook = (
   recall: Notebook.Interface['recall'],
   write: Notebook.Interface['write'] = inertWrite,
-): Notebook.Interface => ({ write, recall })
+): Notebook.Interface => ({ write, recall, findRecallableEvidence: inertEvidence })
 
 it.effect('renders bounded recalled notes with explicit certainty and source provenance', () =>
   Effect.gen(function* () {

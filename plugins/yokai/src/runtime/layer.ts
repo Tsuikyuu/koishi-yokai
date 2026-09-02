@@ -12,6 +12,7 @@ import {
   DirectResponseMechanism,
   EngagementLease,
   HostConfiguration,
+  InitiativeResponseMechanism,
   PresetRegistry,
   RoleState,
   ScheduledTask,
@@ -48,6 +49,15 @@ import {
   DEFAULT_ENGAGEMENT_MAX_DURATION_MS,
   DEFAULT_ENGAGEMENT_MAX_ROUNDS,
   DEFAULT_INSTANCE_ID,
+  DEFAULT_INITIATIVE_CHANNEL_COOLDOWN_MS,
+  DEFAULT_INITIATIVE_ENABLED,
+  DEFAULT_INITIATIVE_INTRINSIC_INTERVAL_MS,
+  DEFAULT_INITIATIVE_MAX_RECENT_PARTICIPATION,
+  DEFAULT_INITIATIVE_MIN_SOCIAL_ENERGY,
+  DEFAULT_INITIATIVE_QUIET_PERIOD_MS,
+  DEFAULT_INITIATIVE_RECENT_RELEVANCE_THRESHOLD,
+  DEFAULT_INITIATIVE_RECENT_WINDOW_MS,
+  DEFAULT_INITIATIVE_RELATIONSHIP_THRESHOLD,
   DEFAULT_VISIBLE_ACTION_TOOLS,
   DEFAULT_VISIBLE_FEEDBACK_TOOLS,
   DEFAULT_VISIBLE_MCP_SERVERS,
@@ -84,6 +94,7 @@ import { FilePresetStore } from '../preset/file-store'
 import { PresetEvents } from '../preset/events'
 import { KoishiRoleStateStorage } from '../role-state/index'
 import { BuiltinResponseCapabilities } from '../response/capabilities'
+import { KoishiInitiativeDelivery } from '../response/initiative-delivery'
 import { ScheduleCapabilityRegistration } from '../schedule/capabilities'
 import { KoishiScheduledDelivery } from '../schedule/delivery'
 import { KoishiScheduledTaskStorage } from '../schedule/index'
@@ -324,6 +335,61 @@ const wakeServicesLayer = (config: Config) => {
   return Layer.mergeAll(direct, engagement, activityServices)
 }
 
+const initiativeEnabled = (config: Config): boolean =>
+  config.initiative === undefined || config.initiative.enabled === undefined
+    ? DEFAULT_INITIATIVE_ENABLED
+    : config.initiative.enabled
+
+const decodeInitiativeOptions = Effect.fn('YokaiRuntime.decodeInitiativeOptions')(function* (
+  config: Config,
+) {
+  const configured = config.initiative
+  return yield* Schema.decodeUnknownEffect(InitiativeResponseMechanism.Options)({
+    enabled: initiativeEnabled(config),
+    quietPeriodMs: configuredNumber(
+      configured === undefined ? undefined : configured.quietPeriodMs,
+      DEFAULT_INITIATIVE_QUIET_PERIOD_MS,
+    ),
+    channelCooldownMs: configuredNumber(
+      configured === undefined ? undefined : configured.channelCooldownMs,
+      DEFAULT_INITIATIVE_CHANNEL_COOLDOWN_MS,
+    ),
+    intrinsicIntervalMs: configuredNumber(
+      configured === undefined ? undefined : configured.intrinsicIntervalMs,
+      DEFAULT_INITIATIVE_INTRINSIC_INTERVAL_MS,
+    ),
+    recentWindowMs: configuredNumber(
+      configured === undefined ? undefined : configured.recentWindowMs,
+      DEFAULT_INITIATIVE_RECENT_WINDOW_MS,
+    ),
+    recentRelevanceThreshold: configuredNumber(
+      configured === undefined ? undefined : configured.recentRelevanceThreshold,
+      DEFAULT_INITIATIVE_RECENT_RELEVANCE_THRESHOLD,
+    ),
+    relationshipThreshold: configuredNumber(
+      configured === undefined ? undefined : configured.relationshipThreshold,
+      DEFAULT_INITIATIVE_RELATIONSHIP_THRESHOLD,
+    ),
+    minSocialEnergy: configuredNumber(
+      configured === undefined ? undefined : configured.minSocialEnergy,
+      DEFAULT_INITIATIVE_MIN_SOCIAL_ENERGY,
+    ),
+    maxRecentParticipation: configuredNumber(
+      configured === undefined ? undefined : configured.maxRecentParticipation,
+      DEFAULT_INITIATIVE_MAX_RECENT_PARTICIPATION,
+    ),
+    debounceMs: 0,
+    proposalTtlMs: 60_000,
+  })
+})
+
+const initiativeLayer = (config: Config) =>
+  Layer.unwrap(
+    decodeInitiativeOptions(config).pipe(
+      Effect.map((options) => InitiativeResponseMechanism.layer(options)),
+    ),
+  )
+
 const decodeMessageArchiveOptions = Effect.fn('YokaiRuntime.decodeMessageArchiveOptions')(
   function* (config: Config) {
     const instanceId = yield* Schema.decodeUnknownEffect(MessageArchiveEvent.InstanceId)(
@@ -499,15 +565,21 @@ export const makeLayer = (config: Config, ctx: Context) => {
   const servicesWithScheduledDelivery = KoishiScheduledDelivery.layer(ctx).pipe(
     Layer.provideMerge(servicesWithScheduledTask),
   )
-  const servicesWithBuiltins = HistoryCapabilityRegistration.layer.pipe(
+  const servicesWithInitiativeDelivery = KoishiInitiativeDelivery.layer(ctx).pipe(
     Layer.provideMerge(servicesWithScheduledDelivery),
+  )
+  const servicesWithInitiative = initiativeLayer(config).pipe(
+    Layer.provideMerge(servicesWithInitiativeDelivery),
+  )
+  const servicesWithBuiltins = HistoryCapabilityRegistration.layer.pipe(
+    Layer.provideMerge(servicesWithInitiative),
   )
   const servicesWithNotebook = notebookCapabilitiesLayer(config).pipe(
     Layer.provideMerge(servicesWithBuiltins),
   )
-  const servicesWithAllBuiltins = BuiltinResponseCapabilities.layer.pipe(
-    Layer.provideMerge(servicesWithNotebook),
-  )
+  const servicesWithAllBuiltins = BuiltinResponseCapabilities.layer({
+    initiativeEnabled: initiativeEnabled(config),
+  }).pipe(Layer.provideMerge(servicesWithNotebook))
   const servicesWithScheduleCapabilities = scheduleEnabled(config)
     ? scheduleCapabilitiesLayer(config).pipe(Layer.provideMerge(servicesWithAllBuiltins))
     : servicesWithAllBuiltins

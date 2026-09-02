@@ -10,6 +10,7 @@ import {
   HostConfiguration,
   HostModelSelection,
   HostSession,
+  InitiativeResponseMechanism,
   PresetRegistry,
   RoleState,
   RoleStateSignals,
@@ -171,6 +172,15 @@ export class Yokai extends Service<Config> implements YokaiCapabilityHost {
         }).pipe(Effect.option)
         if (Option.isNone(localState)) return false
         const observedMessage = WakeMessage.withLocalState(observation, localState.value)
+        const initiativeMechanism = yield* InitiativeResponseMechanism.Service
+        yield* initiativeMechanism.observe(
+          InitiativeResponseMechanism.Observation.make({
+            message: observedMessage,
+            scene,
+            selfId: InitiativeResponseMechanism.SelfId.make(archived.value.message.selfId),
+            isDirect: session.isDirect,
+          }),
+        )
         const directMechanism = yield* DirectResponseMechanism.Service
         const engagementLease = yield* EngagementLease.Service
         const activityMechanism = yield* ActivityResponseMechanism.Service

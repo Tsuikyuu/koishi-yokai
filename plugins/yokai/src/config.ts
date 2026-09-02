@@ -45,6 +45,15 @@ export const DEFAULT_ACTIVITY_COOLDOWN_MS = 45_000
 export const DEFAULT_ACTIVITY_HALF_LIFE_MS = 120_000
 export const DEFAULT_ACTIVITY_THRESHOLD = 7
 export const DEFAULT_RELEVANCE_THRESHOLD = 2
+export const DEFAULT_INITIATIVE_ENABLED = true
+export const DEFAULT_INITIATIVE_QUIET_PERIOD_MS = 10 * 60 * 1_000
+export const DEFAULT_INITIATIVE_CHANNEL_COOLDOWN_MS = 30 * 60 * 1_000
+export const DEFAULT_INITIATIVE_INTRINSIC_INTERVAL_MS = 6 * 60 * 60 * 1_000
+export const DEFAULT_INITIATIVE_RECENT_WINDOW_MS = 30 * 60 * 1_000
+export const DEFAULT_INITIATIVE_RECENT_RELEVANCE_THRESHOLD = 0.75
+export const DEFAULT_INITIATIVE_RELATIONSHIP_THRESHOLD = 0.1
+export const DEFAULT_INITIATIVE_MIN_SOCIAL_ENERGY = 0.6
+export const DEFAULT_INITIATIVE_MAX_RECENT_PARTICIPATION = 0.35
 export const DEFAULT_BUDGET_TIME_ZONE = 'UTC'
 export const DEFAULT_RESERVED_MINUTE_CALLS = 6
 export const DEFAULT_RESERVED_DAY_CALLS = 200
@@ -83,6 +92,18 @@ export interface EngagementConfig {
   idleTtlMs?: number
   maxDurationMs?: number
   maxRounds?: number
+}
+
+export interface InitiativeConfig {
+  enabled?: boolean
+  quietPeriodMs?: number
+  channelCooldownMs?: number
+  intrinsicIntervalMs?: number
+  recentWindowMs?: number
+  recentRelevanceThreshold?: number
+  relationshipThreshold?: number
+  minSocialEnergy?: number
+  maxRecentParticipation?: number
 }
 
 export interface BudgetClassConfig {
@@ -138,6 +159,7 @@ export interface Config {
   state?: StateConfig
   wake?: WakeConfig
   engagement?: EngagementConfig
+  initiative?: InitiativeConfig
   callBudget?: CallBudgetConfig
 }
 
@@ -246,6 +268,66 @@ const EngagementConfigSchema = Schema.object({
   idleTtlMs: DEFAULT_ENGAGEMENT_IDLE_TTL_MS,
   maxDurationMs: DEFAULT_ENGAGEMENT_MAX_DURATION_MS,
   maxRounds: DEFAULT_ENGAGEMENT_MAX_ROUNDS,
+})
+
+const InitiativeConfigSchema = Schema.object({
+  enabled: Schema.boolean()
+    .default(DEFAULT_INITIATIVE_ENABLED)
+    .description('允许在群聊安静期后根据可审计的社会动机创建受限主动发言机会。'),
+  quietPeriodMs: Schema.natural()
+    .min(60_000)
+    .max(24 * 60 * 60 * 1_000)
+    .role('ms')
+    .default(DEFAULT_INITIATIVE_QUIET_PERIOD_MS)
+    .description('最后一条有效群聊消息后，评估主动发言机会前必须经过的安静时间。'),
+  channelCooldownMs: Schema.natural()
+    .min(60_000)
+    .max(30 * 24 * 60 * 60 * 1_000)
+    .role('ms')
+    .default(DEFAULT_INITIATIVE_CHANNEL_COOLDOWN_MS)
+    .description('频道中任一成功角色回合后，再次创建主动发言机会前的最短间隔。'),
+  intrinsicIntervalMs: Schema.natural()
+    .min(60 * 60 * 1_000)
+    .max(90 * 24 * 60 * 60 * 1_000)
+    .role('ms')
+    .default(DEFAULT_INITIATIVE_INTRINSIC_INTERVAL_MS)
+    .description('仅由人格兴趣、当前状态或已有自我记忆触发的两次内生机会之间的最短间隔。'),
+  recentWindowMs: Schema.natural()
+    .min(60_000)
+    .max(30 * 24 * 60 * 60 * 1_000)
+    .role('ms')
+    .default(DEFAULT_INITIATIVE_RECENT_WINDOW_MS)
+    .description('群聊内容可作为高相关近期动机的最长时间窗口。'),
+  recentRelevanceThreshold: Schema.number()
+    .min(0)
+    .max(1)
+    .default(DEFAULT_INITIATIVE_RECENT_RELEVANCE_THRESHOLD)
+    .description('近期群聊内容成为主动发言动机所需的最低本地相关度。'),
+  relationshipThreshold: Schema.number()
+    .min(0)
+    .max(1)
+    .default(DEFAULT_INITIATIVE_RELATIONSHIP_THRESHOLD)
+    .description('候选相关成员中至少一人的熟悉度必须达到的最低值。'),
+  minSocialEnergy: Schema.number()
+    .min(0)
+    .max(1)
+    .default(DEFAULT_INITIATIVE_MIN_SOCIAL_ENERGY)
+    .description('允许创建主动发言机会所需的最低社交精力。'),
+  maxRecentParticipation: Schema.number()
+    .min(0)
+    .max(1)
+    .default(DEFAULT_INITIATIVE_MAX_RECENT_PARTICIPATION)
+    .description('允许创建主动发言机会时可接受的最高近期参与压力。'),
+}).default({
+  enabled: DEFAULT_INITIATIVE_ENABLED,
+  quietPeriodMs: DEFAULT_INITIATIVE_QUIET_PERIOD_MS,
+  channelCooldownMs: DEFAULT_INITIATIVE_CHANNEL_COOLDOWN_MS,
+  intrinsicIntervalMs: DEFAULT_INITIATIVE_INTRINSIC_INTERVAL_MS,
+  recentWindowMs: DEFAULT_INITIATIVE_RECENT_WINDOW_MS,
+  recentRelevanceThreshold: DEFAULT_INITIATIVE_RECENT_RELEVANCE_THRESHOLD,
+  relationshipThreshold: DEFAULT_INITIATIVE_RELATIONSHIP_THRESHOLD,
+  minSocialEnergy: DEFAULT_INITIATIVE_MIN_SOCIAL_ENERGY,
+  maxRecentParticipation: DEFAULT_INITIATIVE_MAX_RECENT_PARTICIPATION,
 })
 
 const budgetClass = (minute: number, day: number) =>
@@ -428,5 +510,8 @@ export const Config: Schema<Config> = Schema.object({
   state: StateConfigSchema.description('角色心境、社交精力、近期参与和成员关系的本地状态参数。'),
   wake: WakeConfigSchema.description('硬回复开关、本地活跃度门控、合并窗口和冷却设置。'),
   engagement: EngagementConfigSchema.description('持续讨论租约的空闲期、绝对期限和轮数边界。'),
+  initiative: InitiativeConfigSchema.description(
+    '群聊主动发言的安静期、低频间隔、关系与状态门槛。',
+  ),
   callBudget: CallBudgetConfigSchema.description('分类逻辑调用预算。'),
 })
