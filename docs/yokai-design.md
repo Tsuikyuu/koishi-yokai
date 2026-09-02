@@ -169,7 +169,8 @@ effectiveThreshold =
   + recentParticipationPressure
 ```
 
-预算用尽后只执行本地存档、状态衰减和管理命令，不再调用模型，也不把“额度不足”等技术信息发进群聊。
+预算用尽后，角色侧只执行本地存档和状态衰减，不再调用模型，也不把“额度不足”等技术信息发进群聊；已授权的
+进程内 control service 操作不受模型预算影响。
 
 #### 3.2.5 建议初始参数
 
@@ -437,7 +438,8 @@ Yokai 内置工具不提供高危写操作。第三方工具的授权、副作�
 ```
 
 系统不设置生成后的角色外内容检查或二次重写。角色被直接询问身份时，仍以角色设定回应；
-平台机器人标识承担角色外的身份披露。后台管理命令不得经过角色生成管线。
+平台机器人标识承担角色外的身份披露。聊天消息不承载任何管理操作；可选 Console 后端发起的 control service
+调用不得进入角色生成管线。
 
 ### 3.12 节奏和发送
 
@@ -484,8 +486,8 @@ Yokai 内置工具不提供高危写操作。第三方工具的授权、副作�
 - 单次 XML 生成、动作执行、表达约束和低延迟发送；
 - adapter、tool、skill、MCP、预设源和响应机制注册表；
 - 集中合并所有响应机制提案的唤醒仲裁器；
-- 数据库模型、治理/预算迁移和 host-managed preset source；
-- 主插件原生 Config、粗粒度 break-glass 管理命令和版本化进程内 control service；
+- 数据库模型和 host-managed preset source；
+- 主插件原生 Config 和版本化进程内 control service；后者不自行暴露 HTTP/RPC 或聊天平台命令；
 - 适配器注册与选择。
 
 它提供 `ctx.yokai` 服务，但不直接实现任何厂商模型 API，也不依赖 Koishi Console service、客户端框架或
@@ -500,7 +502,7 @@ Yokai 内置工具不提供高危写操作。第三方工具的授权、副作�
 - 在主体声明 telemetry/replay feature 后追加指标、成本和受限回放页面；
 - 随自身生命周期注册/注销后端路由、订阅和静态资源。
 
-它不拥有 policy、预算账本、preset source、审计、Replay、数据库表或迁移，不直接读取 Yokai 数据库，也不导入
+它不拥有 policy、预算账本、preset source、审计、Replay、数据库表或持久化实现，不直接读取 Yokai 数据库，也不导入
 `@yokai-internal/*`。安装只 hydrate 主体已有状态，卸载只失去精细管理界面与交互；已保存策略、active preset、
 预算用量和角色回合继续由主体执行。Console 缺服务、加载失败或 control protocol major 不兼容只禁用自身。
 
@@ -942,7 +944,7 @@ schedule.cancel
 - 校验失败时保留最后一个有效版本，不影响正在运行的角色。
 - 进行中的角色回合继续使用旧快照；下一个回合立即使用新快照。
 - 热更新默认保留成员关系、记忆、讨论租约和定时任务。
-- 需要清理状态的重大角色变更通过显式迁移操作完成，不能随文件保存自动发生。
+- 需要清理状态的重大角色变更通过显式状态升级操作完成，不能随文件保存自动发生。
 - 当前使用的预设被插件卸载时保留最后有效快照，并在控制面提示来源已离线。
 
 这允许直接编辑 YAML/JSON、在安装可选 Console 时保存 managed preset，或安装新的 `preset-*` 插件，全程不重启
@@ -986,18 +988,18 @@ Koishi。Console 卸载后，已发布的 managed preset 仍由主体继续提�
 治理策略以协议硬上限、扩展注册上限、实例宿主软上限和回合剩余额度的交集计算 effective 值；软上限只能收紧。
 能力授权绑定 domain、ID、宿主从 Koishi owner 派生的稳定来源、可证明覆盖传递代码的安装 build fingerprint，以及
 覆盖全部模型可见/权限字段的 versioned canonical descriptor hash，preset 与 Skill 只能请求而不能扩权。能力/预算
-策略、active preset、preset source 和频道策略各有唯一权威源；legacy 主配置只迁移一次，审计历史不参与运行时
+策略、active preset、preset source 和频道策略各有唯一权威源；legacy 主配置只导入一次，审计历史不参与运行时
 选择。调用预算按实例、类别和窗口持久化，provider I/O 前提交计费；重启释放 pending、保留 committed，配置
 reload 或时区变更不能提前清零额度。
 
-这些表、迁移、默认策略 bootstrap、预算窗口、managed source、审计和保留期任务全部由主体拥有。空库在没有
+这些表、默认策略 bootstrap、预算窗口、managed source、审计和保留期任务全部由主体拥有。空库在没有
 Console 的情况下原子建立安全默认 revision，按稳定顺序批准宿主内置能力；第三方新增/变化仍 pending-review。主体版本
-携带的 builtin fingerprint migration 只替换精确匹配的旧 tuple，保留 enabled、grant 顺序、lower-only override、
-频道、preset 和预算状态。Console 安装、卸载或重连不创建默认 revision、不重跑迁移、不重置预算，也不改变任何
+携带的 builtin fingerprint upgrade 只替换精确匹配的旧 tuple，保留 enabled、grant 顺序、lower-only override、
+频道、preset 和预算状态。Console 安装、卸载或重连不创建默认 revision、不重复执行一次性导入或升级、不重置预算，也不改变任何
 运行时 source。
 
 从未配置 preset 时，`yokai_preset_state` 写入带 revision 的 `Unselected { reason: "not-configured" }`；legacy preset
-来源在迁移时尚未注册、无效或同 ID 有歧义时，则保留 ID 与宿主 source hint 的 PendingIntent。两者期间均只存档、
+来源在首次导入时尚未注册、无效或同 ID 有歧义时，则保留 ID 与宿主 source hint 的 PendingIntent。两者期间均只存档、
 不生成；Unselected 只能由管理员以 CAS 显式选择，PendingIntent 只有精确匹配宿主证明的来源或管理员 CAS 选择后才
 解析为带 source/version 的 Resolved state，第三方同名来源不能自动抢占。
 
@@ -1019,7 +1021,7 @@ fail closed，绝不回退明文。预算拒绝等未创建角色回合的决策
 
 | 配置组           | 关键内容                                                                                          |
 | ---------------- | ------------------------------------------------------------------------------------------------- |
-| 角色             | 实例 ID；active preset 来自版本化 preset state，legacy Config 只迁移一次                          |
+| 角色             | 实例 ID；active preset 来自版本化 preset state，legacy Config 只导入一次                          |
 | 模型             | 单个可选 `model`；选项来自实时模型目录                                                            |
 | 门控与预算       | 活跃度/相关度阈值、半衰期、debounce、冷却、回合资源软上限和实例分类调用预算                       |
 | 历史             | 原始消息保留天数（默认 90）、分页上限、每回合查询数和 token 上限                                  |
@@ -1029,7 +1031,7 @@ fail closed，绝不回退明文。预算拒绝等未创建角色回合的决策
 | 预设与记事本     | 文件监听、重载 debounce、召回上限、默认笔记过期时间                                               |
 | 表达             | 最大长度；严格角色内表达是固定行为                                                                |
 
-角色外管理通过主插件原生 Config、粗粒度 break-glass 命令，以及安装时才存在的可选精细 Console 进行。没有
+角色外管理只通过主插件原生 Config 和安装时才存在的可选精细 Console 进行。主体不在聊天平台注册管理命令。没有
 `koishi-plugin-yokai-console` 是正常运行形态：主体继续执行持久 policy/预算与全部角色回合，只失去逐项审批、
 调序、细粒度预算编辑、dry-run/图表和 Replay UI。单个 `model` 属于主插件配置；未选模型是允许的本地存档模式，
 不使用伪造的 `none` 模型 ID。Gemini adapter 的有序 URL/key 端点只存在 adapter 插件配置中，并共享
@@ -1067,7 +1069,8 @@ fail closed，绝不回退明文。预算拒绝等未创建角色回合的决策
 
 ### 8.2 必测场景
 
-- node_modules 与 Koishi service 中完全不存在 Console 包/服务时，主体从 fresh/旧库启动、迁移并完成普通角色回合；
+- node_modules 与 Koishi service 中完全不存在 Console 包/服务时，主体从 fresh 或已有当前 schema 启动，各功能
+  通过 Koishi model API 加载自身模型并完成普通角色回合；
 - Console 热安装只 hydrate 现有状态；编辑 policy/managed preset 后卸载、重启和重装，主体的 grant、预算窗口、
   active preset、审计与 Replay 均不重置，缺席期间第三方 pending-review 在重装后可见；
 - 多人并行聊天时选择沉默或正确线程；
