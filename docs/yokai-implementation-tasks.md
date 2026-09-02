@@ -6,6 +6,8 @@
 
 可选增强插件：`koishi-plugin-yokai-console`；主体不得依赖或要求安装该包。
 
+主体不在聊天平台注册管理命令；角色外管理只通过主插件原生 Config 和安装时才存在的可选 Console 完成。
+
 Gemini 客户端：Google 官方 `@google/genai` v2 API，以实例级 fetch 注入接入 Koishi HTTP
 
 ## 1. 拆分原则
@@ -434,49 +436,43 @@ WakeArbiter 接受合并提案时恰好扣减一个剩余轮次，并将空闲�
 
 ## 6. 控制面与评测
 
-### YK-029 数据库迁移与管理命令
-
-前置：YK-013、YK-017、YK-019、YK-023、YK-024、YK-026。
-
-交付：汇总并验证前置任务逐项引入的最小表集与版本迁移，增加有权限的查询和停用命令，并确保管理输出不经过角色管线。
-
-验收：空库可升级，重复迁移幂等；普通群成员无法调用管理命令；技术错误只出现在控制面；除 YK-013 的保留期清理外，不提供撤回同步、消息级删除或手动删除入口。
-
 ### YK-030A 治理策略与持久预算内核
 
-前置：YK-019、YK-027、YK-029。
+前置：YK-019、YK-027。
 
 交付：实现供应商无关、版本化的 `GovernancePolicy` 服务，统一执行能力授权、入选优先级、宿主软预算和分类
-逻辑调用预算，并提供主体粗粒度管理命令与后续可选 Console 插件后端共用的、仅进程内可注入的有权限查询、
-dry-run、CAS、审计和回滚 control service。能力/预算策略、频道策略和
+逻辑调用预算，并提供后续可选 Console 插件后端使用的、仅进程内可注入的有权限查询、dry-run、CAS、审计和
+回滚 control service。能力/预算策略、频道策略和
 实例 active preset 各有唯一 active revision；active preset 的唯一运行时权威是版本化 `yokai_preset_state`，完整
 不可变历史只用于校验、审计和生成新 revision，不参与运行时选择，也不是第二份 effective 状态。服务同时提供
 宿主保留、第三方不可注册或伪造的 managed preset owner principal，以及该 owner 下可持久化、版本化且重启可恢复
 的 `PresetSource` 存储；它归主体治理内核所有，Console 只是编辑客户端。文件和插件来源仍由各自 owner 管理。
 
 YK-030A 必须可在完全未安装 `koishi-plugin-yokai-console`、Console 插件加载失败或随后被卸载的环境独立启动和
-运行。首次安装由主体自动建立安全默认 policy、调用预算和 preset selection，旧版本则由主体完成一次性迁移；
-注册表选择、预算 reserve/commit、回合执行、数据库迁移、审计和 managed preset 加载均不得等待 Console service、
-路由、静态资源或前端连接。没有 Console 时仍保留主插件原生 Config 和 YK-029 的状态查询、频道停用等粗粒度应急
-命令；进程内 control service 不自行暴露 HTTP/RPC。缺失的是逐项审批/调序、细粒度预算编辑、dry-run 解释、预算
-headroom 图表和回放查看能力，不是 Yokai 的存档、门控、生成、Tool、预算执行或安全默认值。
+运行。首次安装由主体自动建立安全默认 policy、调用预算和 preset selection；各功能直接通过 Koishi model API
+声明自身持久化模型，不新增跨任务数据库基础设施。注册表选择、预算 reserve/commit、回合执行、审计和 managed
+preset 加载均不得等待 Console service、路由、静态资源或前端连接。没有 Console 时仍保留主插件原生 Config，
+主体不在聊天平台注册任何管理命令，进程内 control service 也不自行暴露 HTTP/RPC。缺失的是逐项审批/调序、
+细粒度预算编辑、dry-run 解释、预算 headroom 图表和回放查看能力，不是 Yokai 的存档、门控、生成、Tool、预算
+执行或安全默认值。
 
 空库 bootstrap 由主体在同一事务中幂等创建 `DefaultGovernancePolicyV1` active revision、频道策略、三类调用预算和
 preset selection。默认策略按稳定顺序绑定并批准宿主保留的内置能力当前 host-proven fingerprint；新/变化第三方
 能力继续 pending-review。主体升级导致内置 fingerprint 改变时，只能由随该主体版本发布、显式列出旧/新 tuple 的
-builtin policy migration 审计升级，不能泛化为自动批准第三方。迁移只替换与旧 tuple 精确匹配的内置授权身份、build
+builtin policy upgrade 审计升级，不能泛化为自动批准第三方。升级只替换与旧 tuple 精确匹配的内置授权身份、build
 fingerprint 和 descriptor hash，创建新的 policy revision，并原样保留 enabled、grant 顺序、lower-only override、
 频道策略、preset state 以及预算限额/窗口/用量；不精确匹配的项继续按普通 fingerprint 变化进入 pending-review。
-已配置且唯一合法的 file/plugin preset 在 headless 首启解析为 `Resolved`；根本未配置 preset 时写入
+已配置且唯一合法的 file/plugin preset 在无 Console 环境首次启动时解析为 `Resolved`；根本未配置 preset 时写入
 `Unselected { reason: "not-configured" }`，已提供 ID 但来源缺失、无效或歧义时才写 `PendingIntent` 并只存档。
 bootstrap marker 已存在但 active row 异常缺失时必须 fail closed，不能每次启动重灌默认值或清零预算。
 
-YK-030A 扩展 YK-029 的 headless break-glass 命令，至少提供脱敏 status（policy/preset revision、selection kind、
-pending 数/reason、预算窗口）、按宿主证明 source/version 从 `Unselected`/`PendingIntent` 恢复或选择 active preset、
-已有频道停用，以及只在 marker 存在而 active row 缺失时接受 expected marker/revision 的 `repair-active`；全部经同一
-control service、CAS 和审计，选择/恢复创建 `Resolved` 新 revision，repair 创建新 revision 且不得修改预算用量。
-不提供无界 descriptor 正文或 hash-only grant approve 命令，因此无 Console 时新/变化第三方能力保持 pending，内置
-及既有已批准能力继续工作。actor principal 与权限只能由主体/Koishi 边界注入，control DTO 或浏览器请求不能自报。
+YK-030A 的 control service 至少提供脱敏 status（policy/preset revision、selection kind、pending 数/reason、预算
+窗口）、按宿主证明 source/version 从 `Unselected`/`PendingIntent` 恢复或选择 active preset、频道停用，以及只在
+marker 存在而 active row 缺失时接受 expected marker/revision 的 `repair-active`。这些能力只由宿主注入给可选
+Console 后端；全部经同一 control service、CAS 和审计，选择/恢复创建 `Resolved`
+新 revision，repair 创建新 revision且不得修改预算用量。control service 不提供无界 descriptor 正文或 hash-only
+grant approve 操作，因此无 Console 时新/变化第三方能力保持 pending，内置及既有已批准能力继续工作。actor
+principal 与权限只能由主体/Koishi 边界注入，control DTO 或浏览器请求不能自报。
 
 治理域覆盖 ContextProvider、Skill、ActionTool、FeedbackTool、MCP Server 及其已分类投影。为 ContextProvider
 补齐与其他能力一致的实例级有序 allowlist。preset 和 Skill 只能请求能力，不能越过实例 grant 扩权；MCP Tool
@@ -517,7 +513,7 @@ ActionTool 为可见 16 项、单个 canonical declaration 64 KiB、declaration 
 instruction 64 KiB、每回合动作 8 项、before-send 750 ms；FeedbackTool 为可见 16 项、单个 canonical declaration
 64 KiB、declaration 总计 64 KiB、每批调用 4 项、总结果 8192 token、并发 4；模型输出 1024 token，总回合 45 s。
 这些 declaration 数值是有意新增的安全 exposure 默认/硬帽；升级时已注册且合法但超过 64 KiB 的能力继续注册并
-保留 grant intent，但以 `declaration-*-byte-cap` 变为 budget-hidden；主体迁移报告/管理命令必须给出告警，可选
+保留 grant intent，但以 `declaration-*-byte-cap` 变为 budget-hidden；主体治理状态/诊断快照必须包含告警，可选
 Console 安装后显示同一告警，不能宣称完全保留旧暴露行为。它们不改变现有注册协议。协议根据当前 Portable
 Schema、description
 和 template 的有限字段上限生成并发布每个 protocolVersion 可编码的 `maxEncodedDeclarationBytes` 注册硬帽；只有
@@ -539,21 +535,21 @@ token、字节、耗时、并发、使用量和 headroom。最近消息、Provid
 保证。模型 token 上限、Tool Schema、Action 阶段/完成/失败策略和扩展声明上限只能作为只读输入，不能由 policy
 放宽。
 
-现有 `capabilities/callBudget/wake/engagement/notebook/schedule/state/messageRetentionDays` 配置只在首次升级时导入
-一次：迁移逐项保留数组顺序、显式值和旧默认语义并写入完成标记。legacy `presetId` 同期一次性导入版本化
+现有 `capabilities/callBudget/wake/engagement/notebook/schedule/state/messageRetentionDays` 配置只在首次 bootstrap
+时导入一次：导入逐项保留数组顺序、显式值和旧默认语义并写入完成标记。legacy `presetId` 同期一次性导入版本化
 `PresetSelectionState`：从未配置 preset 时写入 `Unselected { reason: "not-configured" }`；来源已唯一且有效时写入
 `Resolved { presetId, sourceId, version, hash }`；提供了 preset ID 但来源尚未注册、invalid 或存在歧义时写入
 `PendingIntent { presetId, expectedHostSourceHint?, reason }`，不得丢弃 ID。`Unselected` 和 `PendingIntent` 期间继续
 本地存档但禁止模型回合；前者只可由管理员按 expected revision 显式选择宿主证明的 source/version，后者只有匹配
 宿主证明 source hint 的有效 last-good 出现才可原子解析，否则也必须由策略管理员显式选择，第三方同名 source 不能
 抢占。三种状态都只存于 `yokai_preset_state` 并具有 revision/CAS/审计；建立后运行时不再读取 Config 中的
-`presetId`。上述 legacy 字段从主插件 Schema 移除或变为只读
-迁移视图，普通配置 reload 不得再次 bootstrap、重新批准 fingerprint、切换 active preset 或覆盖 active revision；
+`presetId`。上述 legacy 字段从主插件 Schema 移除或变为 bootstrap-only 只读视图，普通配置 reload 不得再次
+bootstrap、重新批准 fingerprint、切换 active preset 或覆盖 active revision；
 运行时只读取对应唯一权威。`model`、`feedbackToolsEnabled`、实例身份和 preset source 路径继续属于原生 Config，
 不进入 GovernancePolicy CAS，但它们自己的配置 revision 必须冻结进 turn snapshot。
 
-所有 policy、active preset 和 host-managed preset 编辑入口，包括可选 Console、管理 API、迁移和回滚，都经过
-同一服务端 decode → normalize → fingerprint validation → CAS → security audit 流程。CAS 只比较对应 expected
+所有 policy、active preset 和 host-managed preset 编辑入口，包括可选 Console 经 control service 发起的编辑与
+回滚，都经过同一服务端 decode → normalize → fingerprint validation → CAS → security audit 流程。CAS 只比较对应 expected
 revision，并针对被编辑 grant 验证当前 fingerprint；registry revision 只进入审计，避免无关 MCP 重连阻塞预算
 保存。成功提交、完整不可变 normalized revision 和安全审计 append 使用同一事务或可靠 outbox，任一步失败均不
 切换 active revision。审批/拒绝、grant 编辑、预算/频道变更、active preset 切换、回滚、preset-editor body 读取、
@@ -561,13 +557,12 @@ descriptor-review 分页读取、Replay 读取/导出和密钥管理的成功与
 principal、instance、动作、授权结果、时间、requestId、前后 revision/hash、source/fingerprint/page、脱敏 diff 与
 结果 reason；API key、secret reference 值、正文、prompt、Schema、模板和 Tool input/result 不得进入审计。任何
 敏感读取必须先成功 append 审计再返回正文，审计不可用时 fail closed。无权限请求必须零治理状态写入，但安全审计
-append 是明确例外且不能被伪装为成功事务。YK-030A 使用 YK-029 的迁移框架为 active policy、完整 revision 历史、
-安全审计、active preset、
-host-managed preset 版本、频道策略、调用预算窗口和在途 reservation 增加幂等持久化；历史不是可独立执行的
-配置副本。
+append 是明确例外且不能被伪装为成功事务。YK-030A 直接使用 Koishi model API 声明 active policy、完整 revision
+历史、安全审计、active preset、host-managed preset 版本、频道策略、调用预算窗口和在途 reservation 的持久化
+模型；历史不是可独立执行的配置副本。
 
 `fingerprintVersion` 同时固定 canonical 编码与 digest 算法；v1 使用 RFC 8785 JSON Canonicalization Scheme 对
-精确定义、经 Schema 规范化的 descriptor DTO 编码并计算 SHA-256。算法升级必须通过显式 policy migration 写入新
+精确定义、经 Schema 规范化的 descriptor DTO 编码并计算 SHA-256。算法升级必须通过显式 policy upgrade 写入新
 version，不能伪装成普通 descriptor 变化或把旧 hash 当作新算法结果。canonical descriptor hash 覆盖全部规范化、
 模型可见及权限相关字段，包括 protocolVersion、description 及
 portable Schema 内 description、Skill 选择规则/依赖引用/prompt hash、ContextProvider 选择与资源声明、ActionTool
@@ -575,9 +570,9 @@ portable Schema 内 description、Skill 选择规则/依赖引用/prompt hash、
 server/name/type/完整投影描述；排除密钥、函数闭包、连接状态、时间戳和易变 registration generation。有效授权
 绑定 `(domain, id, host-proven CapabilitySourceId, BuildAttestationV1 fingerprint, fingerprintVersion, approved
 descriptor hash)`；任一不符
-一律成为 `pending-review` 并从每个新回合的 effective allowlist 排除，直至策略管理员重新批准。旧字符串
-allowlist 迁移时，在线项绑定当前 fingerprint；离线项保留为 dormant unresolved intent，重新出现后必须批准；
-已有内置 ContextProvider 按当前行为迁移，第三方新能力默认不可见。
+一律成为 `pending-review` 并从每个新回合的 effective allowlist 排除，直至策略管理员重新批准。首次 bootstrap
+旧字符串 allowlist 时，在线项绑定当前 fingerprint；离线项保留为 dormant unresolved intent，重新出现后必须批准；
+已有内置 ContextProvider 按当前行为导入，第三方新能力默认不可见。
 
 能力和资源策略成功保存后只影响新开始的回合，进行中回合继续使用冻结策略与能力快照。调用预算限额则立即
 约束尚未发生的 reservation：已预留的逻辑调用不受降额影响，但在途 bounded-feedback 回合尚未预留的第二次
@@ -593,26 +588,27 @@ reason。崩溃恢复释放可证明仍为 pending 的记录，committed 保持�
 
 验收：
 
-- 旧配置升级黄金测试逐项保留已有四类 allowlist 的 ID/顺序，并按迁移时既有内置 Provider 行为合成第五类
+- 首次 bootstrap 黄金测试逐项保留已有四类 allowlist 的 ID/顺序，并按 bootstrap 时既有内置 Provider 行为合成第五类
   ContextProvider grant；内置 Provider 暂时离线仍保留 dormant intent，第三方 Provider 默认隐藏。测试同时保留三类
-  调用预算、wake/engagement/notebook/schedule/state/retention 的显式值与默认行为，并将 legacy `presetId` 迁入
-  `yokai_preset_state`。迁移只执行一次；升级后重启恢复 host-managed preset 与 active preset，reload 旧字段不能
+  调用预算、wake/engagement/notebook/schedule/state/retention 的显式值与默认行为，并将 legacy `presetId` 导入
+  `yokai_preset_state`。bootstrap 只执行一次；升级后重启恢复 host-managed preset 与 active preset，reload 旧字段不能
   覆盖唯一 active state 或重新批准能力。来源晚注册、invalid、同 ID 歧义与恶意同名来源测试均保留
   PendingIntent 并禁止生成，只有宿主 source hint 精确匹配或管理员 CAS 选择后才解析。已有合法但超过新增
-  declaration exposure 帽的能力保持 registered/granted intent、变为 budget-hidden，并在主体迁移报告中显示告警；
+  declaration exposure 帽的能力保持 registered/granted intent、变为 budget-hidden，并在主体治理状态/诊断快照中显示告警；
   安装可选 Console 后读取并显示同一状态。
-- fresh headless 安装未配置 preset 时原子创建 `Unselected` revision 并继续存档；status 返回 selection kind/reason，
-  管理员以 expected revision 选择宿主证明 source/version 后原子转为 `Resolved`，过期 revision 或伪造来源均零状态
-  写入。不存在把“未配置”编码为缺少 `presetId` 的 `PendingIntent` 的隐式状态。
+- 无 Console 首次安装未配置 preset 时原子创建 `Unselected` revision 并继续存档；control service 状态快照返回
+  selection kind/reason。安装可选 Console 后，授权管理员以 expected revision 选择宿主证明 source/version，状态原子
+  转为 `Resolved`；过期 revision 或伪造来源均零状态写入。不存在把“未配置”编码为缺少 `presetId` 的
+  `PendingIntent` 的隐式状态。
 - 内置、安装包、本地插件热重载和同包多实例产生稳定且适当区分的宿主 `CapabilitySourceId`；调用方伪造 source
   字段无效。`BuildAttestationV1` 测试覆盖 registry-integrity 与本地 deterministic file-set leaf、完整 loader-resolved
   transitive Merkle closure，以及入口不变但 helper/外置依赖变化仍改变 build；canonical descriptor v1 有 test vector
-  和显式算法迁移。source build、任一模型可见/权限相关 descriptor 字段或 MCP projection 改变后，每个新回合都
+  和显式算法升级。source build、任一模型可见/权限相关 descriptor 字段或 MCP projection 改变后，每个新回合都
   把旧 grant 判为 pending-review；相同 fingerprint 的断线重连不要求重复批准，无法证明完整 closure 的重新注册
   不会沿用旧批准。零修改第三方插件通过对应兼容测试。
 - 先通过可选 Console 修改内置 grant 的 enabled、顺序和 lower-only override 以及频道、preset、预算设置，再卸载
-  Console 并升级主体；显式 builtin policy migration 只替换精确匹配的旧 fingerprint tuple，生成可审计新 revision，
-  上述设置和预算窗口/用量逐项保持。旧 tuple 不精确匹配或第三方来源不得被迁移自动批准。
+  Console 并升级主体；显式 builtin policy upgrade 只替换精确匹配的旧 fingerprint tuple，生成可审计新 revision，
+  上述设置和预算窗口/用量逐项保持。旧 tuple 不精确匹配或第三方来源不得被升级自动批准。
 - 能力对象以 `(domain, id)` 标识；有效能力固定为注册 fingerprint、enabled grant、preset/Skill 请求、MCP 双重
   grant、scope availability 和资源预算的交集。grant 数组顺序决定准入优先级；ActionTool 最终按 ID 稳定渲染
   不改变优先级。
@@ -639,15 +635,16 @@ reason。崩溃恢复释放可证明仍为 pending 的记录，committed 保持�
   零 provider I/O，未知结果不会双扣或错误 release，并产生控制面证据。single-pass 只提交一次，bounded-feedback
   至多两次。
 - 能力/资源 revision 只影响新回合；CallBudgetPolicy 变更立即约束尚未 reserve 的调用，包括在途回合可能发生的
-  continuation。所有错误保持角色内沉默，策略、预算和迁移诊断只进入控制面。
+  continuation。所有错误保持角色内沉默，策略、预算和 bootstrap/upgrade 诊断只进入控制面。
 - 无 Console 集成测试在依赖树和 Koishi 配置中完全不安装/启用 `koishi-plugin-yokai-console`：fresh DB 原子创建
-  `DefaultGovernancePolicyV1`、内置 grants、预算和 Unselected/Resolved/PendingIntent preset state，旧库迁移只执行一次；合法
+  `DefaultGovernancePolicyV1`、内置 grants、预算和 Unselected/Resolved/PendingIntent preset state，legacy Config
+  bootstrap 只执行一次；合法
   preset/model 下覆盖存档、direct/activity 唤醒、single-pass、bounded-feedback、内置 Action/Feedback 执行和预算
   拒绝。Console 缺失不是错误或 preset pending reason；缺席期间新增/变化第三方保持 pending，内置及相同
   fingerprint 的既有批准继续 effective。
 - Console 卸载前已提交的 policy、grant 顺序、预算 limit/pending/committed/window、active/host-managed preset、
-  审计和在途回合状态在卸载后保持有效；主体不重启、不回退默认值、不改变时区边界也不中断消息处理。空库、旧库
-  和重复启动的全部治理迁移均由主体在没有 Console package/node_modules 的测试中完成。
+  审计和在途回合状态在卸载后保持有效；主体不重启、不回退默认值、不改变时区边界也不中断消息处理。fresh、已有
+  当前 schema 和重复启动的治理初始化均由主体在没有 Console package/node_modules 的测试中完成。
 
 ### YK-030B 独立可选 Console 增强插件
 
@@ -657,7 +654,7 @@ reason。崩溃恢复释放可证明仍为 pending 的记录，committed 保持�
 接入 `yakumo.yml` alias、客户端构建和 Console 依赖。它通过 Koishi service injection 使用 YK-030A 发布、带显式
 `controlProtocolVersion` 的 control service，并提供有权限的后端路由与 Koishi Console 页面；页面
 分为能力目录、有效回合预览、预算与门控、安全上限、预设/频道策略和运行状态。该插件不持有独立 allowlist、
-优先级、soft limit、预算账本、数据库模型或迁移，也不直接访问 Yokai 表。
+优先级、soft limit、预算账本、数据库表或持久化实现，也不直接访问 Yokai 表。
 
 依赖方向固定为 `koishi-plugin-yokai-console → yokai-protocol/Koishi + ctx.yokai control service`；Console 可声明
 `koishi-plugin-yokai` 为 peer/runtime requirement，但主体的 package manifest、源码和产物不得依赖、动态 import、
@@ -755,7 +752,7 @@ approve，而任何 policy-approve 角色必须包含 review 权限，避免只�
 
 ### YK-031 调试指标、治理证据与成本回放
 
-前置：YK-018、YK-021、YK-027、YK-029、YK-030A。
+前置：YK-018、YK-021、YK-027、YK-030A。
 
 交付：分别记录活跃度分布、触发原因、合并数、逻辑生成数和 adapter 可选的供应商物理 endpoint 尝试数，以及
 single-pass/bounded-feedback 路径、FeedbackTool 批次与结果 token、ContextProvider 查询、XML 解析、
@@ -821,10 +818,10 @@ key 缺失/未知、数据库发现重复 nonce、认证失败、身份不符或
 Schema 只接受 canonical base64url，且在解密分配前严格校验 32-byte key、12-byte nonce、16-byte tag 和 ciphertext
 长度；短 tag、宽松 base64 及非 v1 长度一律拒绝。
 
-YK-031 使用 YK-029 的迁移框架创建/升级 `yokai_admission_attempt`、`yokai_replay`、host-global replay key
+YK-031 直接使用 Koishi model API 声明/扩展 `yokai_admission_attempt`、`yokai_replay`、host-global replay key
 commitment/tombstone 及 `yokai_turn` 的证据列、索引、外键、key commitment/keyId unique constraint、
-`(keyId, nonce)` 唯一约束和保留期清理；迁移必须覆盖空库、旧版本库和重复执行，并保证旧库不会因缺少 replay key
-把敏感字段回填为明文。上述迁移、遥测写入、ReplayKeyProvider 和 retention job 全部由主体拥有；构建与测试不得
+`(keyId, nonce)` 唯一约束和保留期清理。测试必须覆盖 fresh DB、已有当前 schema 和重复启动，并保证不会因缺少
+replay key 把敏感字段写为明文。上述模型、遥测写入、ReplayKeyProvider 和 retention job 全部由主体拥有；构建与测试不得
 安装 YK-030B。无 Console 且 key 可用时仍写完整 envelope；key 不可用时仍按 `replay-unavailable` 运行，Console
 装卸不得删除 envelope、key meta 或改变清理计划。
 
@@ -839,15 +836,15 @@ limit/used/truncated/timeout；deny 只由 admission attempt 记录。
 汇总单次路径比例、反馈工具率、能力裁剪率及原因分布、XML 有效率、唤醒到请求发出 p95、XML 编排 p95、模型
 耗时、人为等待、每 100 条消息回合数和每千条成本。physical endpoint attempts 是 adapter 可选遥测，未提供时为
 `unknown`，不能推断为 `1`，也不影响第三方 adapter 兼容或回合执行；协议允许缺失的 token usage 同样保持
-`unknown`。token、endpoint 尝试和可归因费用在 YK-031 完成后进入主体 control API，并在安装 YK-030B 时进入
+`unknown`。token、endpoint 尝试和可归因费用在 YK-031 完成后进入主体 control service，并在安装 YK-030B 时进入
 Console；缺少可信版本化价格、币种
 或供应商用量时费用为 `unknown`，不能按 `0` 计算或把调用次数额度宣称为货币硬预算。货币硬封顶需另行定义价格
 来源、预留和结算协议。可选 Console 页面追加 replay retention/maxPlaintextBytes 的 configured/hard/effective 值、
 key availability/rotation 状态和 `replay-unavailable` reason，但绝不返回 key/ref；未安装 Console 不影响记录、
-清理或 control API，调整仍走 GovernancePolicy CAS 与安全审计。
+清理或 control service，调整仍走 GovernancePolicy CAS 与安全审计。
 
 离线回放不读取当前 registry/config、不调用 Provider/Tool/MCP、不执行动作、不重新预留预算，也不能获得录制
-回合之外的动作或引用权限。普通 Console/RPC/日志只返回 ID、非内容 descriptor/policy hash、计数、结果状态和
+回合之外的动作或引用权限。普通 control service/Console/日志只返回 ID、非内容 descriptor/policy hash、计数、结果状态和
 reason code，绝不返回 scope/focus/callback/Action input 的 hash；ReplayEnvelope
 读取/导出需要单独高权限，成功和失败均记录 YK-030A 定义的安全审计。`TestClock` 覆盖 7/90 天边界和清理；测试
 覆盖 provider scoped 生命周期、current/retired key 轮换、正确/错误/缺失 key、同 key nonce 重复、跨实例/跨行密文
@@ -888,12 +885,12 @@ reason code，绝不返回 scope/focus/callback/Action input 的 hash；ReplayEn
 
 交付：把 `plugins/yokai-console` 作为独立 tarball 构建、安装和发布，并建立“主体无 Console”与“Console 动态
 装卸”矩阵门禁。门禁不得通过 workspace hoist、根 devDependency 或测试预加载让主体间接看到 Console package、
-`ctx.console`、前端资源或迁移。
+`ctx.console`、前端资源或持久化实现。
 
 验收：
 
 - 在仓库外临时 Koishi 项目只安装 database、`koishi-plugin-yokai` 与测试 adapter，node_modules 中不存在
-  `koishi-plugin-yokai-console`；fresh/upgrade/restart 均完成主体迁移，并通过存档、直接/社会触发、内置 Tool、
+  `koishi-plugin-yokai-console`；fresh/restart 均完成各功能自有模型初始化，并通过存档、直接/社会触发、内置 Tool、
   bounded-feedback、预算和 headless Replay 写入/清理用例。
 - 单独扫描主体的 package manifest、lock dependency closure、构建产物和 npm tarball，不包含 Console 包名、
   `@koishijs/plugin-console`、`@koishijs/client`、Vue、Console route ID 或静态资源；Console tarball 则不包含
@@ -909,15 +906,15 @@ reason code，绝不返回 scope/focus/callback/Action input 的 hash；ReplayEn
 
 ## 7. 推荐交付批次
 
-| 批次 | 任务                            | 可演示结果                                                                |
-| ---- | ------------------------------- | ------------------------------------------------------------------------- |
-| A    | YK-001～YK-005                  | 每个 Gemini adapter 实例通过单逻辑连接的有序 URL/key 端点发布一份模型目录 |
-| B    | YK-006～YK-008                  | Gemini adapter 通过文本、函数调用、单次反馈、用量和容错契约               |
-| C    | YK-009～YK-012                  | 主插件配置实时展示 adapter 模型，@ 当前机器人后使用选中模型回复           |
-| D    | YK-013～YK-021                  | 存档、门控、上下文、双 Tool 协议和有界反馈管线完整运行                    |
-| E    | YK-022～YK-028                  | 话题、状态、关系、记事本、讨论租约、定时与主动行为逐项可用                |
-| F    | YK-029、YK-030A、YK-031～YK-033 | 无 Console 的主体可治理、可回放、可盲测且能零修改接入新 adapter           |
-| G    | YK-030B、YK-034                 | 独立可选 Console 提供精细管理，装卸不改变主体运行与持久状态               |
+| 批次 | 任务                    | 可演示结果                                                                |
+| ---- | ----------------------- | ------------------------------------------------------------------------- |
+| A    | YK-001～YK-005          | 每个 Gemini adapter 实例通过单逻辑连接的有序 URL/key 端点发布一份模型目录 |
+| B    | YK-006～YK-008          | Gemini adapter 通过文本、函数调用、单次反馈、用量和容错契约               |
+| C    | YK-009～YK-012          | 主插件配置实时展示 adapter 模型，@ 当前机器人后使用选中模型回复           |
+| D    | YK-013～YK-021          | 存档、门控、上下文、双 Tool 协议和有界反馈管线完整运行                    |
+| E    | YK-022～YK-028          | 话题、状态、关系、记事本、讨论租约、定时与主动行为逐项可用                |
+| F    | YK-030A、YK-031～YK-033 | 无 Console 的主体可治理、可回放、可盲测且能零修改接入新 adapter           |
+| G    | YK-030B、YK-034         | 独立可选 Console 提供精细管理，装卸不改变主体运行与持久状态               |
 
 Gemini `models.list` 的分页、`supportedGenerationMethods` 和 token 上限字段以
 [Gemini Developer API 官方模型参考](https://ai.google.dev/api/models)为验收基准，不在代码中维护固定模型名单。
