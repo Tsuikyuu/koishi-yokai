@@ -438,7 +438,180 @@ WakeArbiter 接受合并提案时恰好扣减一个剩余轮次，并将空闲�
 
 ### YK-030A 治理策略与持久预算内核
 
-前置：YK-019、YK-027。
+前置：YK-019、YK-027、YK-028。
+
+YK-030A 是主体治理里程碑，不作为一个分支或一次提交整体实现。实施时严格拆成以下十二个原子任务；每项只允许
+交付其列出的单一职责，必须可独立评审、测试和回滚，且不得提前启用依赖后续任务的半成品运行路径。完成
+YK-030A-12 后才视为 YK-030A 完成。
+
+所有需要跨 package 或由未来 Console 消费的 wire-safe Schema 均归 `yokai-protocol`，由首次需要它的原子任务发布；
+YK-030B 不得为了复用契约导入主体或 core 的 internal 模块。运行时直接依赖治理领域服务，不经过面向客户端的
+control facade。
+
+#### YK-030A-01 资源策略契约与默认等价
+
+前置：YK-017、YK-027。
+
+交付：在 `yokai-protocol` 定义版本化 `TurnResourcePolicy`、`CallBudgetPolicy`、共享默认值、平台硬帽和稳定资源
+reason code；在 core 提供“全部适用上限取最小值”的纯函数。只发布 Schema 与纯逻辑，不接 Registry 或数据库，
+不修改当前运行时。
+
+验收：Schema 测试覆盖所有 count/token/byte/ms/concurrency 字段的安全整数边界、
+`recentContext.maxMessages=20..80`、三类调用预算的 `0` 与最大值和静态平台硬帽；纯函数以显式 registered/model
+输入证明 policy 只能收紧。默认 policy 的既有字段逐项等价于当前运行时常量，新增 declaration exposure 字段等于
+本里程碑规定的默认值与硬帽。
+
+#### YK-030A-02 Canonical descriptor 与 fingerprint v1
+
+前置：YK-030A-01、YK-027。
+
+交付：在 `yokai-protocol` 定义供 planner 使用的版本化 `CapabilitySourceEvidence`、`BuildAttestationV1` wire-safe
+Schema 与 fixture；实现五类能力和 MCP projection 的 canonical descriptor、RFC 8785 编码、SHA-256 fingerprint
+v1、模型暴露 UTF-8 字节计算及每个 protocolVersion 的 `maxEncodedDeclarationBytes`。本任务不读取 Koishi owner，
+不接数据库。
+
+验收：固定 test vector；所有模型可见或权限相关字段改变都会改变 hash，易变注册状态不会；FeedbackTool
+outputSchema 进入 fingerprint 但不计模型暴露字节；测试明确区分“合法但超过回合预算”和“违反协议注册硬帽”。
+
+#### YK-030A-03 宿主来源证明与 Registry inventory
+
+前置：YK-010、YK-030A-02。
+
+交付：由 Koishi 边界从调用 owner、包身份和持久插件实例键派生稳定 `CapabilitySourceId`，填充 A-02 已发布的
+`CapabilitySourceEvidence` 并生成 `BuildAttestationV1`，把 source/build/descriptor identity 加入 Registry
+inventory 与快照。第三方注册 API 保持兼容，能力 payload 不能自报或覆盖宿主身份。
+
+验收：覆盖内置、安装包、本地插件、同包多实例、热重载、传递 helper/依赖变化和无法完整证明 closure；调用方
+伪造 source 无效，零修改第三方插件继续通过既有注册与热插拔测试。
+
+#### YK-030A-04 GovernancePolicy 与 effective-turn planner
+
+前置：YK-019、YK-030A-01、YK-030A-02。
+
+交付：在 `yokai-protocol` 定义规范化 `GovernancePolicy`、有序 `CapabilityGrant`、revision 和 lower-only
+override，并把现有选择逻辑演进为无 I/O 的唯一 effective-turn planner。planner 只消费 A-02 已发布的 source
+evidence 数据契约与测试 fixture；它依次计算 registered → fingerprint-granted → preset/Skill
+requested → MCP 双 grant → availability input → resource-selected，返回稳定 reason 与 headroom，不直接调用扩展 callback。
+
+验收：ContextProvider 获得实例级有序 grant；preset/Skill 不能扩权；MCP Server 与投影 Tool 必须双重授权；
+dormant、pending-review、grant 优先级、count/token/byte/ms/concurrency 裁剪及各资源域差异均有纯测试。
+
+#### YK-030A-05 Policy、频道与安全审计持久化
+
+前置：YK-013、YK-030A-04。
+
+交付：实现 active policy、不可变 revision、频道策略和 append-only security audit 的领域 service、storage port、
+Koishi model/row codec 与数据库适配器；提供事务型 CAS 和 rollback-as-new-revision，不提供 control facade。
+
+验收：SQLite 并发、过期 revision、事务故障、审计故障及 rollback 测试证明 active/revision/成功审计原子提交；
+失败不产生治理 revision；storage 接收已经构造的成功或失败审计事件，并与对应事务原子 append，不在本层判断
+actor 权限。审计 Schema 禁止正文、密钥、prompt、Schema、模板和 Tool input/result。
+
+#### YK-030A-06 Active preset 与 host-managed source
+
+前置：YK-019、YK-030A-03～YK-030A-05。
+
+交付：在 `yokai-protocol` 定义 `Unselected/Resolved/PendingIntent` tagged state，并实现其持久 active
+selection、唯一 revision/CAS，以及宿主保留 owner 下的 managed preset 不可变版本和 last-good；复用现有 Preset
+编译、引用校验和更新流，file/plugin source 仍归原 owner。
+
+验收：未配置与来源缺失严格区分；晚注册只接受精确 host hint，同名恶意 source 不能抢占；选择与 managed 编辑
+均通过 CAS/审计并可重启恢复；持久域只有一个 active row/revision，managed owner 不能被第三方注册或伪造。
+
+#### YK-030A-07 持久 CallBudget
+
+前置：YK-017、YK-018、YK-030A-01。
+
+交付：复用现有 `call-budget/ledger.ts` 规则，为它增加持久 storage port、Koishi model/adapter、稳定
+reservationId、minute/day 窗口恢复和动态限额/时区语义。服务只接收显式 policy snapshot/update input，不读取
+YK-030A-05 的 Governance store；本任务只交付预算服务，不接 provider 调用边界。
+
+验收：`TestClock` 与 SQLite 重启测试覆盖窗口翻转、并发不超卖、pending 恢复释放、committed 保留、限额下调、
+旧时区下一日边界、重复 settlement，以及同 reservationId 在 storage/service 边界结果未知后的 read/retry 协调；
+provider I/O 门控留给 YK-030A-12。
+
+#### YK-030A-08 Bootstrap 与 legacy Config 一次性导入
+
+前置：YK-030A-03～YK-030A-07。
+
+交付：增加可显式调用的 bootstrap program，在内置注册和 file preset 首次加载后，以同一事务建立默认 policy、
+频道、三类预算和 preset selection，并一次性导入 legacy Config 后写入 marker。program 返回版本化
+`Healthy/Degraded` outcome；marker 已存在而 active row 缺失时不得重建默认值，只报告可供后续运行时门禁和
+control service 修复的 `Degraded`，本任务不修改角色运行路径。
+
+验收：黄金测试保留四类旧 allowlist 的顺序并补 ContextProvider，保留预算、wake/engagement/notebook/schedule/
+state/retention 的显式值和旧默认语义；`presetId` 正确形成三种 selection；重复启动或 reload 旧字段不重复导入、
+不覆盖 active state、不重新批准 fingerprint，也不清零预算。逐写入点故障注入证明 policy、频道、预算、preset 和
+marker 不留下部分 bootstrap；marker 存在但任一必要 active row 缺失时进入可修复 degraded 状态。
+
+#### YK-030A-09 Builtin policy 显式升级
+
+前置：YK-030A-02、YK-030A-03、YK-030A-05、YK-030A-07、YK-030A-08。
+
+交付：实现随主体版本发布、显式列出旧/新 tuple 的 builtin policy upgrade；它不是通用数据库迁移能力，也不接受
+第三方 wildcard。
+
+验收：只有精确匹配的内置 tuple 才创建可审计新 revision；enabled、grant 顺序、lower-only override、频道、
+preset 及预算 limit/window/usage 原样保留；不精确匹配或第三方来源继续 pending-review。
+
+#### YK-030A-10 回合治理与资源预算接线
+
+前置：YK-021、YK-027、YK-030A-03～YK-030A-08。
+
+交付：在角色相关 service 激活前运行 A-08 bootstrap program，并把 `Degraded` 接成保持主体/control plane 可启动、
+所有角色操作 fail closed 的统一门禁；让新回合、wake、engagement、notebook、schedule、role state 和 retention
+只读 active governance/preset，替换 Config allowlist、Config `presetId` 和 `WakeTurn` 中散落的资源常量；在每次
+新操作开始读取或冻结对应 policy/config/registry/preset revision，在角色回合执行唯一 planner，并把各域 effective
+限额接入 Context、Skill、Action、Feedback 和 generation。
+
+验收：policy/resource revision 只影响新回合；Unselected/PendingIntent 继续存档但不生成；默认 policy 保持当前
+行为；各域按稳定优先级与 reason 裁剪，ActionTool 最终按 ID 渲染不改变 grant 准入顺序；总回合 deadline 和输出
+上限失败保持角色内沉默。上述每个消费者在 CAS 后的新操作均读取 active policy，legacy Config reload 不能覆盖；
+运行时只认持久 active preset，不再读取第二份 Config 权威。
+
+#### YK-030A-11 版本化进程内 control service
+
+前置：YK-030A-04～YK-030A-08、YK-030A-10。
+
+交付：在 `yokai-protocol` 发布版本号、feature bitmap、脱敏 DTO 和错误 Schema，在主体实现带宿主注入 actor/
+authority 的进程内 control service：status、dry-run、policy CAS/rollback、preset select/recover、频道停用、managed
+preset 编辑和 `repair-active`。另提供与普通脱敏 status 隔离的高权限、审计前置的 descriptor-review 分页读取和
+host-managed preset body 读取。请求 DTO 不能自报 actor；主体不暴露 HTTP/RPC，也不注册聊天管理命令。
+
+验收：直接调用 service 的契约测试覆盖权限、CAS、伪造 actor/source、稳定有界 status/reason；无权限 mutation
+保持零治理写入但追加失败审计。descriptor-review 绑定当前 fingerprint 并按 UTF-8 字节有界分页，managed preset
+正文只对获准读取者返回，二者都必须先成功 append 审计，否则 fail closed。每个成功 mutation 已能影响后续新
+回合；repair 只创建新 revision、不修改预算用量，成功后重新求值 health gate，并能使合法修复的 degraded 实例
+恢复角色回合。尚不存在的 Console 不是本任务测试依赖。
+
+#### YK-030A-12 Durable commit 与 provider I/O 边界
+
+前置：YK-028、YK-030A-07～YK-030A-11。
+
+交付：只在 WakeArbiter、WakeTurn 和 FeedbackGeneration 接通持久 CallBudget 的提交边界；只有调用方已观察到
+durable committed 才允许 single-pass 或 bounded-feedback provider I/O。
+
+验收：commit false、数据库错误、超时或结果未知时，在使用同 reservationId 协调并重新读取到 durable committed
+之前均为零 provider I/O；无法证明 committed 时不双扣或错误 release，证明后才允许继续。single-pass 恰好一次、
+bounded-feedback 至多两次。依赖树和 Koishi 配置完全不存在 Console 包/服务时，fresh/restart、存档、direct/
+activity/initiative 唤醒、内置 Tool、预算拒绝和持久状态恢复全部工作。
+
+依赖关系如下；YK-030A-03/04、YK-030A-07 和 YK-030A-09/10 可按图并行，运行时不经过 control facade：
+
+```text
+01 → 02
+02 → 03
+02 → 04 → 05
+03 + 04 + 05 → 06
+01 → 07
+03 + 04 + 05 + 06 + 07 → 08
+08 → 09
+08 → 10 → 11
+07 + 09 + 10 + 11 → 12
+```
+
+下文是十二个子任务共享的完整里程碑契约，不是额外的第十三个实现任务。涉及真实 Console 页面显示、浏览器路由
+或动态装卸的验收归 YK-030B/YK-034；YK-030A 只验证 control service 以及 Console 包完全缺席时的主体行为。
 
 交付：实现供应商无关、版本化的 `GovernancePolicy` 服务，统一执行能力授权、入选优先级、宿主软预算和分类
 逻辑调用预算，并提供后续可选 Console 插件后端使用的、仅进程内可注入的有权限查询、dry-run、CAS、审计和
@@ -448,8 +621,8 @@ WakeArbiter 接受合并提案时恰好扣减一个剩余轮次，并将空闲�
 宿主保留、第三方不可注册或伪造的 managed preset owner principal，以及该 owner 下可持久化、版本化且重启可恢复
 的 `PresetSource` 存储；它归主体治理内核所有，Console 只是编辑客户端。文件和插件来源仍由各自 owner 管理。
 
-YK-030A 必须可在完全未安装 `koishi-plugin-yokai-console`、Console 插件加载失败或随后被卸载的环境独立启动和
-运行。首次安装由主体自动建立安全默认 policy、调用预算和 preset selection；各功能直接通过 Koishi model API
+YK-030A 必须可在完全未安装 `koishi-plugin-yokai-console`、始终没有 Console client 或任一 control client 脱离的
+环境独立启动和运行。首次安装由主体自动建立安全默认 policy、调用预算和 preset selection；各功能直接通过 Koishi model API
 声明自身持久化模型，不新增跨任务数据库基础设施。注册表选择、预算 reserve/commit、回合执行、审计和 managed
 preset 加载均不得等待 Console service、路由、静态资源或前端连接。没有 Console 时仍保留主插件原生 Config，
 主体不在聊天平台注册任何管理命令，进程内 control service 也不自行暴露 HTTP/RPC。缺失的是逐项审批/调序、
@@ -595,10 +768,10 @@ reason。崩溃恢复释放可证明仍为 pending 的记录，committed 保持�
   覆盖唯一 active state 或重新批准能力。来源晚注册、invalid、同 ID 歧义与恶意同名来源测试均保留
   PendingIntent 并禁止生成，只有宿主 source hint 精确匹配或管理员 CAS 选择后才解析。已有合法但超过新增
   declaration exposure 帽的能力保持 registered/granted intent、变为 budget-hidden，并在主体治理状态/诊断快照中显示告警；
-  安装可选 Console 后读取并显示同一状态。
+  control service 返回同一状态；可选 Console 的显示验收归 YK-030B。
 - 无 Console 首次安装未配置 preset 时原子创建 `Unselected` revision 并继续存档；control service 状态快照返回
-  selection kind/reason。安装可选 Console 后，授权管理员以 expected revision 选择宿主证明 source/version，状态原子
-  转为 `Resolved`；过期 revision 或伪造来源均零状态写入。不存在把“未配置”编码为缺少 `presetId` 的
+  selection kind/reason。测试以宿主注入的授权 actor 调用 control service，并按 expected revision 选择宿主证明的
+  source/version，状态原子转为 `Resolved`；过期 revision 或伪造来源均零状态写入。不存在把“未配置”编码为缺少 `presetId` 的
   `PendingIntent` 的隐式状态。
 - 内置、安装包、本地插件热重载和同包多实例产生稳定且适当区分的宿主 `CapabilitySourceId`；调用方伪造 source
   字段无效。`BuildAttestationV1` 测试覆盖 registry-integrity 与本地 deterministic file-set leaf、完整 loader-resolved
@@ -606,8 +779,8 @@ reason。崩溃恢复释放可证明仍为 pending 的记录，committed 保持�
   和显式算法升级。source build、任一模型可见/权限相关 descriptor 字段或 MCP projection 改变后，每个新回合都
   把旧 grant 判为 pending-review；相同 fingerprint 的断线重连不要求重复批准，无法证明完整 closure 的重新注册
   不会沿用旧批准。零修改第三方插件通过对应兼容测试。
-- 先通过可选 Console 修改内置 grant 的 enabled、顺序和 lower-only override 以及频道、preset、预算设置，再卸载
-  Console 并升级主体；显式 builtin policy upgrade 只替换精确匹配的旧 fingerprint tuple，生成可审计新 revision，
+- 先通过 control service 修改内置 grant 的 enabled、顺序和 lower-only override 以及频道、preset、预算设置，再在
+  没有任何 Console package/client 的环境升级主体；显式 builtin policy upgrade 只替换精确匹配的旧 fingerprint tuple，生成可审计新 revision，
   上述设置和预算窗口/用量逐项保持。旧 tuple 不精确匹配或第三方来源不得被升级自动批准。
 - 能力对象以 `(domain, id)` 标识；有效能力固定为注册 fingerprint、enabled grant、preset/Skill 请求、MCP 双重
   grant、scope availability 和资源预算的交集。grant 数组顺序决定准入优先级；ActionTool 最终按 ID 稳定渲染
@@ -642,13 +815,18 @@ reason。崩溃恢复释放可证明仍为 pending 的记录，committed 保持�
   preset/model 下覆盖存档、direct/activity 唤醒、single-pass、bounded-feedback、内置 Action/Feedback 执行和预算
   拒绝。Console 缺失不是错误或 preset pending reason；缺席期间新增/变化第三方保持 pending，内置及相同
   fingerprint 的既有批准继续 effective。
-- Console 卸载前已提交的 policy、grant 顺序、预算 limit/pending/committed/window、active/host-managed preset、
-  审计和在途回合状态在卸载后保持有效；主体不重启、不回退默认值、不改变时区边界也不中断消息处理。fresh、已有
-  当前 schema 和重复启动的治理初始化均由主体在没有 Console package/node_modules 的测试中完成。
+- 通过 control service 已提交的 policy、grant 顺序、预算 limit/pending/committed/window、active/host-managed
+  preset、审计和在途回合状态，在没有任何 Console package/client 的重启后保持有效；主体不回退默认值、不改变
+  时区边界。fresh、已有当前 schema 和重复启动的治理初始化均由主体在没有 Console package/node_modules 的测试中完成。
 
 ### YK-030B 独立可选 Console 增强插件
 
 前置：YK-011、YK-030A。
+
+YK-030B 是独立的后置里程碑，不属于当前 YK-030A 实施批次，不得与任一 YK-030A 子任务共用分支。只有
+YK-030A-12 已合并、control protocol 已冻结且“主体完全无 Console”门禁通过后，才允许按当时稳定的 feature
+bitmap 另行原子拆分并开始 Console 工作；YK-031 才提供的 telemetry/replay 页面继续作为后续可选增量，不反向
+阻塞 YK-030A 或 YK-030B 的基础治理界面。
 
 交付：新增 `plugins/yokai-console` 工作区和独立发布的 `koishi-plugin-yokai-console` npm 包，并只在该 workspace
 接入 `yakumo.yml` alias、客户端构建和 Console 依赖。它通过 Koishi service injection 使用 YK-030A 发布、带显式
