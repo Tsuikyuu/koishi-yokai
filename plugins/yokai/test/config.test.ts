@@ -2,7 +2,11 @@ import { expect, it, vi } from 'vitest'
 
 vi.mock('koishi', () => import('@koishijs/core'))
 
-import { ModelCatalogSnapshot } from 'yokai-protocol'
+import {
+  CALL_BUDGET_POLICY_VERSION,
+  DEFAULT_CALL_BUDGET_POLICY,
+  ModelCatalogSnapshot,
+} from 'yokai-protocol'
 import { Schema } from 'effect'
 
 import {
@@ -515,6 +519,25 @@ it('resolves explicit false values for each hard reply switch', () => {
     replyToSelf: false,
     roleNamePrefix: true,
     roleNameContains: true,
+  })
+})
+
+it('keeps the shared Call budget policy defaults equivalent to legacy Config', () => {
+  expect(DEFAULT_CALL_BUDGET_POLICY).toEqual({
+    version: CALL_BUDGET_POLICY_VERSION,
+    timeZone: DEFAULT_BUDGET_TIME_ZONE,
+    reserved: {
+      minute: DEFAULT_RESERVED_MINUTE_CALLS,
+      day: DEFAULT_RESERVED_DAY_CALLS,
+    },
+    normal: {
+      minute: DEFAULT_NORMAL_MINUTE_CALLS,
+      day: DEFAULT_NORMAL_DAY_CALLS,
+    },
+    background: {
+      minute: DEFAULT_BACKGROUND_MINUTE_CALLS,
+      day: DEFAULT_BACKGROUND_DAY_CALLS,
+    },
   })
 })
 
