@@ -8,6 +8,7 @@ import {
   ContextProvider,
   ContextProviderId,
   ContextProviderRequest,
+  MAX_CONTEXT_PROVIDER_DESCRIPTION_LENGTH,
   MAX_CONTEXT_FRAGMENT_CONTENT_LENGTH,
   MAX_CONTEXT_FRAGMENT_LABEL_LENGTH,
   MAX_CONTEXT_FRAGMENT_SOURCE_REFS,
@@ -113,6 +114,23 @@ it.effect('rejects invalid ContextProvider duration and function contracts', () 
       { ...definition, maxDurationMs: 1.5 },
       { ...definition, isAvailable: true },
       { ...definition, provide: true },
+    ]
+    const results = yield* Effect.forEach(candidates, (candidate) =>
+      Schema.decodeUnknownEffect(ContextProvider)(candidate).pipe(Effect.result),
+    )
+
+    expect(results.every(Result.isFailure)).toBe(true)
+  }),
+)
+
+it.effect('bounds the ContextProvider description used by canonical registration', () =>
+  Effect.gen(function* () {
+    const candidates = [
+      { ...definition, description: '' },
+      {
+        ...definition,
+        description: 'x'.repeat(MAX_CONTEXT_PROVIDER_DESCRIPTION_LENGTH + 1),
+      },
     ]
     const results = yield* Effect.forEach(candidates, (candidate) =>
       Schema.decodeUnknownEffect(ContextProvider)(candidate).pipe(Effect.result),

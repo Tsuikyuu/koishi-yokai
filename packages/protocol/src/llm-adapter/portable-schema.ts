@@ -8,25 +8,34 @@ export const MAX_PORTABLE_ENUM_VALUE_LENGTH = 256
 export const MAX_PORTABLE_PROPERTY_NAME_LENGTH = 128
 export const MAX_PORTABLE_DESCRIPTION_LENGTH = 1024
 
+const wellFormedUnicode = Schema.isPattern(/^[^\uD800-\uDFFF]*$/u)
+const notNegativeZero = Schema.makeFilter((value: number) =>
+  Object.is(value, -0) ? 'Expected a JSON number other than negative zero' : true,
+)
+
 const PortableDescription = Schema.String.check(
   Schema.isNonEmpty(),
   Schema.isMaxLength(MAX_PORTABLE_DESCRIPTION_LENGTH),
+  wellFormedUnicode,
 )
 
 export const PortablePropertyName = Schema.String.check(
   Schema.isNonEmpty(),
   Schema.isMaxLength(MAX_PORTABLE_PROPERTY_NAME_LENGTH),
+  wellFormedUnicode,
 )
 
 export type PortablePropertyName = typeof PortablePropertyName.Type
 
 const PortableArrayBound = Schema.Natural.check(
+  notNegativeZero,
   Schema.isLessThanOrEqualTo(MAX_PORTABLE_ARRAY_ITEMS),
 )
 
 const PortableEnumValue = Schema.String.check(
   Schema.isNonEmpty(),
   Schema.isMaxLength(MAX_PORTABLE_ENUM_VALUE_LENGTH),
+  wellFormedUnicode,
 )
 
 const PortableEnumValues = Schema.NonEmptyArray(PortableEnumValue).check(
@@ -163,8 +172,8 @@ const validNumericBounds = (minimum?: number, maximum?: number) =>
 export const PortableNumberSchema: Schema.Codec<PortableNumberSchema, PortableNumberSchemaEncoded> =
   Schema.TaggedStruct('Number', {
     description: Schema.optionalKey(PortableDescription),
-    minimum: Schema.optionalKey(Schema.Finite),
-    maximum: Schema.optionalKey(Schema.Finite),
+    minimum: Schema.optionalKey(Schema.Finite.check(notNegativeZero)),
+    maximum: Schema.optionalKey(Schema.Finite.check(notNegativeZero)),
   }).check(
     Schema.makeFilter((schema: PortableNumberSchema) =>
       validNumericBounds(schema.minimum, schema.maximum)
@@ -178,8 +187,8 @@ export const PortableIntegerSchema: Schema.Codec<
   PortableIntegerSchemaEncoded
 > = Schema.TaggedStruct('Integer', {
   description: Schema.optionalKey(PortableDescription),
-  minimum: Schema.optionalKey(Schema.Int),
-  maximum: Schema.optionalKey(Schema.Int),
+  minimum: Schema.optionalKey(Schema.Int.check(notNegativeZero)),
+  maximum: Schema.optionalKey(Schema.Int.check(notNegativeZero)),
 }).check(
   Schema.makeFilter((schema: PortableIntegerSchema) =>
     validNumericBounds(schema.minimum, schema.maximum)
