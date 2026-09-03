@@ -6,11 +6,14 @@ import { PortableToolInputSchema } from './portable-schema'
 export const MAX_FEEDBACK_TOOL_DESCRIPTION_LENGTH = 2048
 export const MAX_SAFE_TOOL_RESULT_MESSAGE_LENGTH = 1024
 
+const wellFormedUnicode = Schema.isPattern(/^[^\uD800-\uDFFF]*$/u)
+
 export const FeedbackToolDeclaration = Schema.Struct({
   id: FeedbackToolId,
   description: Schema.String.check(
     Schema.isNonEmpty(),
     Schema.isMaxLength(MAX_FEEDBACK_TOOL_DESCRIPTION_LENGTH),
+    wellFormedUnicode,
   ),
   inputSchema: PortableToolInputSchema,
 })

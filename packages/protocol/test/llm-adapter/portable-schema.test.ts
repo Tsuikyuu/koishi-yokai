@@ -1,5 +1,5 @@
 import { expect, it } from '@effect/vitest'
-import { Effect, Schema } from 'effect'
+import { Effect, Result, Schema } from 'effect'
 
 import {
   MAX_PORTABLE_ARRAY_ITEMS,
@@ -410,5 +410,60 @@ it.effect('rejects hostile depth as a typed SchemaError without overflowing the 
       Schema.decodeUnknownEffect(PortableToolInputSchema)(cyclic).pipe(Effect.flip),
     ])
     expect(errors.every(Schema.isSchemaError)).toBe(true)
+  }),
+)
+
+it.effect('rejects non-I-JSON strings and negative-zero schema numbers before fingerprinting', () =>
+  Effect.gen(function* () {
+    const candidates = [
+      { _tag: 'Object', description: '\ud800', properties: [] },
+      {
+        _tag: 'Object',
+        properties: [{ name: '\udc00', required: true, schema: { _tag: 'String' } }],
+      },
+      {
+        _tag: 'Object',
+        properties: [
+          {
+            name: 'value',
+            required: true,
+            schema: { _tag: 'String', description: '\ud800' },
+          },
+        ],
+      },
+      {
+        _tag: 'Object',
+        properties: [
+          {
+            name: 'value',
+            required: true,
+            schema: { _tag: 'StringEnum', values: ['\ud800'] },
+          },
+        ],
+      },
+      {
+        _tag: 'Object',
+        properties: [{ name: 'value', required: true, schema: { _tag: 'Number', minimum: -0 } }],
+      },
+      {
+        _tag: 'Object',
+        properties: [{ name: 'value', required: true, schema: { _tag: 'Integer', maximum: -0 } }],
+      },
+      {
+        _tag: 'Object',
+        properties: [
+          {
+            name: 'value',
+            required: true,
+            schema: { _tag: 'Array', items: { _tag: 'String' }, minItems: -0, maxItems: 1 },
+          },
+        ],
+      },
+    ]
+    const results = yield* Effect.forEach(candidates, (candidate) =>
+      Schema.decodeUnknownEffect(PortableToolInputSchema)(candidate).pipe(Effect.result),
+    )
+
+    expect(results.every(Result.isFailure)).toBe(true)
   }),
 )

@@ -14,6 +14,13 @@ const capabilityIdChecks = [
   Schema.isPattern(/^[A-Za-z_][A-Za-z0-9._-]*$/),
 ] as const
 
+const wellFormedUnicode = Schema.isPattern(/^[^\uD800-\uDFFF]*$/u)
+const canonicalNatural = Schema.Natural.check(
+  Schema.makeFilter((value: number) =>
+    Object.is(value, -0) ? 'Expected a non-negative integer other than negative zero' : true,
+  ),
+)
+
 export const ContextProviderId = Schema.String.check(...capabilityIdChecks).pipe(
   Schema.brand('@yokai/protocol/ContextProviderId'),
 )
@@ -75,8 +82,8 @@ export const CapabilityEventKind = Schema.Literals([
 export type CapabilityEventKind = typeof CapabilityEventKind.Type
 
 export const CapabilityProtocolVersion = Schema.Struct({
-  major: Schema.Natural,
-  minor: Schema.Natural,
+  major: canonicalNatural,
+  minor: canonicalNatural,
 })
 
 export interface CapabilityProtocolVersion extends Schema.Schema.Type<
@@ -199,6 +206,8 @@ export type ContextProviderSelection = typeof ContextProviderSelection.Type
 
 const ALWAYS_CONTEXT_PROVIDER_SELECTION = { _tag: 'Always' } as const
 
+export const MAX_CONTEXT_PROVIDER_DESCRIPTION_LENGTH = 2_048
+
 export const ContextProviderRequest = Schema.Struct({
   scope: CapabilityScope,
   focus: FocusMessage,
@@ -268,7 +277,11 @@ const ContextProviderIsAvailableSchema = Schema.declare(
 export const ContextProvider = Schema.Struct({
   id: ContextProviderId,
   protocolVersion: CapabilityProtocolVersion,
-  description: Schema.NonEmptyString,
+  description: Schema.String.check(
+    Schema.isNonEmpty(),
+    Schema.isMaxLength(MAX_CONTEXT_PROVIDER_DESCRIPTION_LENGTH),
+    wellFormedUnicode,
+  ),
   maxTokens: TokenLimit,
   maxDurationMs: CapabilityDurationMilliseconds,
   selection: ContextProviderSelection.pipe(
@@ -288,6 +301,7 @@ export const ActionToolXmlTemplate = Schema.String.check(
   Schema.isTrimmed(),
   Schema.isNonEmpty(),
   Schema.isMaxLength(MAX_ACTION_TOOL_XML_TEMPLATE_LENGTH),
+  wellFormedUnicode,
 ).pipe(Schema.brand('@yokai/protocol/ActionToolXmlTemplate'))
 
 export type ActionToolXmlTemplate = typeof ActionToolXmlTemplate.Type
@@ -365,6 +379,7 @@ const ActionToolRegistration = Schema.Struct({
     Schema.isTrimmed(),
     Schema.isNonEmpty(),
     Schema.isMaxLength(MAX_ACTION_TOOL_DESCRIPTION_LENGTH),
+    wellFormedUnicode,
   ),
   xmlTemplate: ActionToolXmlTemplate,
   inputSchema: PortableToolInputSchema,
@@ -457,6 +472,7 @@ export const FeedbackTool = Schema.Struct({
   description: Schema.String.check(
     Schema.isNonEmpty(),
     Schema.isMaxLength(MAX_FEEDBACK_TOOL_DESCRIPTION_LENGTH),
+    wellFormedUnicode,
   ),
   inputSchema: PortableToolInputSchema,
   outputSchema: PortableToolOutputSchema,
@@ -487,12 +503,14 @@ const SkillDescription = Schema.String.check(
   Schema.isTrimmed(),
   Schema.isNonEmpty(),
   Schema.isMaxLength(MAX_SKILL_DESCRIPTION_LENGTH),
+  wellFormedUnicode,
 )
 
 const SkillPrompt = Schema.String.check(
   Schema.isTrimmed(),
   Schema.isNonEmpty(),
   Schema.isMaxLength(MAX_SKILL_PROMPT_LENGTH),
+  wellFormedUnicode,
 )
 
 const SkillContextProviderReferences = Schema.Array(ContextProviderId).check(
